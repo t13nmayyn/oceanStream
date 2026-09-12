@@ -2,7 +2,7 @@ fastapi>=0.110.0
 uvicorn>=0.28.0
 xarray>=2024.0.0
 zarr>=2.16.0
-copernicusmarine>=1.0.0
+copernicusmarine>=1.3.0
 argopy>=1.4.0
 erddapy<3.0.0
 netCDF4>=1.6.0
@@ -13,3 +13,4 @@ numpy>=1.24.0
 matplotlib>=3.7.0
 scipy>=1.10.0
 requests>=2.31.0
+python-dotenv>=1.0.0

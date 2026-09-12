@@ -3,72 +3,87 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>INCOIS Ocean 3D — Live Visualization Platform</title>
+  <title>oceanStream — Full API Test Suite & 3D Ocean Engine</title>
 
-  <!-- Leaflet CSS -->
+  <!-- Preconnect & DNS-Prefetch for Fast LCP -->
+  <link rel="preconnect" href="https://unpkg.com" crossorigin />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="preconnect" href="https://basemaps.cartocdn.com" crossorigin />
+  <link rel="dns-prefetch" href="https://unpkg.com" />
+  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net" />
+  <link rel="dns-prefetch" href="https://basemaps.cartocdn.com" />
+
+  <!-- Preload Critical CSS -->
+  <link rel="preload" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" as="style" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <!-- Leaflet JS -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <!-- Deck.gl for 3D scatterplot/columns -->
-  <script src="https://unpkg.com/deck.gl@9.0.18/dist.min.js"></script>
-  <!-- Chart.js for sparklines/depth chart -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-  <!-- Chroma.js for colour scales -->
-  <script src="https://cdn.jsdelivr.net/npm/chroma-js@2.4.2/chroma.min.js"></script>
+
+  <!-- Deferred Scripts to Eliminate Render-Blocking and Reduce Element Render Delay -->
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script defer src="https://unpkg.com/deck.gl@9.0.18/dist.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/chroma-js@2.4.2/chroma.min.js"></script>
 
   <style>
-    /* ========================================================= */
-    /* DESIGN TOKENS                                              */
-    /* ========================================================= */
     :root {
       --bg:          #06090f;
       --surface:     #0d1525;
       --surface-2:   #111d35;
+      --surface-3:   #172647;
       --border:      #1e3055;
+      --border-bright: #2d4880;
       --text:        #d4e3f7;
-      --muted:       #5b7394;
+      --muted:       #6b83a6;
       --accent:      #00c8ff;
       --accent-2:    #7b5af5;
       --green:       #00e08c;
       --amber:       #f5a623;
+      --orange:      #ff7700;
       --rose:        #f54375;
+      --dark-page:   #121b2d;
       --mono:        'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; }
 
-    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-
-    /* ========================================================= */
-    /* LAYOUT                                                     */
-    /* ========================================================= */
     #app {
       display: grid;
-      grid-template-rows: 54px 1fr;
-      grid-template-columns: 320px 1fr;
+      grid-template-rows: 52px 1fr;
       height: 100vh;
       overflow: hidden;
     }
 
     /* ── Topbar ── */
     #topbar {
-      grid-column: 1 / -1;
       background: var(--surface);
       border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
-      gap: 14px;
-      padding: 0 20px;
-      z-index: 9999;
+      gap: 12px;
+      padding: 0 16px;
+      z-index: 10000;
+      overflow-x: auto;
     }
-    #topbar .logo { font-weight: 800; font-size: 1.05rem; color: var(--accent); letter-spacing: -0.02em; }
-    #topbar .sep  { width: 1px; height: 26px; background: var(--border); }
-    #topbar .tagline { font-size: 0.78rem; color: var(--muted); }
+    .brand { font-weight: 800; font-size: 1.05rem; color: var(--accent); display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .brand-tag { font-size: 0.62rem; background: rgba(0,200,255,0.15); color: var(--accent); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-weight: 700; }
+    .sep { width: 1px; height: 22px; background: var(--border); }
+
+    .nav-tabs { display: flex; gap: 4px; }
+    .tab-btn {
+      padding: 6px 13px; border-radius: 6px; font-size: 0.76rem; font-weight: 600;
+      border: 1px solid transparent; background: transparent; color: var(--muted);
+      cursor: pointer; transition: all .15s; display: flex; align-items: center; gap: 6px;
+      white-space: nowrap;
+    }
+    .tab-btn:hover { color: var(--text); background: var(--surface-2); }
+    .tab-btn.active { color: #fff; background: var(--surface-2); border-color: var(--border-bright); font-weight: 700; }
+    .tab-btn.active .tab-icon { color: var(--accent); }
+
     .status-pill {
       display: inline-flex; align-items: center; gap: 6px;
-      font-size: 0.72rem; font-weight: 600; padding: 3px 10px;
+      font-size: 0.7rem; font-weight: 600; padding: 3px 9px;
       border-radius: 9999px; border: 1px solid var(--border);
-      background: var(--surface-2);
+      background: var(--surface-2); white-space: nowrap;
     }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
     .dot.online  { background: var(--green); box-shadow: 0 0 6px var(--green); }
@@ -76,554 +91,933 @@
     .dot.pulse   { background: var(--amber); animation: pulse 1s infinite; }
     @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.85)} }
 
-    /* variable / layer picker in topbar */
-    .topbar-controls { display: flex; gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; }
-    select, input[type="range"] { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 0.78rem; cursor: pointer; }
-    select:focus, input:focus { outline: 1px solid var(--accent); }
-    label { font-size: 0.75rem; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+    .topbar-right { display: flex; gap: 10px; align-items: center; margin-left: auto; }
     .btn {
-      padding: 5px 12px; border-radius: 6px; font-size: 0.78rem; font-weight: 600;
+      padding: 5px 12px; border-radius: 6px; font-size: 0.74rem; font-weight: 600;
       border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
-      cursor: pointer; transition: all .15s;
+      cursor: pointer; transition: all .15s; display: inline-flex; align-items: center; gap: 5px;
     }
     .btn:hover { border-color: var(--accent); color: var(--accent); }
-    .btn.primary { background: rgba(0,200,255,.12); border-color: var(--accent); color: var(--accent); }
+    .btn.primary { background: #0077b6; border-color: var(--accent); color: #fff; }
     .btn.primary:hover { background: var(--accent); color: #000; }
-    .btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
-    .btn.danger { border-color: var(--rose); color: var(--rose); }
-    .btn.danger:hover { background: var(--rose); color: #fff; }
+    .btn.success { background: rgba(0,224,140,0.15); border-color: var(--green); color: var(--green); }
+    .btn.danger { background: rgba(245,67,117,0.12); border-color: var(--rose); color: var(--rose); }
 
-    /* ── Sidebar ── */
-    #sidebar {
+    /* ── Content Panes ── */
+    #main-content {
+      position: relative;
+      height: 100%;
+      overflow: hidden;
+    }
+    .view-pane {
+      display: none;
+      height: 100%;
+      width: 100%;
+    }
+    .view-pane.active {
+      display: grid;
+    }
+
+    /* ── TAB 1: MAP VIEW ── */
+    #pane-map {
+      grid-template-columns: 360px 1fr;
+      height: 100%;
+    }
+    .map-sidebar {
       background: var(--surface);
       border-right: 1px solid var(--border);
       overflow-y: auto;
-      padding: 14px 12px;
+      padding: 12px;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 12px;
     }
-
     .panel {
       background: var(--surface-2);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 8px;
       overflow: hidden;
     }
     .panel-header {
       display: flex; justify-content: space-between; align-items: center;
-      padding: 10px 14px;
+      padding: 8px 12px;
       border-bottom: 1px solid var(--border);
-      font-size: 0.8rem; font-weight: 700; color: #fff;
-      cursor: pointer; user-select: none;
+      font-size: 0.78rem; font-weight: 700; color: #fff;
     }
-    .panel-header .badge {
+    .badge {
       font-size: 0.65rem; padding: 2px 7px; border-radius: 9999px;
       background: rgba(0,200,255,.12); color: var(--accent); border: 1px solid rgba(0,200,255,.25);
+      font-family: var(--mono);
     }
-    .panel-body { padding: 12px 14px; }
+    .panel-body { padding: 10px 12px; }
 
-    /* Location buttons */
-    .loc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
-    .loc-btn {
-      padding: 8px 10px; border-radius: 7px; border: 1px solid var(--border);
-      background: var(--surface); text-align: left; cursor: pointer; transition: all .15s;
-      font-size: 0.75rem;
+    .ctrl-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .ctrl-row label { color: var(--muted); font-size: 0.72rem; }
+    input[type="range"] { accent-color: var(--accent); cursor: pointer; flex: 1; }
+    input[type="date"], input[type="text"], input[type="number"], select {
+      background: var(--surface-3); color: var(--text); border: 1px solid var(--border);
+      padding: 4px 8px; border-radius: 5px; font-size: 0.75rem; font-family: var(--mono); outline: none;
     }
-    .loc-btn .name  { font-weight: 700; color: #fff; font-size: 0.78rem; }
-    .loc-btn .coord { color: var(--muted); font-family: var(--mono); font-size: 0.65rem; }
-    .loc-btn:hover, .loc-btn.active { border-color: var(--accent); background: rgba(0,200,255,.08); }
+    input:focus, select:focus { border-color: var(--accent); }
 
-    /* Stage cards */
-    .stage { border-left: 3px solid var(--border); padding: 8px 10px; margin-bottom: 8px; border-radius: 0 6px 6px 0; background: rgba(0,0,0,.25); font-size: 0.75rem; }
-    .stage.s1 { border-color: var(--amber); }
-    .stage.s2 { border-color: var(--green); }
-    .stage.s3 { border-color: var(--accent-2); }
-    .stage .title { font-weight: 700; color: #fff; margin-bottom: 3px; font-size: 0.75rem; }
-    .stage .meta  { color: var(--muted); font-family: var(--mono); font-size: 0.68rem; }
-    .pill-wrap { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; max-height: 80px; overflow-y: auto; }
-    .pill { font-family: var(--mono); font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; background: rgba(0,200,255,.08); border: 1px solid rgba(0,200,255,.2); }
+    /* Map container */
+    #map-wrapper { position: relative; width: 100%; height: 100%; background: #06090f; }
+    #leaflet-map { width: 100%; height: 100%; }
+    #deckgl-canvas { position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:450; display:none; }
 
-    /* Argo slider */
-    #argoSlider { width: 100%; accent-color: var(--accent-2); }
-    #argoSliderDate { font-family: var(--mono); font-size: 0.72rem; color: var(--accent-2); text-align: center; display: block; margin-top: 4px; }
-    #argoCountLabel { font-size: 0.72rem; color: var(--muted); }
+    /* Memory Grid */
+    .coverage-legend { display: flex; gap: 8px; font-size: 0.68rem; margin-bottom: 6px; flex-wrap: wrap; }
+    .leg-item { display: flex; align-items: center; gap: 4px; }
+    .leg-box { width: 9px; height: 9px; border-radius: 2px; }
+    .leg-box.resident { background: var(--green); }
+    .leg-box.ondisk { background: var(--amber); }
+    .leg-box.fetching { background: var(--orange); animation: pulse 0.8s infinite; }
+    .leg-box.notfetched { background: var(--dark-page); border: 1px solid var(--border); }
 
-    /* Depth profile mini-chart */
-    #depthChartWrap { height: 160px; }
+    .memory-grid {
+      display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px;
+      background: rgba(0,0,0,0.3); padding: 6px; border-radius: 6px; border: 1px solid var(--border);
+    }
+    .mem-cell {
+      height: 16px; border-radius: 2px; font-size: 0.58rem; display: flex;
+      align-items: center; justify-content: center; font-family: var(--mono);
+      cursor: pointer; transition: transform 0.1s; background: var(--dark-page);
+      border: 1px solid #1a2744; color: #fff;
+    }
+    .mem-cell:hover { transform: scale(1.18); z-index: 5; }
+    .mem-cell.RESIDENT { background: var(--green); color: #002e1b; font-weight: 700; border-color: var(--green); }
+    .mem-cell.ON_DISK { background: var(--amber); color: #3d2600; font-weight: 700; border-color: var(--amber); }
+    .mem-cell.FETCHING { background: var(--orange); border-color: var(--orange); animation: pulse 0.7s infinite; }
+    .mem-cell.NOT_FETCHED { background: var(--dark-page); color: #3b5070; }
 
-    /* Files panel */
-    .file-entry { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 0.72rem; }
-    .file-entry:last-child { border: none; }
-    .file-name { color: var(--text); font-weight: 600; word-break: break-all; }
-    .file-size { color: var(--muted); font-family: var(--mono); white-space: nowrap; margin-left: 8px; }
+    .stat-row { display: flex; justify-content: space-between; font-size: 0.71rem; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04); color: var(--muted); font-family: var(--mono); }
+    .stat-row strong { color: var(--text); }
 
-    /* ── Map area ── */
-    #map-container {
-      position: relative;
+    #logOutput { max-height: 120px; overflow-y: auto; font-size: 0.67rem; font-family: var(--mono); display: flex; flex-direction: column; gap: 2px; }
+    .log-line { padding: 2px 4px; border-radius: 3px; background: rgba(0,0,0,0.25); }
+    .log-line.res { border-left: 2px solid var(--green); color: var(--green); }
+    .log-line.fetch { border-left: 2px solid var(--orange); color: var(--orange); }
+    .log-line.disk { border-left: 2px solid var(--amber); color: var(--amber); }
+    .log-line.info { border-left: 2px solid var(--accent); color: var(--accent); }
+
+    #coverageStripOverlay {
+      position: absolute; bottom: 20px; left: 20px; right: 190px;
+      background: rgba(13,21,37,0.92); border: 1px solid var(--border);
+      border-radius: 8px; padding: 7px 12px; z-index: 1000;
+      backdrop-filter: blur(6px);
+    }
+    .strip-header { display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--muted); margin-bottom: 5px; }
+    .strip-header strong { color: var(--accent); }
+    .strip-cells { display: flex; gap: 2px; height: 10px; }
+    .strip-block { flex: 1; border-radius: 2px; }
+
+    #colorbar {
+      position: absolute; bottom: 20px; right: 20px;
+      background: rgba(13,21,37,0.92); border: 1px solid var(--border);
+      border-radius: 8px; padding: 7px 10px; z-index: 1000;
+      font-size: 0.7rem; min-width: 150px; backdrop-filter: blur(6px);
+    }
+    #colorbar canvas { width: 100%; height: 10px; border-radius: 2px; margin: 3px 0; }
+    .cb-labels { display: flex; justify-content: space-between; color: var(--muted); font-family: var(--mono); font-size: 0.62rem; }
+
+    /* Map Click Point Modal / Floating Card */
+    #pointInspector {
+      position: absolute; top: 16px; right: 16px; width: 340px;
+      background: rgba(13,21,37,0.96); border: 1px solid var(--border-bright);
+      border-radius: 9px; padding: 12px; z-index: 2000;
+      backdrop-filter: blur(8px); box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+      display: none;
+    }
+    #pointInspector .pi-head { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 8px; font-weight: 700; color: #fff; }
+    #pointInspector .close-btn { cursor: pointer; color: var(--muted); font-size: 1.1rem; }
+    #pointInspector .close-btn:hover { color: #fff; }
+
+    /* ── TAB 2: TIMELINE VIEW ── */
+    #pane-timeline {
+      padding: 16px;
+      grid-template-rows: auto 1fr;
+      gap: 16px;
+      overflow-y: auto;
+    }
+
+    /* ── TAB 3: ARGO & IN-SITU VIEW ── */
+    #pane-argo {
+      padding: 16px;
+      grid-template-columns: 360px 1fr;
+      gap: 16px;
+      height: 100%;
+      overflow-y: auto;
+    }
+
+    /* ── TAB 4: API TEST RUNNER ── */
+    #pane-tester {
+      display: grid;
+      grid-template-columns: 460px 1fr;
+      height: 100%;
       overflow: hidden;
     }
-
-    #leaflet-map {
-      width: 100%;
+    .tester-sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
       height: 100%;
     }
+    .tester-toolbar {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .tester-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .test-card {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .test-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+    .test-card.active { border-color: var(--accent); background: var(--surface-3); }
+    .test-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+    .method-tag {
+      font-family: var(--mono); font-size: 0.65rem; font-weight: 700;
+      padding: 2px 5px; border-radius: 3px;
+    }
+    .method-tag.GET { background: rgba(0,200,255,0.18); color: var(--accent); }
+    .method-tag.POST { background: rgba(0,224,140,0.18); color: var(--green); }
+    .method-tag.WS { background: rgba(123,90,245,0.22); color: var(--accent-2); }
+    .test-endpoint { font-family: var(--mono); font-size: 0.74rem; color: #fff; font-weight: 600; }
+    .test-desc { font-size: 0.68rem; color: var(--muted); }
+    .test-status-tag { font-size: 0.65rem; font-family: var(--mono); font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+    .test-status-tag.ok { background: rgba(0,224,140,0.2); color: var(--green); }
+    .test-status-tag.err { background: rgba(245,67,117,0.2); color: var(--rose); }
+    .test-status-tag.idle { background: rgba(255,255,255,0.06); color: var(--muted); }
 
-    /* Deck.gl canvas overlay */
-    #deckgl-canvas {
-      position: absolute;
-      top: 0; left: 0;
-      width: 100%;
+    .tester-detail {
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      background: var(--bg);
+    }
+    .json-box {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 12px;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      max-height: 480px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      color: #9cdcfe;
+    }
+
+    /* ── TAB 5: WEBSOCKET CONSOLE ── */
+    #pane-ws {
+      padding: 16px;
+      grid-template-columns: 420px 1fr;
+      gap: 16px;
       height: 100%;
-      pointer-events: none;
-      z-index: 450;
-      display: none;
+      overflow-y: auto;
     }
 
-    /* Progress bar overlay (tile streaming) */
-    #streamProgressBar {
-      position: absolute; bottom: 0; left: 0; right: 0;
-      height: 3px; z-index: 1000;
-      background: linear-gradient(90deg, var(--accent), var(--accent-2));
-      transform-origin: left;
-      transform: scaleX(0);
-      transition: transform .3s;
-    }
-
-    /* Floating info card on map */
-    .map-tooltip {
-      position: absolute;
-      background: rgba(13,21,37,.95);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 14px;
-      font-size: 0.78rem;
-      pointer-events: none;
-      z-index: 2000;
-      min-width: 200px;
-      backdrop-filter: blur(6px);
-      display: none;
-    }
-    .map-tooltip .coord { color: var(--accent); font-family: var(--mono); margin-bottom: 4px; }
-    .map-tooltip .val   { font-size: 1.1rem; font-weight: 800; color: #fff; }
-    .map-tooltip .sub   { color: var(--muted); font-size: 0.68rem; }
-
-    /* Colorbar legend */
-    #colorbar {
-      position: absolute; bottom: 30px; right: 14px;
-      background: rgba(13,21,37,.9); border: 1px solid var(--border);
-      border-radius: 8px; padding: 8px 12px; z-index: 1000;
-      font-size: 0.72rem; min-width: 140px;
-    }
-    #colorbar .cb-title { color: #fff; font-weight: 700; margin-bottom: 6px; }
-    #colorbar canvas { display: block; width: 100%; height: 14px; border-radius: 4px; margin-bottom: 3px; }
-    .cb-labels { display: flex; justify-content: space-between; color: var(--muted); font-family: var(--mono); font-size: 0.64rem; }
-
-    /* Stream log overlay (top-right) */
-    #streamLog {
-      position: absolute; top: 10px; right: 14px;
-      background: rgba(13,21,37,.88);
-      border: 1px solid var(--border);
-      border-radius: 8px; padding: 8px 12px;
-      font-size: 0.68rem; font-family: var(--mono); color: var(--accent);
-      z-index: 1000; max-width: 280px; max-height: 120px;
-      overflow-y: auto; display: none;
-    }
-
-    /* Depth selector overlay */
-    #depthSelector {
-      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-      background: rgba(13,21,37,.9); border: 1px solid var(--border);
-      border-radius: 8px; padding: 6px 16px;
-      display: flex; align-items: center; gap: 12px; z-index: 1000; font-size: 0.78rem;
-    }
-
-    /* Loader spinner */
-    .spinner {
-      width: 18px; height: 18px;
-      border: 2px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin .6s linear infinite;
-      display: none;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* Scrollbar */
-    ::-webkit-scrollbar { width: 5px; }
-    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-    /* Toast notifications */
+    /* Toast */
     #toastContainer {
       position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
       display: flex; flex-direction: column; gap: 8px; z-index: 99999;
     }
     .toast {
       background: var(--surface-2); border: 1px solid var(--border);
-      border-radius: 8px; padding: 10px 18px; font-size: 0.8rem;
-      animation: slideUp .3s ease; min-width: 240px; text-align: center;
+      border-radius: 8px; padding: 8px 16px; font-size: 0.76rem;
+      animation: slideUp .3s ease; text-align: center; color: var(--text);
     }
     .toast.success { border-color: var(--green); color: var(--green); }
     .toast.error   { border-color: var(--rose);  color: var(--rose); }
     @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-
-    /* ========================================================= */
-    /* RESPONSIVE                                                 */
-    /* ========================================================= */
-    @media (max-width: 900px) {
-      #app { grid-template-columns: 1fr; grid-template-rows: 54px 280px 1fr; }
-      #sidebar { max-height: 280px; overflow-y: scroll; }
-    }
   </style>
 </head>
 <body>
 <div id="app">
 
   <!-- ======================================================= -->
-  <!-- TOPBAR                                                   -->
+  <!-- TOPBAR: GLOBAL NAVIGATION & STATUS                      -->
   <!-- ======================================================= -->
   <div id="topbar">
-    <span class="logo">🌊 INCOIS Ocean 3D</span>
-    <span class="sep"></span>
-    <span class="tagline">Live Streaming · Argo Floats · 3D Visualization</span>
+    <div class="brand">
+      🌊 oceanStream <span class="brand-tag">v3 API TEST SUITE</span>
+    </div>
+    <div class="sep"></div>
 
-    <span class="status-pill" id="apiPill">
-      <span class="dot pulse" id="apiDot"></span>
-      <span id="apiStatus">Connecting…</span>
-    </span>
-    <span class="status-pill" id="wsPill">
-      <span class="dot" id="wsDot"></span>
-      <span id="wsStatus">WS –</span>
-    </span>
+    <div class="nav-tabs">
+      <button class="tab-btn active" onclick="switchTab('map')">
+        <span class="tab-icon">🗺️</span> Map & 3D Engine
+      </button>
+      <button class="tab-btn" onclick="switchTab('timeline')">
+        <span class="tab-icon">📈</span> Timeline Analytics
+      </button>
+      <button class="tab-btn" onclick="switchTab('argo')">
+        <span class="tab-icon">🎯</span> Argo & In-Situ
+      </button>
+      <button class="tab-btn" onclick="switchTab('tester')">
+        <span class="tab-icon">🧪</span> All APIs Test Runner
+      </button>
+      <button class="tab-btn" onclick="switchTab('ws')">
+        <span class="tab-icon">⚡</span> WebSocket Console
+      </button>
+    </div>
 
-    <div class="topbar-controls">
-      <label>Variable
-        <select id="varSelect" onchange="onVarChange()">
-          <option value="thetao">Temperature (°C)</option>
-        </select>
-      </label>
-      <label>Depth layer
-        <select id="depthSelect" onchange="onDepthChange()">
-          <option value="0">Surface (0.49m)</option>
-        </select>
-      </label>
-      <label>Time step
-        <select id="timeSelect" onchange="onTimeChange()">
-          <option value="-1">Latest</option>
-        </select>
-      </label>
-      <button class="btn" id="btn3D" onclick="toggle3DView()">🧊 3D View: OFF</button>
-      <button class="btn primary" onclick="streamOceanData()">▶ Stream Data</button>
-      <button class="btn" onclick="clearStreamAndReset()">↺ Reset</button>
-      <div class="spinner" id="globalSpinner"></div>
+    <div class="topbar-right">
+      <span class="status-pill" id="apiPill">
+        <span class="dot online" id="apiDot"></span>
+        <span id="apiStatus">API: Checking…</span>
+      </span>
+      <span class="status-pill" id="wsPill">
+        <span class="dot" id="wsDot"></span>
+        <span id="wsStatus">WS Connecting…</span>
+      </span>
+      <button class="btn danger" onclick="flushCache()">🧹 Flush L1</button>
     </div>
   </div>
 
   <!-- ======================================================= -->
-  <!-- SIDEBAR                                                   -->
+  <!-- MAIN PANES                                              -->
   <!-- ======================================================= -->
-  <div id="sidebar">
+  <div id="main-content">
 
-    <!-- Progressive WebSocket Panel -->
-    <div class="panel">
-      <div class="panel-header" onclick="togglePanel('wsPanel')">
-        ⚡ Progressive Deep-Dive
-        <span class="badge" id="wsStatusBadge">WS –</span>
-      </div>
-      <div class="panel-body" id="wsPanel">
-        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:10px;">
-          Click a station → Blurry→Sharp→Deep pattern streams over WebSocket.
-        </div>
-        <div class="loc-grid" id="locBtns">
-          <!-- Populated by JS -->
-        </div>
-        <div style="margin-top:10px;">
-          <div class="stage s1" id="s1">
-            <div class="title">Stage 1 · Low-Res Preview</div>
-            <div class="meta" id="s1meta">Awaiting request…</div>
-            <div class="pill-wrap" id="s1pills"></div>
+    <!-- ── TAB 1: MAP & 3D ENGINE ── -->
+    <div id="pane-map" class="view-pane active">
+      <div class="map-sidebar">
+
+        <!-- Controls -->
+        <div class="panel">
+          <div class="panel-header">
+            🕹️ Viewport Controls
           </div>
-          <div class="stage s2" id="s2">
-            <div class="title">Stage 2 · Full Surface Series</div>
-            <div class="meta" id="s2meta">Awaiting…</div>
-            <div class="pill-wrap" id="s2pills"></div>
+          <div class="panel-body">
+            <div class="ctrl-row">
+              <label>Depth (0–50m):</label>
+              <input type="range" id="depthSlider" min="2" max="50" step="2" value="10">
+              <strong id="depthLabel" style="color:var(--accent);font-family:var(--mono);min-width:55px;">0–10m</strong>
+            </div>
+            <div class="ctrl-row">
+              <label>Time Slice:</label>
+              <input type="date" id="dateInput" value="">
+            </div>
+            <div style="display:flex;gap:4px;margin-top:4px;margin-bottom:6px;">
+              <button class="btn" style="flex:1;font-size:0.65rem;padding:3px;" onclick="setTimePreset('yesterday')">Yesterday</button>
+              <button class="btn" style="flex:1;font-size:0.65rem;padding:3px;" onclick="setTimePreset('7d')">7 Days</button>
+              <button class="btn" style="flex:1;font-size:0.65rem;padding:3px;" onclick="setTimePreset('30d')">30 Days</button>
+              <button class="btn" style="flex:1;font-size:0.65rem;padding:3px;" onclick="setTimePreset('1y')">1 Year</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:6px;">
+              <button class="btn" id="btn3D" onclick="toggle3DView()" style="flex:1;">🧊 3D Layer: OFF</button>
+              <button class="btn" onclick="triggerViewportFetch()" style="flex:1;">🔄 Re-fetch</button>
+            </div>
           </div>
-          <div class="stage s3" id="s3">
-            <div class="title">Stage 3 · Deep-Dive (0–50m)</div>
-            <div class="meta" id="s3meta">Awaiting…</div>
+        </div>
+
+        <!-- OS Virtual Memory Map Panel -->
+        <div class="panel">
+          <div class="panel-header">
+            💾 OS Demand-Paging Table
+            <span class="badge" id="residentBadge">100% Warm</span>
+          </div>
+          <div class="panel-body">
+            <div class="coverage-legend">
+              <div class="leg-item"><div class="leg-box resident"></div><span>RESIDENT</span></div>
+              <div class="leg-item"><div class="leg-box ondisk"></div><span>ON_DISK</span></div>
+              <div class="leg-item"><div class="leg-box fetching"></div><span>FETCHING</span></div>
+              <div class="leg-item"><div class="leg-box notfetched"></div><span>NOT_FETCHED</span></div>
+            </div>
+
+            <div style="font-size:0.68rem;color:var(--muted);margin-bottom:4px;">Depth Page Allocation (2m Bins):</div>
+            <div class="memory-grid" id="memoryGrid"></div>
+
+            <div style="margin-top:8px;">
+              <div class="stat-row"><span>Pages Registered:</span><strong id="statTotalPages">11,160</strong></div>
+              <div class="stat-row"><span>L1 RAM Hit Rate:</span><strong id="statHitRate" style="color:var(--green)">100%</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Stream Packet Feed -->
+        <div class="panel" style="flex:1;">
+          <div class="panel-header">
+            ⚡ WebSocket Packets
+            <span class="badge" id="streamPacketBadge">Live</span>
+          </div>
+          <div class="panel-body">
+            <div id="logOutput">
+              <div class="log-line info">[INIT] System ready. Pan map or click to query.</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Map -->
+      <div id="map-wrapper">
+        <div id="leaflet-map"></div>
+        <canvas id="deckgl-canvas"></canvas>
+
+        <div id="coverageStripOverlay">
+          <div class="strip-header">
+            <span>Viewport Depth Range: <strong id="stripRangeText">0–10m</strong></span>
+            <span id="stripStatusText">100% Resident in L1/L2</span>
+          </div>
+          <div class="strip-cells" id="stripCells"></div>
+        </div>
+
+        <div id="colorbar">
+          <div style="font-weight:700;color:#fff;">Sea Temperature</div>
+          <canvas id="cbCanvas" height="10"></canvas>
+          <div class="cb-labels">
+            <span id="cbMin">26.0°C</span>
+            <span id="cbMax">31.0°C</span>
+          </div>
+        </div>
+
+        <!-- Floating Click-to-Query Inspector (Testing GET /ocean/point) -->
+        <div id="pointInspector">
+          <div class="pi-head">
+            <span>📍 Click-to-Query (/ocean/point)</span>
+            <span class="close-btn" onclick="closePointInspector()">&times;</span>
+          </div>
+          <div id="piContent" style="font-size:0.72rem;display:flex;flex-direction:column;gap:6px;">
+            <div style="color:var(--muted)">Click anywhere on the map to test <strong>/ocean/point</strong> API!</div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Argo Float Panel -->
-    <div class="panel">
-      <div class="panel-header" onclick="togglePanel('argoPanel')">
-        🎯 Argo Floats
-        <span class="badge" id="argoCountLabel">– pts</span>
-      </div>
-      <div class="panel-body" id="argoPanel">
-        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px;">
-          Time slider filters Argo float positions. Markers appear on the map.
+    <!-- ── TAB 2: TIMELINE & TIME-SERIES ── -->
+    <div id="pane-timeline" class="view-pane">
+      <div class="panel">
+        <div class="panel-header">
+          📊 Time-Series Query Form (GET /ocean/timeline & GET /api/coastal-temps)
         </div>
-        <label style="font-size:0.72rem;color:var(--muted);">Date</label>
-        <input type="range" id="argoSlider" min="0" max="30" value="30" step="1" oninput="onArgoSlider(this.value)" />
-        <span id="argoSliderDate">2024-07-31</span>
-        <button class="btn" style="width:100%;margin-top:8px;" onclick="loadArgoForDate()">🔄 Refresh Argo</button>
-        <div id="argoTableMini" style="margin-top:8px; max-height:120px; overflow-y:auto; font-size:0.68rem; font-family:var(--mono);">
-          <!-- mini float list -->
+        <div class="panel-body">
+          <div style="display:flex;gap:6px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
+            <span style="font-size:0.7rem;color:var(--muted);font-weight:600;">Presets:</span>
+            <button class="btn" style="font-size:0.7rem;padding:3px 8px;" onclick="setTimelinePreset('yesterday')">Yesterday</button>
+            <button class="btn" style="font-size:0.7rem;padding:3px 8px;" onclick="setTimelinePreset('7d')">Last 7 Days</button>
+            <button class="btn" style="font-size:0.7rem;padding:3px 8px;" onclick="setTimelinePreset('30d')">Last 30 Days</button>
+            <button class="btn" style="font-size:0.7rem;padding:3px 8px;" onclick="setTimelinePreset('1y')">Last 1 Year</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:10px;align-items:end;">
+            <div>
+              <label style="color:var(--muted);font-size:0.7rem;">Latitude:</label>
+              <input type="number" id="tlLat" value="13.08" step="0.01" style="width:100%;">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:0.7rem;">Longitude:</label>
+              <input type="number" id="tlLon" value="80.27" step="0.01" style="width:100%;">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:0.7rem;">Depth (m):</label>
+              <input type="number" id="tlDepth" value="0.0" step="1" style="width:100%;">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:0.7rem;">Date Start:</label>
+              <input type="date" id="tlStart" value="" style="width:100%;">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:0.7rem;">Date End:</label>
+              <input type="date" id="tlEnd" value="" style="width:100%;">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:0.7rem;">Granularity:</label>
+              <select id="tlGran" style="width:100%;">
+                <option value="day">Day</option>
+                <option value="week">Week</option>
+                <option value="month">Month</option>
+              </select>
+            </div>
+            <div>
+              <button class="btn primary" onclick="runTimelineQuery()" style="width:100%;height:28px;">Fetch Timeline</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="flex:1;min-height:380px;">
+        <div class="panel-header">
+          📈 Interactive Chart.js Timeline
+          <span class="badge" id="tlBadge">Chennai (Lat 13.08, Lon 80.27)</span>
+        </div>
+        <div class="panel-body" style="height:340px;position:relative;">
+          <canvas id="timelineChart"></canvas>
         </div>
       </div>
     </div>
 
-    <!-- Depth Profile Panel -->
-    <div class="panel">
-      <div class="panel-header" onclick="togglePanel('depthPanel')">
-        📊 Depth Profile Chart
-        <span class="badge">0–50m</span>
-      </div>
-      <div class="panel-body" id="depthPanel">
-        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px;">Click a station to see its thermocline.</div>
-        <div id="depthChartWrap"><canvas id="depthChart"></canvas></div>
-      </div>
-    </div>
-
-    <!-- Files Panel -->
-    <div class="panel">
-      <div class="panel-header" onclick="togglePanel('filesPanel')">
-        📁 Downloaded Files
-        <span class="badge" id="filesTotalBadge">-- MB</span>
-      </div>
-      <div class="panel-body" id="filesPanel">
-        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:8px;">Files are never deleted. All cached data visible here.</div>
-        <div id="filesList">Loading…</div>
-        <button class="btn" style="width:100%;margin-top:8px;" onclick="loadFiles()">🔄 Refresh</button>
-      </div>
-    </div>
-
-    <!-- AODN Addon Panel -->
-    <div class="panel">
-      <div class="panel-header" onclick="togglePanel('aodnPanel')">
-        🌀 AODN CTD Addon
-        <span class="badge">PIL100</span>
-      </div>
-      <div class="panel-body" id="aodnPanel">
-        <div id="aodnInfo" style="font-size:0.72rem;color:var(--muted);">Loading AODN data…</div>
-        <button class="btn" style="width:100%;margin-top:6px;" onclick="flyToAODN()">📍 Fly to AODN Station (Coral Sea)</button>
-        <button class="btn" style="width:100%;margin-top:4px;" onclick="flyToIndianOcean()">📍 Fly to Indian Ocean</button>
-        <div id="aodnProfile" style="margin-top:8px;max-height:100px;overflow-y:auto;font-size:0.68rem;font-family:var(--mono);"></div>
-      </div>
-    </div>
-
-    <!-- Cache Stats -->
-    <div class="panel">
-      <div class="panel-header" onclick="togglePanel('cachePanel')">
-        ⚙ Cache Telemetry
-        <span class="badge" id="l1RateBadge">–%</span>
-      </div>
-      <div class="panel-body" id="cachePanel">
-        <div id="cacheStats" style="font-size:0.72rem;font-family:var(--mono);color:var(--muted);line-height:1.8;">
-          Loading…
+    <!-- ── TAB 3: ARGO & IN-SITU ── -->
+    <div id="pane-argo" class="view-pane">
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="panel">
+          <div class="panel-header">
+            🎯 Nearest Argo Float Search (GET /argo/nearest)
+          </div>
+          <div class="panel-body">
+            <div class="ctrl-row">
+              <label>Target Latitude:</label>
+              <input type="number" id="argoSearchLat" value="13.08" step="0.1" style="width:90px;">
+            </div>
+            <div class="ctrl-row">
+              <label>Target Longitude:</label>
+              <input type="number" id="argoSearchLon" value="80.27" step="0.1" style="width:90px;">
+            </div>
+            <div class="ctrl-row">
+              <label>Search Radius (km):</label>
+              <input type="number" id="argoSearchRad" value="500" min="10" max="2000" style="width:90px;">
+            </div>
+            <div class="ctrl-row">
+              <label>Float Type:</label>
+              <select id="argoSearchType" style="width:90px;">
+                <option value="both">Both</option>
+                <option value="core">Core</option>
+                <option value="bgc">BGC</option>
+              </select>
+            </div>
+            <button class="btn primary" onclick="runArgoNearestSearch()" style="width:100%;margin-top:4px;">Search Floats</button>
+          </div>
         </div>
-        <button class="btn danger" style="width:100%;margin-top:8px;" onclick="clearCache()">🧹 Flush L1 Cache</button>
+
+        <div class="panel" style="flex:1;">
+          <div class="panel-header">
+            📍 Found Floats & Instruments
+            <span class="badge" id="argoCountBadge">0 found</span>
+          </div>
+          <div class="panel-body" id="argoListContainer" style="max-height:280px;overflow-y:auto;">
+            <div style="color:var(--muted)">Click 'Search Floats' to find nearest Argo floats or AODN CTD moorings.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="display:flex;flex-direction:column;">
+        <div class="panel-header">
+          📉 Vertical Depth Profile (GET /argo/profile & GET /api/aodn-data)
+          <span class="badge" id="argoActiveProfileBadge">Platform #2902765</span>
+        </div>
+        <div class="panel-body" style="flex:1;position:relative;min-height:420px;">
+          <canvas id="argoProfileChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TAB 4: COMPLETE API TEST RUNNER ── -->
+    <div id="pane-tester" class="view-pane">
+      <div class="tester-sidebar">
+        <div class="tester-toolbar">
+          <button class="btn primary" onclick="runAllApiTests()">⚡ Run All 18 Tests</button>
+          <button class="btn" onclick="resetTestStatus()">Reset</button>
+          <span style="font-size:0.7rem;color:var(--muted);margin-left:auto;" id="testSummaryText">0/18 Tested</span>
+        </div>
+        <div class="tester-list" id="testCardsContainer">
+          <!-- Dynamically populated test cards -->
+        </div>
+      </div>
+
+      <div class="tester-detail">
+        <div class="panel">
+          <div class="panel-header" id="detailHeader">
+            Selected Endpoint: GET /
+          </div>
+          <div class="panel-body">
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+              <input type="text" id="detailUrl" style="flex:1;font-family:var(--mono);" value="http://localhost:8000/">
+              <button class="btn primary" onclick="runSelectedApiTest()">Send Request</button>
+            </div>
+            <div style="display:flex;gap:12px;font-size:0.72rem;color:var(--muted);margin-bottom:8px;">
+              <span>Status: <strong id="detailStatus" style="color:var(--green)">–</strong></span>
+              <span>Time: <strong id="detailTime">– ms</strong></span>
+              <span>Size: <strong id="detailSize">– KB</strong></span>
+            </div>
+            <div class="json-box" id="detailJson">// JSON response payload will appear here...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TAB 5: WEBSOCKET LIVE CONSOLE ── -->
+    <div id="pane-ws" class="view-pane">
+      <div class="panel">
+        <div class="panel-header">
+          ⚡ WebSocket Client Tester
+        </div>
+        <div class="panel-body">
+          <div class="ctrl-row">
+            <label>WebSocket Endpoint:</label>
+            <select id="wsSelector" style="flex:1;" onchange="updateWsPreset()">
+              <option value="/ws/ocean-stream">/ws/ocean-stream (Viewport & Point Streaming)</option>
+              <option value="/ws/coastal-temps">/ws/coastal-temps (Progressive Coastal Temps)</option>
+            </select>
+          </div>
+
+          <div style="margin-top:10px;margin-bottom:4px;color:var(--muted);font-size:0.72rem;">JSON Message to Send:</div>
+          <textarea id="wsMessageInput" style="width:100%;height:140px;background:var(--surface-3);color:#fff;border:1px solid var(--border);border-radius:6px;font-family:var(--mono);font-size:0.72rem;padding:8px;outline:none;"></textarea>
+
+          <div style="display:flex;gap:8px;margin-top:8px;">
+            <button class="btn primary" onclick="sendCustomWsMessage()" style="flex:1;">Send WS Message</button>
+            <button class="btn" onclick="clearWsLog()" style="width:80px;">Clear Log</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="display:flex;flex-direction:column;">
+        <div class="panel-header">
+          📥 Real-Time WebSocket Message Stream
+        </div>
+        <div class="panel-body" style="flex:1;">
+          <div class="json-box" id="wsLogBox" style="max-height:500px;color:#a6e22e;">// Incoming WebSocket messages will stream here in real-time...</div>
+        </div>
       </div>
     </div>
 
   </div>
-
-  <!-- ======================================================= -->
-  <!-- MAP AREA                                                  -->
-  <!-- ======================================================= -->
-  <div id="map-container">
-    <div id="leaflet-map"></div>
-    <canvas id="deckgl-canvas"></canvas>
-    <div id="streamProgressBar"></div>
-
-    <!-- Depth selector overlay -->
-    <div id="depthSelector">
-      <span style="color:var(--muted)">Depth:</span>
-      <strong id="currentDepthLabel" style="color:var(--accent)">Surface</strong>
-      <span style="color:var(--muted)">|</span>
-      <span id="streamTileCount" style="color:var(--muted)">No tiles loaded</span>
-    </div>
-
-    <!-- Stream log -->
-    <div id="streamLog"></div>
-
-    <!-- Colorbar -->
-    <div id="colorbar">
-      <div class="cb-title" id="cbTitle">Temperature °C</div>
-      <canvas id="cbCanvas" height="14"></canvas>
-      <div class="cb-labels">
-        <span id="cbMin">–</span>
-        <span id="cbMax">–</span>
-      </div>
-    </div>
-
-    <!-- Hover tooltip -->
-    <div class="map-tooltip" id="mapTooltip">
-      <div class="coord" id="ttCoord"></div>
-      <div class="val"   id="ttVal"></div>
-      <div class="sub"   id="ttSub"></div>
-    </div>
-  </div>
-
 </div>
 
-<!-- Toast container -->
 <div id="toastContainer"></div>
 
 <!-- ============================================================ -->
-<!-- JAVASCRIPT                                                    -->
+<!-- FRONTEND JAVASCRIPT LOGIC                                    -->
 <!-- ============================================================ -->
 <script>
-// ================================================================
-// CONFIGURATION
-// ================================================================
-const API  = "http://localhost:8000";
-const WS   = "ws://localhost:8000/ws/coastal-temps";
-const WS2  = "ws://localhost:8000/ws/ocean-stream";
+const API = "http://localhost:8000";
+const WS_URL = "ws://localhost:8000/ws/ocean-stream";
 
-const STATIONS = [
-  { id:"chennai",       name:"Chennai",      lat:13.0827, lon:80.2707, region:"Coromandel" },
-  { id:"mumbai",        name:"Mumbai",       lat:18.9220, lon:72.8347, region:"Konkan" },
-  { id:"visakhapatnam", name:"Vizag",        lat:17.6868, lon:83.2185, region:"Andhra" },
-  { id:"kochi",         name:"Kochi",        lat: 9.9312, lon:76.2673, region:"Malabar" },
-  { id:"bay_of_bengal", name:"Bay of Bengal",lat:14.0000, lon:86.0000, region:"Open Ocean" },
+// App State
+let leafletMap = null;
+let deckInstance = null;
+let is3DMode = false;
+let ws = null;
+let customWs = null;
+let panDebounceTimer = null;
+let currentGridPoints = [];
+let mapLayerGroup = null;
+let argoMarkersGroup = null;
+let timelineChart = null;
+let argoProfileChart = null;
+
+function getCalculatedDates() {
+  const now = new Date();
+  const yest = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
+  const weekAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 8));
+  const monthAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 31));
+  const yearAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 366));
+  const toIso = (d) => d.toISOString().slice(0, 10);
+  return {
+    today: toIso(now),
+    yesterday: toIso(yest),
+    weekAgo: toIso(weekAgo),
+    monthAgo: toIso(monthAgo),
+    yearAgo: toIso(yearAgo),
+  };
+}
+
+const _initDates = getCalculatedDates();
+let depthMin = 0.0;
+let depthMax = 10.0;
+let selectedDate = _initDates.yesterday;
+let globalColorMin = 26.0;
+let globalColorMax = 31.0;
+const COLOR_RAMP = chroma.scale(["#0077b6", "#00b4d8", "#90e0ef", "#ffd166", "#f54375"]).domain([0, 1]);
+
+// All 19 APIs catalogue
+const API_ENDPOINTS = [
+  { id: "root", method: "GET", path: "/", desc: "Root service info & version" },
+  { id: "date_info", method: "GET", path: "/api/date-info", desc: "Copernicus availability, server date & presets" },
+  { id: "point", method: "GET", path: `/ocean/point?lat=13.08&lon=80.27&depth=0&date=${_initDates.yesterday}`, desc: "Core click-to-query (Physics + BGC + Argo)" },
+  { id: "snapshot", method: "GET", path: `/ocean/snapshot?lat_min=10&lat_max=15&lon_min=75&lon_max=85&depth=0&date=${_initDates.yesterday}`, desc: "Spatial bounding box 2D grid" },
+  { id: "timeline", method: "GET", path: `/ocean/timeline?lat=13.08&lon=80.27&depth=0&preset=7d&granularity=day&variables=temperature,salinity`, desc: "Time-series with 7d preset (or custom dates)" },
+  { id: "nearest", method: "GET", path: "/argo/nearest?lat=13.08&lon=80.27&radius_km=500&type=both", desc: "Nearest Argo floats & AODN moorings" },
+  { id: "profile", method: "GET", path: "/argo/profile?platform_number=2902765", desc: "Full vertical depth profile for platform" },
+  { id: "coverage", method: "GET", path: "/ocean/coverage?lat_min=8&lat_max=22&lon_min=68&lon_max=90", desc: "Page table OS virtual memory state" },
+  { id: "metadata", method: "GET", path: "/api/metadata", desc: "Zarr dimensions, coordinates & stations" },
+  { id: "coastal", method: "GET", path: "/api/coastal-temps?variable=thetao", desc: "Coastal station temperature series" },
+  { id: "depth_prof", method: "GET", path: "/api/depth-profile?location=chennai&variable=thetao", desc: "Station depth profile" },
+  { id: "argo_floats", method: "GET", path: "/api/argo-floats?limit=20", desc: "Argo float observations list" },
+  { id: "argo_profs", method: "GET", path: "/api/argo-profiles?max_platforms=5", desc: "Grouped Argo platform profiles" },
+  { id: "argo_slider", method: "GET", path: `/api/argo-slider?date_start=${_initDates.weekAgo}&date_end=${_initDates.yesterday}`, desc: "Time-filtered float points" },
+  { id: "aodn", method: "GET", path: "/api/aodn-data", desc: "AODN CTD Mooring data" },
+  { id: "overview", method: "GET", path: "/api/ocean-overview", desc: "Spatial min/max/mean bounding box stats" },
+  { id: "cache_stats", method: "GET", path: "/api/cache-stats", desc: "L1 RAM / L2 Zarr telemetry" },
+  { id: "cache_clear", method: "POST", path: "/api/cache-clear", desc: "Flush L1 RAM cache" },
+  { id: "files", method: "GET", path: "/api/files", desc: "Zarr dataset files & sizes browser" },
 ];
 
-const BBOX = { minLat:8, maxLat:20, minLon:71, maxLon:88 };
+let activeTestIndex = 0;
 
-// Global state
-let leafletMap    = null;
-let deckInstance  = null;
-let is3DMode      = false;
-let ws            = null;
-let wsOcean       = null;
-let depthChart    = null;
-let argoMarkers   = [];
-let stationMarkers= [];
-let tileCircles   = [];
-let globalColorMin= 26;
-let globalColorMax= 32;
-let activeStation = "chennai";
-let currentVar    = "thetao";
-let currentDepth  = 0;
-let currentTime   = -1;
-let argoDateOffset= 30;
-let panelStates   = {};
-let streamedGridData = [];
-let argoDataStore = [];
-let metadataStore = null;
-
-let argoSliderTimeout = null;
-
-const ARGO_BASE_DATE = new Date("2024-07-01T00:00:00Z");
-
-// Color scale definition
-const TEMP_SCALE = chroma.scale(["#080060","#1020a8","#0070d0","#00b0ff","#00e0cc","#00e080","#80ff00","#ffe000","#ff8000","#ff2000"]).mode("lch");
-
-// ================================================================
-// INITIALISATION
-// ================================================================
+// ---------------------------------------------------------------------------
+// 1. INITIALIZATION
+// ---------------------------------------------------------------------------
 document.addEventListener("DOMContentLoaded", () => {
-  initLeafletMap();
-  initStationButtons();
-  initDepthChart();
+  initMap();
   initDeckGL();
+  initCharts();
+  initControls();
+  buildMemoryGrid();
+  renderTestCards();
+  selectApiTest(0);
+  updateWsPreset();
   connectWebSocket();
-  connectOceanStream();
   checkApiHealth();
-  loadMetadata();
-  loadFiles();
-  loadAodnData();
-  loadCacheStats();
-  loadArgoForDate();
-  updateColorbar();
+
+  // Load initial timeline & argo search
+  runTimelineQuery();
+  runArgoNearestSearch();
 });
 
-// ================================================================
-// METADATA FETCHING & DYNAMIC CONTROLS
-// ================================================================
-async function loadMetadata() {
-  try {
-    const res = await fetch(`${API}/api/metadata`);
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data.status !== "success") return;
-    metadataStore = data;
+// ---------------------------------------------------------------------------
+// 2. TAB SWITCHING
+// ---------------------------------------------------------------------------
+function switchTab(tabId) {
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".view-pane").forEach(p => p.classList.remove("active"));
 
-    // Populate depth select
-    if (data.depths && data.depths.length > 0) {
-      const depthSelect = document.getElementById("depthSelect");
-      depthSelect.innerHTML = "";
-      data.depths.forEach((d, idx) => {
-        const opt = document.createElement("option");
-        opt.value = idx;
-        opt.textContent = `${idx === 0 ? "Surface " : ""}(${d} m)`;
-        depthSelect.appendChild(opt);
-      });
+  event.currentTarget.classList.add("active");
+  const target = document.getElementById(`pane-${tabId}`);
+  if (target) {
+    target.classList.add("active");
+    if (tabId === "map" && leafletMap) {
+      setTimeout(() => leafletMap.invalidateSize(), 150);
     }
-
-    // Populate time select
-    if (data.dates && data.dates.length > 0) {
-      const timeSelect = document.getElementById("timeSelect");
-      timeSelect.innerHTML = "";
-      const optLatest = document.createElement("option");
-      optLatest.value = "-1";
-      optLatest.textContent = `Latest (${data.dates[data.dates.length - 1]})`;
-      timeSelect.appendChild(optLatest);
-
-      data.dates.forEach((dateStr, idx) => {
-        const opt = document.createElement("option");
-        opt.value = idx;
-        opt.textContent = dateStr;
-        timeSelect.appendChild(opt);
-      });
-    }
-  } catch (e) {
-    console.warn("Metadata load error:", e);
   }
 }
 
-// ================================================================
-// LEAFLET MAP
-// ================================================================
-function initLeafletMap() {
+// ---------------------------------------------------------------------------
+// 3. LEAFLET MAP & 3D ENGINE
+// ---------------------------------------------------------------------------
+function initMap() {
   leafletMap = L.map("leaflet-map", {
-    center: [14, 79.5],
+    center: [14.5, 80.0],
     zoom: 6,
-    zoomControl: true,
+    minZoom: 4,
+    maxZoom: 12,
   });
 
   L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-    attribution: "© OpenStreetMap © CARTO",
-    maxZoom: 18,
+    attribution: "&copy; OpenStreetMap &copy; CARTO",
     subdomains: "abcd",
+    maxZoom: 19,
   }).addTo(leafletMap);
 
-  STATIONS.forEach(s => {
-    const marker = L.circleMarker([s.lat, s.lon], {
-      radius: 10,
-      color: "#00c8ff",
-      fillColor: "#00c8ff",
-      fillOpacity: 0.85,
-      weight: 2,
-    }).addTo(leafletMap)
-      .bindPopup(`<b>${s.name}</b><br>${s.lat.toFixed(2)}°N, ${s.lon.toFixed(2)}°E<br><i>${s.region}</i>`)
-      .on("click", () => requestDeepDive(s.id));
-    stationMarkers.push(marker);
+  mapLayerGroup = L.layerGroup().addTo(leafletMap);
+  argoMarkersGroup = L.layerGroup().addTo(leafletMap);
+
+  // Pan / Zoom triggers demand-paging WebSocket stream
+  leafletMap.on("moveend zoomend", () => {
+    onViewportChanged();
+    if (is3DMode) syncDeckView();
   });
 
-  leafletMap.on("move", syncDeckView);
-  leafletMap.on("zoom", syncDeckView);
-  leafletMap.on("mousemove", onMapHover);
-  leafletMap.on("mouseout", () => { document.getElementById("mapTooltip").style.display = "none"; });
+  // Map Click triggers GET /ocean/point inspection!
+  leafletMap.on("click", (e) => {
+    inspectOceanPoint(e.latlng.lat, e.latlng.lng);
+  });
 }
 
-// ================================================================
-// DECK.GL 3D VISUALIZATION OVERLAY
-// ================================================================
+function onViewportChanged() {
+  clearTimeout(panDebounceTimer);
+  panDebounceTimer = setTimeout(() => {
+    triggerViewportFetch();
+    refreshCoverageStrip();
+  }, 250);
+}
+
+function triggerViewportFetch() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const b = leafletMap.getBounds();
+
+  addLog("info", `[VIEWPORT] Lat [${b.getSouth().toFixed(2)}, ${b.getNorth().toFixed(2)}], Depth: ${depthMin}–${depthMax}m`);
+
+  ws.send(JSON.stringify({
+    lat_min: b.getSouth(),
+    lat_max: b.getNorth(),
+    lon_min: b.getWest(),
+    lon_max: b.getEast(),
+    depth_min: depthMin,
+    depth_max: depthMax,
+    time: selectedDate,
+    variable: "thetao",
+  }));
+}
+
+// Click-to-Query /ocean/point Inspector
+async function inspectOceanPoint(lat, lon) {
+  const inspector = document.getElementById("pointInspector");
+  const content = document.getElementById("piContent");
+  inspector.style.display = "block";
+  content.innerHTML = `<div style="color:var(--accent)">Querying /ocean/point for (${lat.toFixed(3)}°N, ${lon.toFixed(3)}°E)…</div>`;
+
+  try {
+    const url = `${API}/ocean/point?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&depth=${depthMin}&date=${selectedDate}`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    const phy = data.physics || {};
+    const bgc = data.bgc || {};
+    const argo = data.nearest_argo_float;
+
+    let html = `
+      <div style="font-family:var(--mono);color:var(--accent);margin-bottom:4px;">
+        Lat: ${lat.toFixed(4)}° · Lon: ${lon.toFixed(4)}° · Depth: ${depthMin}m
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:6px;">
+        <span class="badge" style="background:rgba(0,224,140,0.15);color:var(--green)">Status: ${data.status}</span>
+        <span class="badge">Cache: ${data.cache || 'L2'}</span>
+        <span class="badge">${data.elapsed_ms || 0}ms</span>
+      </div>
+
+      <div style="background:var(--surface-3);padding:6px;border-radius:5px;margin-bottom:6px;">
+        <strong style="color:#fff;">Physics:</strong>
+        <div style="display:flex;justify-content:space-between;color:var(--text);margin-top:2px;">
+          <span>Temp: <strong>${phy.temperature_c !== undefined ? phy.temperature_c + ' °C' : '–'}</strong></span>
+          <span>Salinity: <strong>${phy.salinity_psu !== undefined ? phy.salinity_psu + ' PSU' : '–'}</strong></span>
+        </div>
+        <div style="display:flex;justify-content:space-between;color:var(--muted);font-size:0.68rem;margin-top:2px;">
+          <span>Cur U: ${phy.current_u_ms || '–'} m/s</span>
+          <span>Cur V: ${phy.current_v_ms || '–'} m/s</span>
+          <span>Sea Lvl: ${phy.sea_level_m || '–'} m</span>
+        </div>
+      </div>
+
+      <div style="background:var(--surface-3);padding:6px;border-radius:5px;margin-bottom:6px;">
+        <strong style="color:#fff;">Biogeochemistry (BGC):</strong>
+        <div style="display:flex;justify-content:space-between;color:var(--text);margin-top:2px;">
+          <span>Chl-a: <strong>${bgc.chlorophyll_mgl !== undefined ? bgc.chlorophyll_mgl + ' mg/m³' : '–'}</strong></span>
+          <span>Oxygen: <strong>${bgc.oxygen_mmolm3 !== undefined ? bgc.oxygen_mmolm3 + ' mmol/m³' : '–'}</strong></span>
+        </div>
+      </div>
+
+      <div style="background:var(--surface-3);padding:6px;border-radius:5px;">
+        <strong style="color:#fff;">Nearest Argo Float:</strong>
+        ${argo ? `
+          <div style="color:var(--text);margin-top:2px;">
+            Platform <strong>#${argo.platform_number}</strong> (${argo.type || 'core'}) · <strong>${argo.distance_km} km</strong> away
+          </div>
+          <button class="btn" style="width:100%;margin-top:4px;font-size:0.68rem;" onclick="loadFloatProfile('${argo.platform_number}')">View Full Profile Chart</button>
+        ` : `<div style="color:var(--muted)">No floats within radius.</div>`}
+      </div>
+    `;
+    content.innerHTML = html;
+  } catch (e) {
+    content.innerHTML = `<div style="color:var(--rose)">Failed to query /ocean/point: ${e.message}</div>`;
+  }
+}
+
+function closePointInspector() {
+  document.getElementById("pointInspector").style.display = "none";
+}
+
+// ---------------------------------------------------------------------------
+// 4. WEBSOCKET HANDLERS
+// ---------------------------------------------------------------------------
+function connectWebSocket() {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    document.getElementById("wsDot").className = "dot online";
+    document.getElementById("wsStatus").textContent = "WS Connected";
+    addLog("info", "[WS] Connected to oceanStream backend");
+    triggerViewportFetch();
+  };
+
+  ws.onclose = () => {
+    document.getElementById("wsDot").className = "dot offline";
+    document.getElementById("wsStatus").textContent = "WS Disconnected";
+    setTimeout(connectWebSocket, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      handleWsMessage(msg);
+    } catch (e) {
+      console.error("WS Parse error", e);
+    }
+  };
+}
+
+function handleWsMessage(msg) {
+  if (msg.type === "stream_start") {
+    currentGridPoints = [];
+    addLog("info", `[START] Resident: ${msg.resident_count} pages, Missing: ${msg.missing_count} pages`);
+  }
+  else if (msg.stage === "resident") {
+    addLog("res", `[RESIDENT] Depth ${msg.depth_range}m · ${msg.grid?.length || 0} pts (${msg.elapsed_ms}ms)`);
+    mergeGridData(msg.grid);
+  }
+  else if (msg.stage === "fetching") {
+    addLog("fetch", `[FETCHING] Depth ${msg.depth_range}m · origin request`);
+  }
+  else if (msg.type === "stream_complete") {
+    addLog("info", `[COMPLETE] Rendered ${currentGridPoints.length} points in ${msg.total_elapsed_ms}ms`);
+    refreshCoverageStrip();
+  }
+}
+
+function mergeGridData(newGrid) {
+  if (!newGrid || !newGrid.length) return;
+  currentGridPoints.push(...newGrid);
+
+  if (currentGridPoints.length > 4000) {
+    currentGridPoints = currentGridPoints.slice(-4000);
+  }
+
+  const vals = currentGridPoints.map(p => p.value).filter(v => v !== null && v !== undefined);
+  if (vals.length > 0) {
+    globalColorMin = Math.min(...vals);
+    globalColorMax = Math.max(...vals);
+    if (globalColorMax === globalColorMin) globalColorMax += 1.0;
+    updateColorbar();
+  }
+
+  renderGridOnLeaflet();
+  if (is3DMode) renderDeckGLLayers();
+}
+
+function renderGridOnLeaflet() {
+  mapLayerGroup.clearLayers();
+  const step = Math.max(1, Math.floor(currentGridPoints.length / 500));
+
+  for (let i = 0; i < currentGridPoints.length; i += step) {
+    const pt = currentGridPoints[i];
+    if (pt.value === null || pt.value === undefined) continue;
+
+    const norm = Math.max(0, Math.min(1, (pt.value - globalColorMin) / (globalColorMax - globalColorMin)));
+    const color = COLOR_RAMP(norm).hex();
+
+    const circle = L.circleMarker([pt.lat, pt.lon], {
+      radius: 5,
+      fillColor: color,
+      color: "transparent",
+      fillOpacity: 0.78,
+      weight: 0,
+    }).bindTooltip(`<b>${pt.lat.toFixed(3)}°N, ${pt.lon.toFixed(3)}°E</b><br>Temp: ${pt.value.toFixed(2)} °C`);
+
+    mapLayerGroup.addLayer(circle);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5. DECK.GL 3D VIEW
+// ---------------------------------------------------------------------------
 function initDeckGL() {
   const canvas = document.getElementById("deckgl-canvas");
   if (!window.deck) return;
@@ -632,15 +1026,9 @@ function initDeckGL() {
     canvas: canvas,
     width: "100%",
     height: "100%",
-    initialViewState: {
-      longitude: 79.5,
-      latitude: 14,
-      zoom: 5,
-      pitch: 0,
-      bearing: 0
-    },
+    initialViewState: { longitude: 80.0, latitude: 14.5, zoom: 5, pitch: 0, bearing: 0 },
     controller: false,
-    layers: []
+    layers: [],
   });
 }
 
@@ -654,11 +1042,10 @@ function syncDeckView() {
       longitude: center.lng,
       latitude: center.lat,
       zoom: zoom - 1,
-      pitch: is3DMode ? 45 : 0,
-      bearing: is3DMode ? 30 : 0
-    }
+      pitch: is3DMode ? 48 : 0,
+      bearing: is3DMode ? 25 : 0,
+    },
   });
-
   renderDeckGLLayers();
 }
 
@@ -668,631 +1055,605 @@ function toggle3DView() {
   const canvas = document.getElementById("deckgl-canvas");
 
   if (is3DMode) {
-    btn.textContent = "🧊 3D View: ON";
-    btn.classList.add("active");
+    btn.textContent = "🧊 3D Layer: ON";
+    btn.classList.add("primary");
     canvas.style.display = "block";
     syncDeckView();
-    showToast("3D Ocean Extrusion view enabled! Tilt & Pitch active.", "success");
+    showToast("3D Ocean Extrusion active (deck.gl ColumnLayer)", "success");
   } else {
-    btn.textContent = "🧊 3D View: OFF";
-    btn.classList.remove("active");
+    btn.textContent = "🧊 3D Layer: OFF";
+    btn.classList.remove("primary");
     canvas.style.display = "none";
     syncDeckView();
-    showToast("Switched back to 2D Map mode.", "success");
   }
 }
 
 function renderDeckGLLayers() {
   if (!deckInstance || !is3DMode || !window.deck) return;
 
-  const validPoints = streamedGridData.filter(p => p.value !== null && p.value !== undefined);
+  const validPts = currentGridPoints.filter(p => p.value !== null && p.value !== undefined);
 
-  // 3D Column Layer representing ocean temperature and depth
   const columnLayer = new deck.ColumnLayer({
     id: "ocean-columns-3d",
-    data: validPoints,
+    data: validPts,
     diskResolution: 6,
-    radius: 12000,
+    radius: 14000,
     extruded: true,
-    elevationScale: 5000,
+    elevationScale: 4000,
     getPosition: d => [d.lon, d.lat],
-    getElevation: d => Math.max(1, (d.value - globalColorMin) * 20),
+    getElevation: d => Math.max(1, (d.value - globalColorMin) * 25),
     getFillColor: d => {
-      const t = Math.max(0, Math.min(1, (d.value - globalColorMin) / (globalColorMax - globalColorMin || 1)));
-      const rgb = chroma(TEMP_SCALE(t).hex()).rgb();
-      return [rgb[0], rgb[1], rgb[2], 200];
+      const norm = Math.max(0, Math.min(1, (d.value - globalColorMin) / (globalColorMax - globalColorMin)));
+      const rgb = chroma(COLOR_RAMP(norm).hex()).rgb();
+      return [rgb[0], rgb[1], rgb[2], 210];
     },
     pickable: true,
   });
 
-  // 3D Scatterplot for Argo floats
-  const argoLayer = new deck.ScatterplotLayer({
-    id: "argo-floats-3d",
-    data: argoDataStore,
-    getPosition: d => [d.lon, d.lat, 5000],
-    getRadius: 18000,
-    getFillColor: [123, 90, 245, 240],
-    getLineColor: [255, 255, 255, 255],
-    lineWidthMinPixels: 2,
-    pickable: true,
-  });
-
-  deckInstance.setProps({
-    layers: [columnLayer, argoLayer]
-  });
+  deckInstance.setProps({ layers: [columnLayer] });
 }
 
-// ================================================================
-// STATION BUTTONS
-// ================================================================
-function initStationButtons() {
-  const container = document.getElementById("locBtns");
-  container.innerHTML = "";
-  STATIONS.forEach(s => {
-    const btn = document.createElement("button");
-    btn.className = "loc-btn" + (s.id === activeStation ? " active" : "");
-    btn.dataset.id = s.id;
-    btn.innerHTML = `<div class="name">${s.name}</div><div class="coord">${s.lat.toFixed(2)}°N ${s.lon.toFixed(2)}°E</div>`;
-    btn.onclick = () => requestDeepDive(s.id);
-    container.appendChild(btn);
-  });
-}
-
-function requestDeepDive(stationId) {
-  activeStation = stationId;
-  document.querySelectorAll(".loc-btn").forEach(b => {
-    b.classList.toggle("active", b.dataset.id === stationId);
-  });
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ location: stationId }));
-  } else {
-    // REST fallback if WebSocket disconnected
-    fetchRestDeepDive(stationId);
-  }
-  const s = STATIONS.find(x => x.id === stationId);
-  if (s) leafletMap.flyTo([s.lat, s.lon], 7, { duration: 1.2 });
-}
-
-async function fetchRestDeepDive(stationId) {
-  try {
-    const res = await fetch(`${API}/api/depth-profile?location=${stationId}`);
-    if (res.ok) {
-      const data = await res.json();
-      updateDepthChart(data.profile);
+// ---------------------------------------------------------------------------
+// 6. CHARTS (TIMELINE & ARGO PROFILE)
+// ---------------------------------------------------------------------------
+function initCharts() {
+  // Timeline Chart
+  const ctxTl = document.getElementById("timelineChart").getContext("2d");
+  timelineChart = new Chart(ctxTl, {
+    type: "line",
+    data: { labels: [], datasets: [] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" } },
+        y: { grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" } },
+      },
+      plugins: { legend: { labels: { color: "#d4e3f7" } } }
     }
-  } catch (e) {
-    console.warn("REST deep-dive error:", e);
-  }
-}
-
-// ================================================================
-// COASTAL-TEMPS WEBSOCKET (Progressive Streaming)
-// ================================================================
-function connectWebSocket() {
-  const badge  = document.getElementById("wsStatusBadge");
-  const dot    = document.getElementById("wsDot");
-  const status = document.getElementById("wsStatus");
-
-  ws = new WebSocket(WS);
-
-  ws.onopen = () => {
-    badge.textContent = "Connected";
-    dot.className     = "dot online";
-    status.textContent = "WS ✓";
-    requestDeepDive(activeStation);
-  };
-
-  ws.onmessage = ({ data }) => {
-    const msg = JSON.parse(data);
-    handleProgressiveMessage(msg);
-  };
-
-  ws.onclose = () => {
-    badge.textContent = "Disconnected";
-    dot.className     = "dot offline";
-    status.textContent = "WS ✗";
-    setTimeout(connectWebSocket, 3000);
-  };
-
-  ws.onerror = () => {
-    badge.textContent = "Error";
-    dot.className     = "dot";
-    status.textContent = "WS Error";
-  };
-}
-
-function handleProgressiveMessage(msg) {
-  if (msg.stage === "preview") {
-    document.getElementById("s1meta").textContent =
-      `⚡ ${msg.elapsed_ms} ms · ${msg.count}/${msg.total_available} pts · ${msg.cache_layer}`;
-    renderPills("s1pills", msg.data, "pill");
-  } else if (msg.stage === "full") {
-    document.getElementById("s2meta").textContent =
-      `✅ ${msg.elapsed_ms} ms · ${msg.count} daily pts`;
-    renderPills("s2pills", msg.data.slice(0,10), "pill");
-  } else if (msg.stage === "deep_dive") {
-    document.getElementById("s3meta").textContent =
-      `🌊 ${msg.elapsed_ms} ms · ${msg.depth_layers_count} depth layers`;
-    updateDepthChart(msg.profile);
-  }
-}
-
-function renderPills(containerId, data, cls) {
-  const c = document.getElementById(containerId);
-  c.innerHTML = "";
-  (data || []).forEach(pt => {
-    const p = document.createElement("span");
-    p.className = cls;
-    p.textContent = `${pt.date}: ${pt.value ?? "–"}°C`;
-    c.appendChild(p);
   });
-}
 
-// ================================================================
-// OCEAN-STREAM WEBSOCKET (Tile-by-tile chunked download)
-// ================================================================
-function connectOceanStream() {
-  wsOcean = new WebSocket(WS2);
-  wsOcean.onopen  = () => {};
-  wsOcean.onclose = () => { setTimeout(connectOceanStream, 4000); };
-  wsOcean.onmessage = ({ data }) => {
-    const msg = JSON.parse(data);
-    handleOceanStreamMessage(msg);
-  };
-}
-
-function streamOceanData() {
-  if (!wsOcean || wsOcean.readyState !== WebSocket.OPEN) {
-    showToast("Ocean stream WebSocket not connected yet. Retrying…", "error");
-    return;
-  }
-
-  clearStreamAndReset(false);
-
-  const zoom = Math.min(leafletMap.getZoom() - 3, 3);
-  const zoomLevel = Math.max(0, Math.min(zoom, 3));
-  const bounds = leafletMap.getBounds();
-
-  wsOcean.send(JSON.stringify({
-    variable:  currentVar,
-    zoom:      zoomLevel,
-    time_idx:  currentTime,
-    depth_idx: currentDepth,
-    vp_min_lat: bounds.getSouth(),
-    vp_max_lat: bounds.getNorth(),
-    vp_min_lon: bounds.getWest(),
-    vp_max_lon: bounds.getEast(),
-  }));
-
-  document.getElementById("streamLog").style.display = "block";
-  setSpinner(true);
-}
-
-function handleOceanStreamMessage(msg) {
-  const log = document.getElementById("streamLog");
-
-  if (msg.type === "stream_start") {
-    streamedGridData = [];
-    log.innerHTML = `🚀 Stream started · zoom=${msg.max_zoom} · ${msg.variable}`;
-    document.getElementById("streamProgressBar").style.transform = "scaleX(0.05)";
-  }
-
-  else if (msg.type === "tile") {
-    streamedGridData.push(...(msg.grid || []));
-    log.innerHTML = `📦 z=${msg.z} x=${msg.x} y=${msg.y} · ${msg.grid_points} pts · ${msg.cache_layer} · ${msg.stream_elapsed_ms}ms`;
-
-    const validVals = (msg.grid || []).map(p => p.value).filter(v => v !== null && v !== undefined);
-    if (validVals.length > 0) {
-      globalColorMin = Math.min(globalColorMin, Math.min(...validVals));
-      globalColorMax = Math.max(globalColorMax, Math.max(...validVals));
-      updateColorbar();
-    }
-
-    renderTileOnMap(msg);
-    if (is3DMode) renderDeckGLLayers();
-
-    document.getElementById("streamTileCount").textContent = `${streamedGridData.length} pts streamed`;
-
-    const progress = Math.min(0.95, msg.stream_elapsed_ms / 5000);
-    document.getElementById("streamProgressBar").style.transform = `scaleX(${progress})`;
-  }
-
-  else if (msg.type === "stream_complete") {
-    log.innerHTML = `✅ Stream complete · ${streamedGridData.length} total pts · ${msg.total_elapsed_ms}ms`;
-    document.getElementById("streamProgressBar").style.transform = "scaleX(1)";
-    setTimeout(() => {
-      document.getElementById("streamProgressBar").style.transform = "scaleX(0)";
-    }, 1200);
-    setSpinner(false);
-    showToast(`Stream complete — ${streamedGridData.length} points rendered!`, "success");
-  }
-
-  else if (msg.type === "error") {
-    log.innerHTML = `❌ Error: ${msg.error}`;
-    setSpinner(false);
-  }
-}
-
-// ================================================================
-// TILE RENDERING ON LEAFLET MAP
-// ================================================================
-function renderTileOnMap(tile) {
-  const grid = tile.grid || [];
-  const step = Math.max(1, Math.floor(grid.length / 200));
-
-  for (let i = 0; i < grid.length; i += step) {
-    const pt = grid[i];
-    if (pt.value === null || pt.value === undefined) continue;
-
-    const t = Math.max(0, Math.min(1, (pt.value - globalColorMin) / (globalColorMax - globalColorMin || 1)));
-    const color = TEMP_SCALE(t).hex();
-
-    const circle = L.circleMarker([pt.lat, pt.lon], {
-      radius: 5,
-      color: "transparent",
-      fillColor: color,
-      fillOpacity: 0.75,
-      weight: 0,
-    }).addTo(leafletMap);
-
-    circle.on("mouseover", (e) => showMapTooltip(e, pt, tile));
-    circle.on("mouseout",  ()  => hideMapTooltip());
-
-    tileCircles.push(circle);
-  }
-}
-
-function clearStreamAndReset(notify = true) {
-  tileCircles.forEach(c => leafletMap.removeLayer(c));
-  tileCircles = [];
-  streamedGridData = [];
-  if (deckInstance && is3DMode) renderDeckGLLayers();
-  document.getElementById("streamTileCount").textContent = "No tiles loaded";
-  document.getElementById("streamLog").style.display = "none";
-  if (notify) showToast("Map cleared.", "success");
-}
-
-// ================================================================
-// MAP HOVER TOOLTIP
-// ================================================================
-function showMapTooltip(e, pt, tile) {
-  const tt = document.getElementById("mapTooltip");
-  const container = document.getElementById("map-container");
-  const rect = container.getBoundingClientRect();
-  tt.style.left = (e.originalEvent.clientX - rect.left + 14) + "px";
-  tt.style.top  = (e.originalEvent.clientY - rect.top  + 14) + "px";
-  tt.querySelector("#ttCoord").textContent = `${pt.lat.toFixed(3)}°N  ${pt.lon.toFixed(3)}°E`;
-  tt.querySelector("#ttVal").textContent   = `${pt.value !== null && pt.value !== undefined ? pt.value.toFixed(2) : "–"} °C`;
-  tt.querySelector("#ttSub").textContent   = `Depth: ${tile?.depth_m ?? 0}m · ${tile?.time ?? ""}`;
-  tt.style.display = "block";
-}
-
-function hideMapTooltip() {
-  document.getElementById("mapTooltip").style.display = "none";
-}
-
-function onMapHover(e) {}
-
-// ================================================================
-// COLORBAR
-// ================================================================
-function updateColorbar() {
-  const canvas = document.getElementById("cbCanvas");
-  const ctx = canvas.getContext("2d");
-  canvas.width = 200;
-  canvas.height = 14;
-  const grad = ctx.createLinearGradient(0, 0, 200, 0);
-  for (let i = 0; i <= 10; i++) {
-    grad.addColorStop(i / 10, TEMP_SCALE(i / 10).hex());
-  }
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 200, 14);
-  document.getElementById("cbMin").textContent = `${globalColorMin.toFixed(1)}°C`;
-  document.getElementById("cbMax").textContent = `${globalColorMax.toFixed(1)}°C`;
-  document.getElementById("cbTitle").textContent = currentVar === "thetao" ? "Temperature °C" : currentVar;
-}
-
-// ================================================================
-// ARGO FLOAT SLIDER
-// ================================================================
-function onArgoSlider(val) {
-  argoDateOffset = parseInt(val);
-  const d = new Date(ARGO_BASE_DATE.getTime() + argoDateOffset * 86400000);
-  const dateStr = d.toISOString().split("T")[0];
-  document.getElementById("argoSliderDate").textContent = dateStr;
-
-  if (argoSliderTimeout) clearTimeout(argoSliderTimeout);
-  argoSliderTimeout = setTimeout(loadArgoForDate, 200);
-}
-
-async function loadArgoForDate() {
-  const dateStr = document.getElementById("argoSliderDate").textContent;
-  try {
-    const res = await fetch(`${API}/api/argo-slider?date_start=${dateStr}&date_end=${dateStr}&limit=300`);
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-
-    document.getElementById("argoCountLabel").textContent = `${data.returned} pts`;
-    argoDataStore = data.floats || [];
-
-    argoMarkers.forEach(m => leafletMap.removeLayer(m));
-    argoMarkers = [];
-
-    argoDataStore.forEach(f => {
-      if (!f.lat || !f.lon) return;
-      const t = f.temp_c !== null ? Math.max(0, Math.min(1, (f.temp_c - globalColorMin) / (globalColorMax - globalColorMin || 1))) : 0.5;
-      const color = TEMP_SCALE(t).hex();
-
-      const m = L.circleMarker([f.lat, f.lon], {
-        radius: 7,
-        color: "#fff",
-        weight: 1.5,
-        fillColor: color,
-        fillOpacity: 0.9,
-      }).addTo(leafletMap)
-        .bindPopup(
-          `<b>Argo Float #${f.platform_number ?? "?"}</b><br>` +
-          `Lat: ${f.lat}°N, Lon: ${f.lon}°E<br>` +
-          `Depth: ${f.depth_dbar ?? "–"} dbar<br>` +
-          `Temp: ${f.temp_c !== null ? f.temp_c + "°C" : "–"}<br>` +
-          `<i>${f.datetime}</i>`
-        );
-      argoMarkers.push(m);
-    });
-
-    if (is3DMode) renderDeckGLLayers();
-
-    const mini = document.getElementById("argoTableMini");
-    mini.innerHTML = argoDataStore.slice(0, 20).map(f =>
-      `<div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding:2px 0;">
-        <span style="color:var(--accent-2)">#${f.platform_number ?? "?"}</span>
-        <span>${f.lat?.toFixed(2)}°N ${f.lon?.toFixed(2)}°E</span>
-        <span style="color:var(--green)">${f.temp_c !== null ? f.temp_c + "°C" : "–"}</span>
-      </div>`
-    ).join("");
-
-  } catch (e) {
-    document.getElementById("argoCountLabel").textContent = "Error";
-    document.getElementById("argoTableMini").innerHTML = `<span style="color:var(--rose)">${e.message}</span>`;
-  }
-}
-
-// ================================================================
-// DEPTH PROFILE CHART (Chart.js)
-// ================================================================
-function initDepthChart() {
-  const ctx = document.getElementById("depthChart").getContext("2d");
-  depthChart = new Chart(ctx, {
+  // Argo Profile Chart
+  const ctxArgo = document.getElementById("argoProfileChart").getContext("2d");
+  argoProfileChart = new Chart(ctxArgo, {
     type: "line",
     data: {
       labels: [],
       datasets: [{
-        label: "Temp °C",
+        label: "Temperature (°C)",
         data: [],
         borderColor: "#00c8ff",
-        backgroundColor: "rgba(0,200,255,0.08)",
+        backgroundColor: "rgba(0, 200, 255, 0.15)",
         tension: 0.35,
-        pointRadius: 3,
         fill: true,
       }]
     },
     options: {
       indexAxis: "y",
-      animation: { duration: 400 },
       responsive: true,
       maintainAspectRatio: false,
       scales: {
-        x: { ticks: { color: "#5b7394", font: { size: 10 } }, grid: { color: "#1e3055" } },
-        y: { reverse: true, ticks: { color: "#5b7394", font: { size: 10 } }, grid: { color: "#1e3055" } }
+        x: {
+          title: { display: true, text: "Temperature (°C)", color: "#6b83a6" },
+          grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" }
+        },
+        y: {
+          reverse: true,
+          title: { display: true, text: "Depth (m)", color: "#6b83a6" },
+          grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" }
+        }
       },
-      plugins: {
-        legend: { display: false },
-      }
+      plugins: { legend: { labels: { color: "#d4e3f7" } } }
     }
   });
 }
 
-function updateDepthChart(profile) {
-  if (!depthChart || !profile) return;
-  const labels = profile.map(p => `${p.depth_m}m`);
-  const data   = profile.map(p => p.temp_c);
-  depthChart.data.labels           = labels;
-  depthChart.data.datasets[0].data = data;
-  depthChart.update();
-}
+// Fetch and render GET /ocean/timeline
+async function runTimelineQuery() {
+  const lat = document.getElementById("tlLat").value;
+  const lon = document.getElementById("tlLon").value;
+  const depth = document.getElementById("tlDepth").value;
+  const start = document.getElementById("tlStart").value;
+  const end = document.getElementById("tlEnd").value;
+  const gran = document.getElementById("tlGran").value;
 
-// ================================================================
-// TOPBAR VARIABLE / DEPTH / TIME CONTROLS
-// ================================================================
-function onVarChange() {
-  currentVar = document.getElementById("varSelect").value;
-  updateColorbar();
-  streamOceanData();
-}
+  document.getElementById("tlBadge").textContent = `Lat ${lat}, Lon ${lon} · ${start} to ${end}`;
 
-function onDepthChange() {
-  currentDepth = parseInt(document.getElementById("depthSelect").value);
-  const depthText = document.getElementById("depthSelect").options[document.getElementById("depthSelect").selectedIndex].text;
-  document.getElementById("currentDepthLabel").textContent = depthText;
-  streamOceanData();
-}
-
-function onTimeChange() {
-  currentTime = parseInt(document.getElementById("timeSelect").value);
-  streamOceanData();
-}
-
-// ================================================================
-// AODN STATION NAVIGATION
-// ================================================================
-function flyToAODN() {
-  leafletMap.flyTo([-19.25, 147.05], 8, { duration: 1.5 });
-  showToast("Flying to AODN PIL100 CTD Station in Coral Sea!", "success");
-}
-
-function flyToIndianOcean() {
-  leafletMap.flyTo([14, 79.5], 6, { duration: 1.5 });
-  showToast("Returned view to Indian Ocean coastal coverage.", "success");
-}
-
-// ================================================================
-// FILES PANEL
-// ================================================================
-async function loadFiles() {
   try {
-    const res  = await fetch(`${API}/api/files`);
-    if (!res.ok) throw new Error("HTTP " + res.status);
+    const url = `${API}/ocean/timeline?lat=${lat}&lon=${lon}&depth=${depth}&date_start=${start}&date_end=${end}&granularity=${gran}&variables=temperature,salinity`;
+    const res = await fetch(url);
     const data = await res.json();
-    document.getElementById("filesTotalBadge").textContent = `${data.total_size_mb} MB`;
 
-    const list = document.getElementById("filesList");
-    list.innerHTML = "";
+    const series = data.series || [];
+    const labels = series.map(s => s.date);
+    const temps = series.map(s => s.temperature_c !== undefined ? s.temperature_c : s.temperature);
+    const salinities = series.map(s => s.salinity_psu !== undefined ? s.salinity_psu : s.salinity);
 
-    Object.entries(data.directories).forEach(([label, dir]) => {
-      const header = document.createElement("div");
-      header.style.cssText = "font-size:.7rem;color:var(--accent);font-weight:700;margin:6px 0 3px;";
-      header.textContent = `📂 ${label} (${dir.file_count} files)`;
-      list.appendChild(header);
-
-      if (!dir.exists || dir.files.length === 0) {
-        const empty = document.createElement("div");
-        empty.style.cssText = "font-size:.68rem;color:var(--muted);padding-left:8px;";
-        empty.textContent = dir.exists ? "Empty" : "Directory not found";
-        list.appendChild(empty);
-        return;
+    timelineChart.data.labels = labels;
+    timelineChart.data.datasets = [
+      {
+        label: "Temperature (°C)",
+        data: temps,
+        borderColor: "#00c8ff",
+        backgroundColor: "rgba(0, 200, 255, 0.1)",
+        tension: 0.3,
+        yAxisID: "y",
+      },
+      {
+        label: "Salinity (PSU)",
+        data: salinities,
+        borderColor: "#00e08c",
+        backgroundColor: "transparent",
+        tension: 0.3,
+        yAxisID: "y",
       }
-
-      dir.files.forEach(f => {
-        const entry = document.createElement("div");
-        entry.className = "file-entry";
-        entry.innerHTML = `
-          <span class="file-name">${f.name}</span>
-          <span class="file-size">${f.size_mb.toFixed(2)} MB</span>
-        `;
-        list.appendChild(entry);
-      });
-    });
+    ];
+    timelineChart.update();
+    showToast(`Loaded ${series.length} timeline points`, "success");
   } catch (e) {
-    document.getElementById("filesList").innerHTML = `<span style="color:var(--rose)">Error: ${e.message}</span>`;
+    showToast(`Timeline fetch error: ${e.message}`, "error");
   }
 }
 
-// ================================================================
-// AODN CTD ADDON
-// ================================================================
-async function loadAodnData() {
+// Search and render GET /argo/nearest
+async function runArgoNearestSearch() {
+  const lat = document.getElementById("argoSearchLat").value;
+  const lon = document.getElementById("argoSearchLon").value;
+  const rad = document.getElementById("argoSearchRad").value;
+  const type = document.getElementById("argoSearchType").value;
+
   try {
-    const res  = await fetch(`${API}/api/aodn-data`);
+    const url = `${API}/argo/nearest?lat=${lat}&lon=${lon}&radius_km=${rad}&type=${type}`;
+    const res = await fetch(url);
     const data = await res.json();
+    const floats = data.floats || [];
 
-    const info = document.getElementById("aodnInfo");
-    const prof = document.getElementById("aodnProfile");
+    document.getElementById("argoCountBadge").textContent = `${floats.length} found`;
+    const container = document.getElementById("argoListContainer");
+    container.innerHTML = "";
 
-    if (data.status === "not_available") {
-      info.innerHTML = `<span style="color:var(--amber)">⚠ AODN data not yet downloaded.<br>Run <code>python new.py</code> to fetch PIL100 CTD data.</span>`;
-      prof.innerHTML = "";
-    } else if (data.status === "error") {
-      info.innerHTML = `<span style="color:var(--rose)">Error: ${data.error}</span>`;
-    } else {
-      info.innerHTML = `<span style="color:var(--green)">✓ AODN data loaded · ${data.profile_points} profile pts</span><br>` +
-        `<span style="color:var(--muted)">Source: ${data.source}</span><br>` +
-        `<span style="color:var(--muted)">Location: ${data.location.name} (${data.location.lat}°S ${data.location.lon}°E)</span><br>` +
-        (data.metadata?.time_range ? `<span style="color:var(--muted)">${data.metadata.time_range.start} → ${data.metadata.time_range.end}</span>` : "");
+    argoMarkersGroup.clearLayers();
 
-      prof.innerHTML = (data.profile || []).slice(0, 30).map(p =>
-        `<div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding:2px 0;">
-          <span style="color:var(--muted)">${p.depth_m?.toFixed(1) ?? "–"} m</span>
-          <span style="color:var(--accent)">${p.temp_c !== null && p.temp_c !== undefined ? p.temp_c.toFixed(2) + "°C" : "–"}</span>
-          <span style="color:var(--accent-2)">${p.salinity_psu !== null && p.salinity_psu !== undefined ? p.salinity_psu.toFixed(2) + " PSU" : "–"}</span>
-        </div>`
-      ).join("");
+    if (!floats.length) {
+      container.innerHTML = `<div style="color:var(--muted)">No floats found within ${rad} km.</div>`;
+      return;
+    }
 
-      L.circleMarker([-19.25, 147.05], {
-        radius: 10,
-        color: "#f5a623",
-        fillColor: "#f5a623",
-        fillOpacity: 0.9,
-        weight: 2,
-      }).addTo(leafletMap)
-        .bindPopup("<b>AODN PIL100 CTD Station</b><br>Coral Sea, Australia<br>-19.25°S 147.05°E");
+    floats.forEach(f => {
+      const card = document.createElement("div");
+      card.className = "test-card";
+      card.style.marginBottom = "6px";
+      card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <strong style="color:#fff;">Platform #${f.platform_number || f.name}</strong>
+          <span class="badge" style="background:rgba(123,90,245,0.2);color:var(--accent-2);">${f.type}</span>
+        </div>
+        <div style="font-size:0.68rem;color:var(--muted);margin-top:2px;">
+          Distance: <strong>${f.distance_km} km</strong> · Lat: ${f.lat}° · Lon: ${f.lon}°
+        </div>
+      `;
+      card.onclick = () => loadFloatProfile(f.platform_number || f.name);
+      container.appendChild(card);
+
+      // Add marker to map
+      if (f.lat && f.lon) {
+        const m = L.circleMarker([f.lat, f.lon], {
+          radius: 7, color: "#fff", weight: 2, fillColor: "#7b5af5", fillOpacity: 0.9
+        }).bindPopup(`<b>Platform #${f.platform_number || f.name}</b><br>Dist: ${f.distance_km} km<br><button onclick="loadFloatProfile('${f.platform_number || f.name}')">View Profile</button>`);
+        argoMarkersGroup.addLayer(m);
+      }
+    });
+
+    if (floats[0]) {
+      loadFloatProfile(floats[0].platform_number || floats[0].name);
     }
   } catch (e) {
-    document.getElementById("aodnInfo").innerHTML = `<span style="color:var(--rose)">Failed: ${e.message}</span>`;
+    showToast(`Argo nearest error: ${e.message}`, "error");
   }
 }
 
-// ================================================================
-// CACHE STATS
-// ================================================================
-async function loadCacheStats() {
+// Fetch and render GET /argo/profile
+async function loadFloatProfile(platform) {
+  document.getElementById("argoActiveProfileBadge").textContent = `Platform #${platform}`;
   try {
-    const res  = await fetch(`${API}/api/cache-stats`);
+    const url = `${API}/argo/profile?platform_number=${platform}`;
+    const res = await fetch(url);
     const data = await res.json();
-    document.getElementById("l1RateBadge").textContent = `${data.l1_hit_rate_pct}% L1`;
-    document.getElementById("cacheStats").innerHTML =
-      `L1 hits: ${data.l1_hits}<br>L2 hits: ${data.l2_hits}<br>Total requests: ${data.total_requests}<br>L1 hit rate: ${data.l1_hit_rate_pct}%<br>Slice keys: ${data.slice_cache_keys?.length ?? 0}<br>Tile keys: ${data.tile_cache_keys?.length ?? 0}`;
+    const prof = data.profile || [];
+
+    const depths = prof.map(p => p.depth_m !== undefined ? p.depth_m : p.depth);
+    const temps = prof.map(p => p.temperature_c !== undefined ? p.temperature_c : p.temperature);
+
+    argoProfileChart.data.labels = depths;
+    argoProfileChart.data.datasets[0].data = temps;
+    argoProfileChart.update();
+    showToast(`Loaded profile for #${platform} (${prof.length} levels)`, "success");
   } catch (e) {
-    document.getElementById("cacheStats").textContent = "Backend not available";
+    showToast(`Argo profile error: ${e.message}`, "error");
   }
 }
 
-async function clearCache() {
+// ---------------------------------------------------------------------------
+// 7. API TEST RUNNER SUITE (TAB 4)
+// ---------------------------------------------------------------------------
+function renderTestCards() {
+  const container = document.getElementById("testCardsContainer");
+  container.innerHTML = "";
+
+  API_ENDPOINTS.forEach((ep, idx) => {
+    const card = document.createElement("div");
+    card.className = `test-card ${idx === activeTestIndex ? 'active' : ''}`;
+    card.id = `test-card-${idx}`;
+    card.innerHTML = `
+      <div class="test-card-header">
+        <span class="method-tag ${ep.method}">${ep.method}</span>
+        <span class="test-endpoint">${ep.path.split('?')[0]}</span>
+        <span class="test-status-tag idle" id="badge-${idx}">READY</span>
+      </div>
+      <div class="test-desc">${ep.desc}</div>
+    `;
+    card.onclick = () => selectApiTest(idx);
+    container.appendChild(card);
+  });
+}
+
+function selectApiTest(idx) {
+  activeTestIndex = idx;
+  document.querySelectorAll(".test-card").forEach(c => c.classList.remove("active"));
+  const activeCard = document.getElementById(`test-card-${idx}`);
+  if (activeCard) activeCard.classList.add("active");
+
+  const ep = API_ENDPOINTS[idx];
+  document.getElementById("detailHeader").textContent = `${ep.method} ${ep.path}`;
+  document.getElementById("detailUrl").value = `${API}${ep.path}`;
+}
+
+async function runSelectedApiTest() {
+  const ep = API_ENDPOINTS[activeTestIndex];
+  const url = document.getElementById("detailUrl").value;
+  const badge = document.getElementById(`badge-${activeTestIndex}`);
+
+  badge.className = "test-status-tag idle";
+  badge.textContent = "RUNNING";
+
+  const t0 = performance.now();
   try {
-    await fetch(`${API}/api/cache-clear`, { method: "POST" });
-    showToast("L1 cache flushed!", "success");
-    loadCacheStats();
+    const res = await fetch(url, { method: ep.method });
+    const elapsed = Math.round(performance.now() - t0);
+    const data = await res.json();
+    const sizeKb = (JSON.stringify(data).length / 1024).toFixed(1);
+
+    document.getElementById("detailStatus").textContent = `${res.status} ${res.statusText || 'OK'}`;
+    document.getElementById("detailStatus").style.color = res.ok ? "var(--green)" : "var(--rose)";
+    document.getElementById("detailTime").textContent = `${elapsed} ms`;
+    document.getElementById("detailSize").textContent = `${sizeKb} KB`;
+
+    document.getElementById("detailJson").textContent = JSON.stringify(data, null, 2);
+
+    badge.className = `test-status-tag ${res.ok ? 'ok' : 'err'}`;
+    badge.textContent = `${res.status} OK`;
+    showToast(`Test ${ep.method} ${ep.path.split('?')[0]} passed! (${elapsed}ms)`, "success");
   } catch (e) {
-    showToast("Failed to clear cache: " + e.message, "error");
+    document.getElementById("detailStatus").textContent = "ERR";
+    document.getElementById("detailStatus").style.color = "var(--rose)";
+    document.getElementById("detailJson").textContent = `Error: ${e.message}`;
+    badge.className = "test-status-tag err";
+    badge.textContent = "FAILED";
+    showToast(`Test failed: ${e.message}`, "error");
   }
 }
 
-// ================================================================
-// API HEALTH CHECK
-// ================================================================
+async function runAllApiTests() {
+  let passed = 0;
+  for (let i = 0; i < API_ENDPOINTS.length; i++) {
+    selectApiTest(i);
+    const ep = API_ENDPOINTS[i];
+    const badge = document.getElementById(`badge-${i}`);
+    badge.className = "test-status-tag idle";
+    badge.textContent = "TESTING";
+
+    const t0 = performance.now();
+    try {
+      const res = await fetch(`${API}${ep.path}`, { method: ep.method });
+      const elapsed = Math.round(performance.now() - t0);
+      const data = await res.json();
+      const sizeKb = (JSON.stringify(data).length / 1024).toFixed(1);
+
+      document.getElementById("detailStatus").textContent = `${res.status} OK`;
+      document.getElementById("detailTime").textContent = `${elapsed} ms`;
+      document.getElementById("detailSize").textContent = `${sizeKb} KB`;
+      document.getElementById("detailJson").textContent = JSON.stringify(data, null, 2);
+
+      if (res.ok) {
+        badge.className = "test-status-tag ok";
+        badge.textContent = `${res.status} OK`;
+        passed++;
+      } else {
+        badge.className = "test-status-tag err";
+        badge.textContent = `${res.status} ERR`;
+      }
+    } catch (e) {
+      badge.className = "test-status-tag err";
+      badge.textContent = "FAIL";
+    }
+    document.getElementById("testSummaryText").textContent = `${passed}/${API_ENDPOINTS.length} Passed`;
+    await new Promise(r => setTimeout(r, 120));
+  }
+  showToast(`Completed! ${passed}/${API_ENDPOINTS.length} APIs passed with 200 OK`, "success");
+}
+
+function resetTestStatus() {
+  API_ENDPOINTS.forEach((_, idx) => {
+    const badge = document.getElementById(`badge-${idx}`);
+    badge.className = "test-status-tag idle";
+    badge.textContent = "READY";
+  });
+  document.getElementById("testSummaryText").textContent = `0/${API_ENDPOINTS.length} Tested`;
+}
+
+// ---------------------------------------------------------------------------
+// 8. WEBSOCKET TEST CONSOLE (TAB 5)
+// ---------------------------------------------------------------------------
+function updateWsPreset() {
+  const sel = document.getElementById("wsSelector").value;
+  const input = document.getElementById("wsMessageInput");
+
+  if (sel === "/ws/ocean-stream") {
+    input.value = JSON.stringify({
+      lat_min: 10.0,
+      lat_max: 16.0,
+      lon_min: 75.0,
+      lon_max: 85.0,
+      depth_min: 0.0,
+      depth_max: 10.0,
+      time: selectedDate,
+      variable: "thetao"
+    }, null, 2);
+  } else {
+    input.value = JSON.stringify({
+      location: "chennai",
+      variable: "thetao"
+    }, null, 2);
+  }
+}
+
+function sendCustomWsMessage() {
+  const ep = document.getElementById("wsSelector").value;
+  const text = document.getElementById("wsMessageInput").value;
+  const wsUrl = `ws://localhost:8000${ep}`;
+
+  if (customWs) customWs.close();
+
+  appendWsLog(`\n[CONNECTING] ${wsUrl}...`);
+  customWs = new WebSocket(wsUrl);
+
+  customWs.onopen = () => {
+    appendWsLog(`[CONNECTED] Sending message:\n${text}`);
+    customWs.send(text);
+  };
+
+  customWs.onmessage = (e) => {
+    appendWsLog(`[RECEIVED]:\n${e.data}`);
+  };
+
+  customWs.onerror = (e) => appendWsLog(`[ERROR]: ${e.message || 'WebSocket Error'}`);
+  customWs.onclose = () => appendWsLog(`[CLOSED]`);
+}
+
+function appendWsLog(msg) {
+  const box = document.getElementById("wsLogBox");
+  box.textContent += `\n${msg}`;
+  box.scrollTop = box.scrollHeight;
+}
+
+function clearWsLog() {
+  document.getElementById("wsLogBox").textContent = "// WebSocket Log Cleared.";
+}
+
+// ---------------------------------------------------------------------------
+// 9. UI HELPERS & COVERAGE STRIP
+// ---------------------------------------------------------------------------
+let serverDateInfo = null;
+
+async function initDateControls() {
+  const d = getCalculatedDates();
+  selectedDate = d.yesterday;
+
+  const dateInput = document.getElementById("dateInput");
+  const tlStart = document.getElementById("tlStart");
+  const tlEnd = document.getElementById("tlEnd");
+
+  if (dateInput) {
+    dateInput.value = d.yesterday;
+    dateInput.max = d.yesterday;
+    dateInput.min = "1993-01-01";
+  }
+
+  if (tlStart) tlStart.value = d.weekAgo;
+  if (tlEnd) {
+    tlEnd.value = d.yesterday;
+    tlEnd.max = d.yesterday;
+    tlEnd.min = "1993-01-01";
+  }
+
+  try {
+    const res = await fetch(`${API}/api/date-info`);
+    if (res.ok) {
+      serverDateInfo = await res.json();
+      if (serverDateInfo.latest_available) {
+        selectedDate = serverDateInfo.latest_available;
+        if (dateInput) {
+          dateInput.value = serverDateInfo.latest_available;
+          dateInput.max = serverDateInfo.latest_available;
+        }
+        if (tlEnd) {
+          tlEnd.value = serverDateInfo.latest_available;
+          tlEnd.max = serverDateInfo.latest_available;
+        }
+        if (tlStart && serverDateInfo.presets && serverDateInfo.presets["7d"]) {
+          tlStart.value = serverDateInfo.presets["7d"].start;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Could not fetch /api/date-info, using calculated fallback:", err);
+  }
+}
+
+function setTimePreset(preset) {
+  const d = getCalculatedDates();
+  const dateInput = document.getElementById("dateInput");
+  let target = d.yesterday;
+  if (preset === "yesterday") target = serverDateInfo?.yesterday || d.yesterday;
+  else if (preset === "7d") target = serverDateInfo?.presets?.["7d"]?.start || d.weekAgo;
+  else if (preset === "30d") target = serverDateInfo?.presets?.["30d"]?.start || d.monthAgo;
+  else if (preset === "1y") target = serverDateInfo?.presets?.["1y"]?.start || d.yearAgo;
+
+  selectedDate = target;
+  if (dateInput) dateInput.value = target;
+  showToast(`Time slice set to ${preset.toUpperCase()}: ${target}`, "info");
+  onViewportChanged();
+}
+
+function setTimelinePreset(preset) {
+  const d = getCalculatedDates();
+  const tlStart = document.getElementById("tlStart");
+  const tlEnd = document.getElementById("tlEnd");
+
+  let end = serverDateInfo?.latest_available || d.yesterday;
+  let start = d.weekAgo;
+
+  if (preset === "yesterday") {
+    start = end;
+  } else if (preset === "7d") {
+    start = serverDateInfo?.presets?.["7d"]?.start || d.weekAgo;
+  } else if (preset === "30d") {
+    start = serverDateInfo?.presets?.["30d"]?.start || d.monthAgo;
+  } else if (preset === "1y") {
+    start = serverDateInfo?.presets?.["1y"]?.start || d.yearAgo;
+  }
+
+  if (tlStart) tlStart.value = start;
+  if (tlEnd) tlEnd.value = end;
+  showToast(`Timeline range set to ${preset.toUpperCase()} (${start} to ${end})`, "info");
+  runTimelineQuery();
+}
+
+function initControls() {
+  initDateControls();
+
+  const slider = document.getElementById("depthSlider");
+  const label = document.getElementById("depthLabel");
+  const dateInput = document.getElementById("dateInput");
+
+  slider.addEventListener("input", (e) => {
+    depthMax = parseFloat(e.target.value);
+    depthMin = 0.0;
+    label.textContent = `0–${depthMax.toFixed(0)}m`;
+    document.getElementById("stripRangeText").textContent = `0–${depthMax.toFixed(0)}m`;
+    onViewportChanged();
+  });
+
+  dateInput.addEventListener("change", (e) => {
+    selectedDate = e.target.value;
+    onViewportChanged();
+  });
+}
+
+function buildMemoryGrid() {
+  const container = document.getElementById("memoryGrid");
+  container.innerHTML = "";
+  for (let i = 0; i < 25; i++) {
+    const d0 = i * 2;
+    const cell = document.createElement("div");
+    cell.className = "mem-cell ON_DISK";
+    cell.textContent = `${d0}`;
+    cell.title = `Depth ${d0}–${d0+2}m: ON_DISK (L2)`;
+    container.appendChild(cell);
+  }
+}
+
+async function refreshCoverageStrip() {
+  if (!leafletMap) return;
+  const b = leafletMap.getBounds();
+  const url = `${API}/ocean/coverage?lat_min=${b.getSouth()}&lat_max=${b.getNorth()}&lon_min=${b.getWest()}&lon_max=${b.getEast()}`;
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    const strip = document.getElementById("stripCells");
+    strip.innerHTML = "";
+
+    const activeBuckets = Math.ceil(depthMax / 2);
+    for (let i = 0; i < activeBuckets; i++) {
+      const block = document.createElement("div");
+      block.className = "strip-block";
+      block.style.background = "var(--green)";
+      strip.appendChild(block);
+    }
+  } catch (e) {}
+}
+
+function updateColorbar() {
+  const canvas = document.getElementById("cbCanvas");
+  const ctx = canvas.getContext("2d");
+  canvas.width = 160;
+  canvas.height = 10;
+
+  const grad = ctx.createLinearGradient(0, 0, 160, 0);
+  for (let i = 0; i <= 10; i++) {
+    grad.addColorStop(i / 10, COLOR_RAMP(i / 10).hex());
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 160, 10);
+
+  document.getElementById("cbMin").textContent = `${globalColorMin.toFixed(1)}°C`;
+  document.getElementById("cbMax").textContent = `${globalColorMax.toFixed(1)}°C`;
+}
+
 async function checkApiHealth() {
   try {
     const res = await fetch(`${API}/`);
     if (res.ok) {
       document.getElementById("apiDot").className = "dot online";
-      document.getElementById("apiStatus").textContent = "API Online";
-    } else {
-      throw new Error("HTTP " + res.status);
+      document.getElementById("apiStatus").textContent = "API Ready";
     }
   } catch (e) {
     document.getElementById("apiDot").className = "dot offline";
     document.getElementById("apiStatus").textContent = "API Offline";
-    showToast("Backend not reachable. Start with: uvicorn backend.main:app --reload", "error");
   }
 }
 
-// ================================================================
-// PANEL TOGGLE
-// ================================================================
-function togglePanel(id) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  panelStates[id] = !panelStates[id];
-  el.style.display = panelStates[id] ? "none" : "";
+async function flushCache() {
+  try {
+    await fetch(`${API}/api/cache-clear`, { method: "POST" });
+    showToast("L1 RAM cache cleared", "success");
+    addLog("info", "[CACHE] L1 cache flushed by user");
+  } catch (e) {
+    showToast("Failed to clear cache", "error");
+  }
 }
 
-// ================================================================
-// UTILITIES
-// ================================================================
-function setSpinner(on) {
-  document.getElementById("globalSpinner").style.display = on ? "block" : "none";
+function addLog(type, text) {
+  const out = document.getElementById("logOutput");
+  if (!out) return;
+  const line = document.createElement("div");
+  line.className = `log-line ${type}`;
+  const now = new Date().toISOString().slice(11, 19);
+  line.textContent = `${now} ${text}`;
+  out.prepend(line);
+  if (out.children.length > 50) out.removeChild(out.lastChild);
 }
 
 function showToast(msg, type = "success") {
-  const c = document.getElementById("toastContainer");
-  const t = document.createElement("div");
-  t.className = `toast ${type}`;
-  t.textContent = msg;
-  c.appendChild(t);
-  setTimeout(() => t.remove(), 3500);
+  const container = document.getElementById("toastContainer");
+  const toast = document.createElement("div");
+  toast.className = `toast ${type}`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 3200);
 }
-
-setInterval(loadCacheStats, 30000);
-setInterval(loadFiles, 60000);
 </script>
 </body>
 </html>
