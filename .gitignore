@@ -6,6 +6,16 @@ __pycache__/
 backend/output/
 aodn_output/
 ocean_data/
+
 # Environment and credentials
 .env
 *.env
+
+# Node & Frontend dependencies and builds
+node_modules/
+dist/
+.vite/
+frontend/node_modules/
+frontend/dist/
+frontend-test/node_modules/
+frontend-test/dist/
