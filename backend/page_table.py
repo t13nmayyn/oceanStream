@@ -7,7 +7,10 @@ Every distinct (lat_bucket, lon_bucket, depth_bucket, time_bucket) tuple is a
 
   - Range diffing   : split any requested range into resident + missing portions
   - LRU eviction    : evict least-recently-used ON_DISK pages when cap is hit
+                      (pinned pages are NEVER evicted)
   - Prefetch hints  : detect scrub direction and suggest next bucket to warm up
+  - Pinning         : pre-warmed home-region pages are pinned and protected from
+                      LRU eviction so casual exploration elsewhere never evicts them
 
 Page state machine:
     NOT_FETCHED → FETCHING → ON_DISK → RESIDENT
@@ -62,6 +65,7 @@ class Page:
     state:        PageState = PageState.NOT_FETCHED
     last_access:  float         = field(default_factory=time.time)
     size_bytes:   int           = 0        # filled in when page is written to disk
+    pinned:       bool          = False    # if True, never evict via LRU
 
     @property
     def page_id(self) -> str:
@@ -138,6 +142,10 @@ class PageTable:
     mark_on_disk(id, bytes) → FETCHING → ON_DISK, update size, check eviction
     promote(id)         → ON_DISK → RESIDENT
     evict_lru(target)   → evict least-recently-used ON_DISK pages to free bytes
+                          (pinned pages are NEVER evicted)
+    pin(id)             → mark page as pinned; protects from LRU eviction
+    unpin(id)           → remove pin from page
+    register_pinned(...)→ register a page as already RESIDENT and pinned
     prefetch_hint(...)  → return next bucket ID to warm ahead of user movement
     serialise()         → JSON-serialisable snapshot (for /ocean/coverage)
     """
@@ -240,6 +248,40 @@ class PageTable:
                 self._pages[page_id].last_access = time.time()
 
     # ------------------------------------------------------------------
+    # Pinning — protect pre-warmed home-region pages from LRU eviction
+    # ------------------------------------------------------------------
+
+    def pin(self, page_id: str) -> None:
+        """Pin a page so it is never evicted by LRU."""
+        with self._lock:
+            if page_id in self._pages:
+                self._pages[page_id].pinned = True
+
+    def unpin(self, page_id: str) -> None:
+        """Remove pin from a page (makes it eligible for LRU eviction)."""
+        with self._lock:
+            if page_id in self._pages:
+                self._pages[page_id].pinned = False
+
+    def register_pinned(
+        self,
+        lat_b: int, lon_b: int, depth_b: int, time_b: str,
+        size_bytes: int = 0,
+    ) -> str:
+        """
+        Register a page as RESIDENT and pinned — used during startup pre-warm
+        so the page table correctly reflects synthetic data in L1 RAM.
+        Returns the page_id.
+        """
+        with self._lock:
+            p = self._get_or_create(lat_b, lon_b, depth_b, time_b)
+            p.state = PageState.RESIDENT
+            p.pinned = True
+            p.size_bytes = size_bytes
+            p.last_access = time.time()
+        return p.page_id
+
+    # ------------------------------------------------------------------
     # Bulk-register ON_DISK pages (called at startup when zarr exists)
     # ------------------------------------------------------------------
 
@@ -255,7 +297,7 @@ class PageTable:
             self._disk_bytes += size_bytes
 
     # ------------------------------------------------------------------
-    # LRU Eviction
+    # LRU Eviction — SKIPS pinned pages
     # ------------------------------------------------------------------
 
     def needs_eviction(self) -> bool:
@@ -265,6 +307,8 @@ class PageTable:
         """
         Evict least-recently-accessed ON_DISK pages until we're under cap
         (or until target_free_bytes have been freed).
+
+        PINNED pages are NEVER evicted — they are skipped entirely.
 
         Returns list of evicted page IDs so the caller can delete zarr chunks.
         """
@@ -277,9 +321,12 @@ class PageTable:
         freed = 0
 
         with self._lock:
-            # Sort ON_DISK pages by last_access ascending (oldest first)
+            # Sort ON_DISK, non-pinned pages by last_access ascending (oldest first)
             candidates = sorted(
-                [p for p in self._pages.values() if p.state == PageState.ON_DISK],
+                [
+                    p for p in self._pages.values()
+                    if p.state == PageState.ON_DISK and not p.pinned
+                ],
                 key=lambda p: p.last_access,
             )
             for page in candidates:
@@ -361,6 +408,7 @@ class PageTable:
                 "depth_range":  f"{p.depth_min:.0f}-{p.depth_max:.0f}",
                 "time_bucket":  p.time_bucket,
                 "state":        p.state.value,
+                "pinned":       p.pinned,
                 "last_access":  p.last_access,
                 "size_bytes":   p.size_bytes,
             })
@@ -373,14 +421,18 @@ class PageTable:
     def stats(self) -> Dict:
         with self._lock:
             counts = {s.value: 0 for s in PageState}
+            pinned_count = 0
             for p in self._pages.values():
                 counts[p.state.value] += 1
+                if p.pinned:
+                    pinned_count += 1
         return {
-            "total_pages":  len(self._pages),
-            "disk_bytes":   self._disk_bytes,
-            "cap_bytes":    self.cap_bytes,
+            "total_pages":   len(self._pages),
+            "pinned_pages":  pinned_count,
+            "disk_bytes":    self._disk_bytes,
+            "cap_bytes":     self.cap_bytes,
             "disk_used_pct": round(self._disk_bytes / self.cap_bytes * 100, 1),
-            "states":       counts,
+            "states":        counts,
         }
 
 
@@ -470,5 +522,3 @@ def iter_date_buckets(
             bkt = current.isoformat()
             yield bkt
             current += _td(days=1)
-
-

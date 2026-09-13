@@ -3,1268 +3,1066 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>oceanStream — Full API Test Suite & 3D Ocean Engine</title>
+  <title>oceanStream — Debug Testbench</title>
+  <meta name="description" content="Internal debug testbench for oceanStream API — raw data inspector, 3D renderer, API tester." />
 
-  <!-- Preconnect & DNS-Prefetch for Fast LCP -->
-  <link rel="preconnect" href="https://unpkg.com" crossorigin />
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="preconnect" href="https://basemaps.cartocdn.com" crossorigin />
-  <link rel="dns-prefetch" href="https://unpkg.com" />
-  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net" />
-  <link rel="dns-prefetch" href="https://basemaps.cartocdn.com" />
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
 
-  <!-- Preload Critical CSS -->
-  <link rel="preload" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" as="style" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Deck.gl (standalone build — no React needed) -->
+  <script src="https://unpkg.com/deck.gl@latest/dist.min.js"></script>
 
-  <!-- Core Libraries (synchronous to guarantee availability before inline scripts) -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/deck.gl@9.0.18/dist.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chroma-js@2.4.2/chroma.min.js"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+
+  <!-- chroma.js for color ramps -->
+  <script src="https://cdn.jsdelivr.net/npm/chroma-js@2/chroma.min.js"></script>
 
   <style>
+    /* =========================================================
+       DESIGN TOKENS
+       ========================================================= */
     :root {
-      --bg:          #06090f;
-      --surface:     #0d1525;
-      --surface-2:   #111d35;
-      --surface-3:   #172647;
-      --border:      #1e3055;
-      --border-bright: #2d4880;
-      --text:        #d4e3f7;
-      --muted:       #6b83a6;
-      --accent:      #00c8ff;
-      --accent-2:    #7b5af5;
-      --green:       #00e08c;
-      --amber:       #f5a623;
-      --orange:      #ff7700;
-      --rose:        #f54375;
-      --dark-page:   #121b2d;
-      --mono:        'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      --bg:        #050d1a;
+      --surface:   #0a1628;
+      --surface-2: #0f1e35;
+      --surface-3: #162442;
+      --border:    #1e3055;
+      --accent:    #00c8ff;
+      --accent-2:  #7b5af5;
+      --green:     #00e08c;
+      --rose:      #f54375;
+      --amber:     #ffd166;
+      --text:      #d4e3f7;
+      --muted:     #6b83a6;
+      --mono:      'JetBrains Mono', monospace;
+      --sans:      'Inter', sans-serif;
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    #app {
-      display: grid;
-      grid-template-rows: 52px 1fr;
-      height: 100vh;
-      overflow: hidden;
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
     }
 
-    /* ── Topbar ── */
-    #topbar {
-      background: var(--surface);
+    /* =========================================================
+       HEADER
+       ========================================================= */
+    header {
+      padding: 10px 20px;
       border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 0 16px;
-      z-index: 10000;
-      overflow-x: auto;
+      gap: 16px;
+      background: var(--surface);
+      position: sticky; top: 0; z-index: 100;
     }
-    .brand { font-weight: 800; font-size: 1.05rem; color: var(--accent); display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-    .brand-tag { font-size: 0.62rem; background: rgba(0,200,255,0.15); color: var(--accent); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-weight: 700; }
-    .sep { width: 1px; height: 22px; background: var(--border); }
-
-    .nav-tabs { display: flex; gap: 4px; }
-    .tab-btn {
-      padding: 6px 13px; border-radius: 6px; font-size: 0.76rem; font-weight: 600;
-      border: 1px solid transparent; background: transparent; color: var(--muted);
-      cursor: pointer; transition: all .15s; display: flex; align-items: center; gap: 6px;
-      white-space: nowrap;
-    }
-    .tab-btn:hover { color: var(--text); background: var(--surface-2); }
-    .tab-btn.active { color: #fff; background: var(--surface-2); border-color: var(--border-bright); font-weight: 700; }
-    .tab-btn.active .tab-icon { color: var(--accent); }
-
-    .status-pill {
-      display: inline-flex; align-items: center; gap: 6px;
-      font-size: 0.7rem; font-weight: 600; padding: 3px 9px;
-      border-radius: 9999px; border: 1px solid var(--border);
-      background: var(--surface-2); white-space: nowrap;
-    }
-    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+    header h1 { font-size: 1rem; font-weight: 600; color: var(--accent); letter-spacing: 0.04em; }
+    header .subtitle { font-family: var(--mono); font-size: 0.65rem; color: var(--muted); }
+    .status-row { display: flex; gap: 12px; align-items: center; margin-left: auto; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
     .dot.online  { background: var(--green); box-shadow: 0 0 6px var(--green); }
     .dot.offline { background: var(--rose); }
-    .dot.pulse   { background: var(--amber); animation: pulse 1s infinite; }
-    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.85)} }
+    .dot.pending { background: var(--amber); animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .status-label { font-size: 0.68rem; color: var(--muted); }
 
-    .topbar-right { display: flex; gap: 10px; align-items: center; margin-left: auto; }
-    .btn {
-      padding: 5px 12px; border-radius: 6px; font-size: 0.74rem; font-weight: 600;
-      border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
-      cursor: pointer; transition: all .15s; display: inline-flex; align-items: center; gap: 5px;
-    }
-    .btn:hover { border-color: var(--accent); color: var(--accent); }
-    .btn.primary { background: #0077b6; border-color: var(--accent); color: #fff; }
-    .btn.primary:hover { background: var(--accent); color: #000; }
-    .btn.success { background: rgba(0,224,140,0.15); border-color: var(--green); color: var(--green); }
-    .btn.danger { background: rgba(245,67,117,0.12); border-color: var(--rose); color: var(--rose); }
+    /* =========================================================
+       MAIN LAYOUT  (sidebar + content)
+       ========================================================= */
+    .layout { display: flex; flex: 1; overflow: hidden; height: calc(100vh - 49px); }
 
-    /* ── Content Panes ── */
-    #main-content {
-      position: relative;
-      height: 100%;
-      overflow: hidden;
-    }
-    .view-pane {
-      display: none;
-      height: 100%;
-      width: 100%;
-    }
-    .view-pane.active {
-      display: grid;
-    }
-
-    /* ── TAB 1: MAP VIEW ── */
-    #pane-map {
-      grid-template-columns: 360px 1fr;
-      height: 100%;
-    }
-    .map-sidebar {
-      background: var(--surface);
+    /* ---- Left sidebar: tabs ---- */
+    .sidebar {
+      width: 200px;
+      flex-shrink: 0;
       border-right: 1px solid var(--border);
-      overflow-y: auto;
-      padding: 12px;
+      background: var(--surface);
       display: flex;
       flex-direction: column;
-      gap: 12px;
     }
-    .panel {
-      background: var(--surface-2);
+    .sidebar-btn {
+      padding: 12px 16px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--muted);
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      transition: background 0.15s, color 0.15s;
+    }
+    .sidebar-btn:hover  { background: var(--surface-2); color: var(--text); }
+    .sidebar-btn.active { background: var(--surface-3); color: var(--accent); border-left: 2px solid var(--accent); }
+
+    /* ---- Content area ---- */
+    .content { flex: 1; overflow-y: auto; padding: 0; display: flex; flex-direction: column; }
+    .pane { display: none; padding: 20px; flex: 1; }
+    .pane.active { display: flex; flex-direction: column; gap: 16px; }
+
+    /* =========================================================
+       SHARED CARD COMPONENT
+       ========================================================= */
+    .card {
+      background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 8px;
-      overflow: hidden;
+      padding: 16px;
     }
-    .panel-header {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--border);
-      font-size: 0.78rem; font-weight: 700; color: #fff;
+    .card-title {
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
     .badge {
-      font-size: 0.65rem; padding: 2px 7px; border-radius: 9999px;
-      background: rgba(0,200,255,.12); color: var(--accent); border: 1px solid rgba(0,200,255,.25);
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.62rem;
       font-family: var(--mono);
+      background: rgba(0,200,255,0.1);
+      color: var(--accent);
+      border: 1px solid rgba(0,200,255,0.2);
     }
-    .panel-body { padding: 10px 12px; }
+    .badge.green  { background: rgba(0,224,140,0.1); color: var(--green); border-color: rgba(0,224,140,0.2); }
+    .badge.rose   { background: rgba(245,67,117,0.1); color: var(--rose);  border-color: rgba(245,67,117,0.2); }
+    .badge.amber  { background: rgba(255,209,102,0.1); color: var(--amber); border-color: rgba(255,209,102,0.2); }
+    .badge.purple { background: rgba(123,90,245,0.15); color: var(--accent-2); border-color: rgba(123,90,245,0.25); }
 
-    .ctrl-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-    .ctrl-row label { color: var(--muted); font-size: 0.72rem; }
-    input[type="range"] { accent-color: var(--accent); cursor: pointer; flex: 1; }
-    input[type="date"], input[type="text"], input[type="number"], select {
-      background: var(--surface-3); color: var(--text); border: 1px solid var(--border);
-      padding: 4px 8px; border-radius: 5px; font-size: 0.75rem; font-family: var(--mono); outline: none;
+    /* =========================================================
+       FORM CONTROLS
+       ========================================================= */
+    .form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-size: 0.65rem; color: var(--muted); font-family: var(--mono); }
+    .field input, .field select {
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: var(--surface-2);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      outline: none;
+      min-width: 90px;
+      transition: border-color 0.15s;
     }
-    input:focus, select:focus { border-color: var(--accent); }
+    .field input:focus, .field select:focus { border-color: var(--accent); }
 
-    /* Map container */
-    #map-wrapper { position: relative; width: 100%; height: 100%; background: #06090f; }
-    #leaflet-map { width: 100%; height: 100%; }
-    #deckgl-canvas { position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:450; display:none; }
-
-    /* Memory Grid */
-    .coverage-legend { display: flex; gap: 8px; font-size: 0.68rem; margin-bottom: 6px; flex-wrap: wrap; }
-    .leg-item { display: flex; align-items: center; gap: 4px; }
-    .leg-box { width: 9px; height: 9px; border-radius: 2px; }
-    .leg-box.resident { background: var(--green); }
-    .leg-box.ondisk { background: var(--amber); }
-    .leg-box.fetching { background: var(--orange); animation: pulse 0.8s infinite; }
-    .leg-box.notfetched { background: var(--dark-page); border: 1px solid var(--border); }
-
-    .memory-grid {
-      display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px;
-      background: rgba(0,0,0,0.3); padding: 6px; border-radius: 6px; border: 1px solid var(--border);
+    .btn {
+      padding: 7px 16px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 0.75rem;
+      font-family: var(--mono);
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
     }
-    .mem-cell {
-      height: 16px; border-radius: 2px; font-size: 0.58rem; display: flex;
-      align-items: center; justify-content: center; font-family: var(--mono);
-      cursor: pointer; transition: transform 0.1s; background: var(--dark-page);
-      border: 1px solid #1a2744; color: #fff;
-    }
-    .mem-cell:hover { transform: scale(1.18); z-index: 5; }
-    .mem-cell.RESIDENT { background: var(--green); color: #002e1b; font-weight: 700; border-color: var(--green); }
-    .mem-cell.ON_DISK { background: var(--amber); color: #3d2600; font-weight: 700; border-color: var(--amber); }
-    .mem-cell.FETCHING { background: var(--orange); border-color: var(--orange); animation: pulse 0.7s infinite; }
-    .mem-cell.NOT_FETCHED { background: var(--dark-page); color: #3b5070; }
+    .btn:hover { background: var(--surface-3); border-color: var(--accent); color: var(--accent); }
+    .btn.primary { background: var(--accent); color: #020d1c; border-color: var(--accent); font-weight: 600; }
+    .btn.primary:hover { opacity: 0.85; }
+    .btn.danger  { background: rgba(245,67,117,0.1); color: var(--rose); border-color: rgba(245,67,117,0.3); }
 
-    .stat-row { display: flex; justify-content: space-between; font-size: 0.71rem; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04); color: var(--muted); font-family: var(--mono); }
-    .stat-row strong { color: var(--text); }
-
-    #logOutput { max-height: 120px; overflow-y: auto; font-size: 0.67rem; font-family: var(--mono); display: flex; flex-direction: column; gap: 2px; }
-    .log-line { padding: 2px 4px; border-radius: 3px; background: rgba(0,0,0,0.25); }
-    .log-line.res { border-left: 2px solid var(--green); color: var(--green); }
-    .log-line.fetch { border-left: 2px solid var(--orange); color: var(--orange); }
-    .log-line.disk { border-left: 2px solid var(--amber); color: var(--amber); }
-    .log-line.info { border-left: 2px solid var(--accent); color: var(--accent); }
-
-    #coverageStripOverlay {
-      position: absolute; bottom: 20px; left: 20px; right: 190px;
-      background: rgba(13,21,37,0.92); border: 1px solid var(--border);
-      border-radius: 8px; padding: 7px 12px; z-index: 1000;
-      backdrop-filter: blur(6px);
-    }
-    .strip-header { display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--muted); margin-bottom: 5px; }
-    .strip-header strong { color: var(--accent); }
-    .strip-cells { display: flex; gap: 2px; height: 10px; }
-    .strip-block { flex: 1; border-radius: 2px; }
-
-    #colorbar {
-      position: absolute; bottom: 20px; right: 20px;
-      background: rgba(13,21,37,0.92); border: 1px solid var(--border);
-      border-radius: 8px; padding: 7px 10px; z-index: 1000;
-      font-size: 0.7rem; min-width: 150px; backdrop-filter: blur(6px);
-    }
-    #colorbar canvas { width: 100%; height: 10px; border-radius: 2px; margin: 3px 0; }
-    .cb-labels { display: flex; justify-content: space-between; color: var(--muted); font-family: var(--mono); font-size: 0.62rem; }
-
-    /* Map Click Point Modal / Floating Card */
-    #pointInspector {
-      position: absolute; top: 16px; right: 16px; width: 340px;
-      background: rgba(13,21,37,0.96); border: 1px solid var(--border-bright);
-      border-radius: 9px; padding: 12px; z-index: 2000;
-      backdrop-filter: blur(8px); box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-      display: none;
-    }
-    #pointInspector .pi-head { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 8px; font-weight: 700; color: #fff; }
-    #pointInspector .close-btn { cursor: pointer; color: var(--muted); font-size: 1.1rem; }
-    #pointInspector .close-btn:hover { color: #fff; }
-
-    /* ── TAB 2: TIMELINE VIEW ── */
-    #pane-timeline {
-      padding: 16px;
-      grid-template-rows: auto 1fr;
-      gap: 16px;
-      overflow-y: auto;
-    }
-
-    /* ── TAB 3: ARGO & IN-SITU VIEW ── */
-    #pane-argo {
-      padding: 16px;
-      grid-template-columns: 360px 1fr;
-      gap: 16px;
-      height: 100%;
-      overflow-y: auto;
-    }
-
-    /* ── TAB 4: API TEST RUNNER ── */
-    #pane-tester {
-      display: grid;
-      grid-template-columns: 460px 1fr;
-      height: 100%;
+    /* =========================================================
+       3D DECK.GL PANEL
+       ========================================================= */
+    #deckgl-container {
+      width: 100%;
+      height: 420px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #020912;
+      position: relative;
       overflow: hidden;
     }
-    .tester-sidebar {
-      background: var(--surface);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      height: 100%;
+    #deckgl-canvas { width: 100% !important; height: 100% !important; }
+    #deckgl-overlay {
+      position: absolute;
+      top: 10px; right: 12px;
+      display: flex; gap: 6px; align-items: center;
+      pointer-events: none;
     }
-    .tester-toolbar {
-      padding: 12px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
+    #deckgl-info {
+      position: absolute;
+      bottom: 10px; left: 12px;
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      color: var(--muted);
     }
-    .tester-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
+    /* Colorbar */
+    .colorbar-row { display: flex; align-items: center; gap: 8px; font-size: 0.62rem; font-family: var(--mono); color: var(--muted); }
+    #cbCanvas { border-radius: 3px; }
+
+    /* =========================================================
+       DATA INSPECTOR GRID
+       ========================================================= */
+    .data-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 10px;
     }
-    .test-card {
+    .data-cell {
       background: var(--surface-2);
       border: 1px solid var(--border);
-      border-radius: 7px;
+      border-radius: 6px;
       padding: 10px 12px;
-      cursor: pointer;
-      transition: all .15s;
     }
-    .test-card:hover { border-color: var(--accent); transform: translateY(-1px); }
-    .test-card.active { border-color: var(--accent); background: var(--surface-3); }
-    .test-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
-    .method-tag {
-      font-family: var(--mono); font-size: 0.65rem; font-weight: 700;
-      padding: 2px 5px; border-radius: 3px;
+    .data-cell-key {
+      font-family: var(--mono);
+      font-size: 0.6rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
     }
-    .method-tag.GET { background: rgba(0,200,255,0.18); color: var(--accent); }
-    .method-tag.POST { background: rgba(0,224,140,0.18); color: var(--green); }
-    .method-tag.WS { background: rgba(123,90,245,0.22); color: var(--accent-2); }
-    .test-endpoint { font-family: var(--mono); font-size: 0.74rem; color: #fff; font-weight: 600; }
-    .test-desc { font-size: 0.68rem; color: var(--muted); }
-    .test-status-tag { font-size: 0.65rem; font-family: var(--mono); font-weight: 700; padding: 2px 6px; border-radius: 4px; }
-    .test-status-tag.ok { background: rgba(0,224,140,0.2); color: var(--green); }
-    .test-status-tag.err { background: rgba(245,67,117,0.2); color: var(--rose); }
-    .test-status-tag.idle { background: rgba(255,255,255,0.06); color: var(--muted); }
+    .data-cell-val {
+      font-family: var(--mono);
+      font-size: 0.88rem;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .data-cell-val.null { color: var(--muted); font-weight: 400; }
 
-    .tester-detail {
-      padding: 16px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      background: var(--bg);
-    }
+    /* Raw JSON box */
     .json-box {
       background: var(--surface-2);
       border: 1px solid var(--border);
-      border-radius: 7px;
+      border-radius: 6px;
       padding: 12px;
       font-family: var(--mono);
-      font-size: 0.72rem;
-      max-height: 480px;
+      font-size: 0.68rem;
+      color: var(--text);
+      max-height: 360px;
       overflow-y: auto;
       white-space: pre-wrap;
-      color: #9cdcfe;
+      word-break: break-all;
     }
 
-    /* ── TAB 5: WEBSOCKET CONSOLE ── */
-    #pane-ws {
-      padding: 16px;
-      grid-template-columns: 420px 1fr;
-      gap: 16px;
-      height: 100%;
+    /* =========================================================
+       API TEST RUNNER
+       ========================================================= */
+    .test-grid { display: grid; grid-template-columns: 280px 1fr; gap: 12px; flex: 1; }
+    .test-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+    .test-card {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .test-card:hover { border-color: var(--accent); background: var(--surface-3); }
+    .test-card.active { border-color: var(--accent); background: var(--surface-3); }
+    .test-card-header { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+    .method-tag { font-family: var(--mono); font-size: 0.58rem; font-weight: 600; padding: 1px 5px; border-radius: 3px; }
+    .method-tag.GET  { background: rgba(0,200,255,0.15); color: var(--accent); }
+    .method-tag.POST { background: rgba(0,224,140,0.15); color: var(--green); }
+    .test-endpoint { font-family: var(--mono); font-size: 0.65rem; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .test-status-tag { font-family: var(--mono); font-size: 0.58rem; padding: 1px 5px; border-radius: 3px; }
+    .test-status-tag.idle { background: rgba(107,131,166,0.15); color: var(--muted); }
+    .test-status-tag.ok   { background: rgba(0,224,140,0.15); color: var(--green); }
+    .test-status-tag.err  { background: rgba(245,67,117,0.15); color: var(--rose); }
+    .test-desc { font-size: 0.62rem; color: var(--muted); }
+
+    .test-detail { display: flex; flex-direction: column; gap: 8px; }
+    .test-meta-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .test-url-box { width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: 5px;
+                    background: var(--surface-2); color: var(--muted); font-family: var(--mono); font-size: 0.68rem; }
+
+    /* =========================================================
+       WEBSOCKET CONSOLE
+       ========================================================= */
+    #wsLogBox {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      color: var(--text);
+      height: 380px;
       overflow-y: auto;
+      white-space: pre-wrap;
     }
 
-    /* Toast */
-    #toastContainer {
-      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-      display: flex; flex-direction: column; gap: 8px; z-index: 99999;
+    /* =========================================================
+       ARGO FLOAT PANEL
+       ========================================================= */
+    .argo-list { display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow-y: auto; }
+    .argo-card {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+      transition: all 0.15s;
     }
-    .toast {
-      background: var(--surface-2); border: 1px solid var(--border);
-      border-radius: 8px; padding: 8px 16px; font-size: 0.76rem;
-      animation: slideUp .3s ease; text-align: center; color: var(--text);
+    .argo-card:hover { border-color: var(--accent-2); }
+    .argo-card.active { border-color: var(--accent-2); background: var(--surface-3); }
+    .argo-source-badge {
+      font-family: var(--mono);
+      font-size: 0.58rem;
+      padding: 2px 6px;
+      border-radius: 3px;
     }
-    .toast.success { border-color: var(--green); color: var(--green); }
-    .toast.error   { border-color: var(--rose);  color: var(--rose); }
-    @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .argo-source-badge.real     { background: rgba(0,224,140,0.1); color: var(--green); }
+    .argo-source-badge.model    { background: rgba(255,209,102,0.1); color: var(--amber); }
+    .argo-source-badge.argovis  { background: rgba(123,90,245,0.1); color: var(--accent-2); }
+
+    /* =========================================================
+       PREWARM STATUS TABLE
+       ========================================================= */
+    .prewarm-table { border-collapse: collapse; width: 100%; font-size: 0.68rem; }
+    .prewarm-table th, .prewarm-table td {
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      text-align: left;
+      font-family: var(--mono);
+    }
+    .prewarm-table th { background: var(--surface-2); color: var(--muted); text-transform: uppercase; font-size: 0.6rem; letter-spacing: 0.05em; }
+    .prewarm-table tr:hover td { background: var(--surface-2); }
+    .phase-pill { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 0.6rem; }
+    .phase-pill.synthetic { background: rgba(255,209,102,0.15); color: var(--amber); }
+    .phase-pill.real      { background: rgba(0,224,140,0.15); color: var(--green); }
+    .phase-pill.pending   { background: rgba(107,131,166,0.15); color: var(--muted); }
+    .phase-pill.error     { background: rgba(245,67,117,0.15); color: var(--rose); }
+    .phase-pill.not_started { background: rgba(107,131,166,0.1); color: var(--muted); }
+
+    /* =========================================================
+       LOG & TOAST
+       ========================================================= */
+    #logOutput { font-family: var(--mono); font-size: 0.65rem; color: var(--muted);
+                 max-height: 120px; overflow-y: auto; }
+    .log-line { padding: 2px 0; border-bottom: 1px solid rgba(30,48,85,0.5); }
+    .log-line.info  { color: var(--accent); }
+    .log-line.fetch { color: var(--amber); }
+    .log-line.res   { color: var(--green); }
+    .log-line.err   { color: var(--rose); }
+
+    #toastContainer { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 6px; z-index: 999; pointer-events: none; }
+    .toast { padding: 8px 14px; border-radius: 6px; font-size: 0.72rem; font-family: var(--mono);
+             animation: fadeIn 0.2s ease; }
+    .toast.success { background: rgba(0,224,140,0.9); color: #020d1c; }
+    .toast.error   { background: rgba(245,67,117,0.9); color: #fff; }
+    .toast.info    { background: rgba(0,200,255,0.9); color: #020d1c; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--surface); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   </style>
 </head>
 <body>
-<div id="app">
 
-  <!-- ======================================================= -->
-  <!-- TOPBAR: GLOBAL NAVIGATION & STATUS                      -->
-  <!-- ======================================================= -->
-  <div id="topbar">
-    <div class="brand">
-      🌊 oceanStream <span class="brand-tag">v3 API TEST SUITE</span>
-    </div>
-    <div class="sep"></div>
-
-    <div class="nav-tabs">
-      <button class="tab-btn active" onclick="switchTab('map')">
-        <span class="tab-icon">🗺️</span> Map & 3D Engine
-      </button>
-      <button class="tab-btn" onclick="switchTab('timeline')">
-        <span class="tab-icon">📈</span> Timeline Analytics
-      </button>
-      <button class="tab-btn" onclick="switchTab('argo')">
-        <span class="tab-icon">🎯</span> Argo & In-Situ
-      </button>
-      <button class="tab-btn" onclick="switchTab('tester')">
-        <span class="tab-icon">🧪</span> All APIs Test Runner
-      </button>
-      <button class="tab-btn" onclick="switchTab('ws')">
-        <span class="tab-icon">⚡</span> WebSocket Console
-      </button>
-    </div>
-
-    <div class="topbar-right">
-      <span class="status-pill" id="apiPill">
-        <span class="dot online" id="apiDot"></span>
-        <span id="apiStatus">API: Checking…</span>
-      </span>
-      <span class="status-pill" id="wsPill">
-        <span class="dot" id="wsDot"></span>
-        <span id="wsStatus">WS Connecting…</span>
-      </span>
-      <button class="btn danger" onclick="flushCache()">🧹 Flush L1</button>
-    </div>
+<!-- ============================================================ -->
+<!-- HEADER                                                       -->
+<!-- ============================================================ -->
+<header>
+  <div>
+    <h1>🌊 oceanStream</h1>
+    <div class="subtitle">Internal Debug Testbench — not the real product UI</div>
   </div>
-
-  <!-- ======================================================= -->
-  <!-- MAIN PANES                                              -->
-  <!-- ======================================================= -->
-  <div id="main-content">
-
-    <!-- ── TAB 1: MAP & 3D ENGINE ── -->
-    <div id="pane-map" class="view-pane active">
-      <div class="map-sidebar">
-
-        <!-- Controls -->
-        <div class="panel">
-          <div class="panel-header">
-            🕹️ Viewport Controls
-          </div>
-          <div class="panel-body">
-            <div class="ctrl-row">
-              <label>Depth (0–50m):</label>
-              <input type="range" id="depthSlider" min="2" max="50" step="2" value="10">
-              <strong id="depthLabel" style="color:var(--accent);font-family:var(--mono);min-width:55px;">0–10m</strong>
-            </div>
-            <div class="ctrl-row">
-              <label>Time Slice:</label>
-              <input type="date" id="dateInput" value="">
-            </div>
-            <div style="display:flex;gap:4px;margin-top:4px;margin-bottom:6px;">
-              <button class="btn" style="flex:1;font-size:0.65rem;padding:3px;" onclick="setTimePreset('yesterday')">Yesterday</button>
-              <button class="btn" style="flex:1;font-size:0.65rem;padding:3px;" onclick="setTimePreset('7d')">7 Days</button>
-              <button class="btn" style="flex:1;font-size:0.65rem;padding:3px;" onclick="setTimePreset('30d')">30 Days</button>
-              <button class="btn" style="flex:1;font-size:0.65rem;padding:3px;" onclick="setTimePreset('1y')">1 Year</button>
-            </div>
-            <div style="display:flex;gap:8px;margin-top:6px;">
-              <button class="btn" id="btn3D" onclick="toggle3DView()" style="flex:1;">🧊 3D Layer: OFF</button>
-              <button class="btn" onclick="triggerViewportFetch()" style="flex:1;">🔄 Re-fetch</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- OS Virtual Memory Map Panel -->
-        <div class="panel">
-          <div class="panel-header">
-            💾 OS Demand-Paging Table
-            <span class="badge" id="residentBadge">100% Warm</span>
-          </div>
-          <div class="panel-body">
-            <div class="coverage-legend">
-              <div class="leg-item"><div class="leg-box resident"></div><span>RESIDENT</span></div>
-              <div class="leg-item"><div class="leg-box ondisk"></div><span>ON_DISK</span></div>
-              <div class="leg-item"><div class="leg-box fetching"></div><span>FETCHING</span></div>
-              <div class="leg-item"><div class="leg-box notfetched"></div><span>NOT_FETCHED</span></div>
-            </div>
-
-            <div style="font-size:0.68rem;color:var(--muted);margin-bottom:4px;">Depth Page Allocation (2m Bins):</div>
-            <div class="memory-grid" id="memoryGrid"></div>
-
-            <div style="margin-top:8px;">
-              <div class="stat-row"><span>Pages Registered:</span><strong id="statTotalPages">11,160</strong></div>
-              <div class="stat-row"><span>L1 RAM Hit Rate:</span><strong id="statHitRate" style="color:var(--green)">100%</strong></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Stream Packet Feed -->
-        <div class="panel" style="flex:1;">
-          <div class="panel-header">
-            ⚡ WebSocket Packets
-            <span class="badge" id="streamPacketBadge">Live</span>
-          </div>
-          <div class="panel-body">
-            <div id="logOutput">
-              <div class="log-line info">[INIT] System ready. Pan map or click to query.</div>
-            </div>
-          </div>
-        </div>
-
-      </div>
-
-      <!-- Map -->
-      <div id="map-wrapper">
-        <div id="leaflet-map"></div>
-        <canvas id="deckgl-canvas"></canvas>
-
-        <!-- 3D Camera Controls Toolbar (Active in 3D Mode) -->
-        <div id="deck3dToolbar" style="position:absolute;top:16px;left:60px;z-index:1000;display:none;background:rgba(13,21,37,0.92);border:1px solid var(--border-bright);border-radius:8px;padding:6px 10px;gap:8px;align-items:center;backdrop-filter:blur(8px);box-shadow:0 4px 16px rgba(0,0,0,0.5);">
-          <span style="font-size:0.75rem;font-weight:700;color:var(--accent);">🧊 3D Engine:</span>
-          <button class="btn" style="padding:3px 8px;font-size:0.68rem;" onclick="tilt3D(55, 30)">📐 3D Tilt</button>
-          <button class="btn" style="padding:3px 8px;font-size:0.68rem;" onclick="rotate3D(-30)">↺ Rotate L</button>
-          <button class="btn" style="padding:3px 8px;font-size:0.68rem;" onclick="rotate3D(30)">↻ Rotate R</button>
-          <button class="btn" style="padding:3px 8px;font-size:0.68rem;" onclick="reset3DCamera()">🧭 Top-Down</button>
-          <span class="badge" id="deck3dCountBadge">0 columns</span>
-        </div>
-
-        <div id="coverageStripOverlay">
-          <div class="strip-header">
-            <span>Viewport Depth Range: <strong id="stripRangeText">0–10m</strong></span>
-            <span id="stripStatusText">100% Resident in L1/L2</span>
-          </div>
-          <div class="strip-cells" id="stripCells"></div>
-        </div>
-
-        <div id="colorbar">
-          <div style="font-weight:700;color:#fff;">Sea Temperature</div>
-          <canvas id="cbCanvas" height="10"></canvas>
-          <div class="cb-labels">
-            <span id="cbMin">26.0°C</span>
-            <span id="cbMax">31.0°C</span>
-          </div>
-        </div>
-
-        <!-- Floating Click-to-Query Inspector (Testing GET /ocean/point) -->
-        <div id="pointInspector">
-          <div class="pi-head">
-            <span>📍 Click-to-Query (/ocean/point)</span>
-            <span class="close-btn" onclick="closePointInspector()">&times;</span>
-          </div>
-          <div id="piContent" style="font-size:0.72rem;display:flex;flex-direction:column;gap:6px;">
-            <div style="color:var(--muted)">Click anywhere on the map to test <strong>/ocean/point</strong> API!</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── TAB 2: TIMELINE & TIME-SERIES ── -->
-    <div id="pane-timeline" class="view-pane">
-      <div class="panel">
-        <div class="panel-header">
-          📊 Time-Series Query Form (GET /ocean/timeline & GET /api/coastal-temps)
-        </div>
-        <div class="panel-body">
-          <div style="display:flex;gap:6px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
-            <span style="font-size:0.7rem;color:var(--muted);font-weight:600;">Presets:</span>
-            <button class="btn" style="font-size:0.7rem;padding:3px 8px;" onclick="setTimelinePreset('yesterday')">Yesterday</button>
-            <button class="btn" style="font-size:0.7rem;padding:3px 8px;" onclick="setTimelinePreset('7d')">Last 7 Days</button>
-            <button class="btn" style="font-size:0.7rem;padding:3px 8px;" onclick="setTimelinePreset('30d')">Last 30 Days</button>
-            <button class="btn" style="font-size:0.7rem;padding:3px 8px;" onclick="setTimelinePreset('1y')">Last 1 Year</button>
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:10px;align-items:end;">
-            <div>
-              <label style="color:var(--muted);font-size:0.7rem;">Latitude:</label>
-              <input type="number" id="tlLat" value="13.08" step="0.01" style="width:100%;">
-            </div>
-            <div>
-              <label style="color:var(--muted);font-size:0.7rem;">Longitude:</label>
-              <input type="number" id="tlLon" value="80.27" step="0.01" style="width:100%;">
-            </div>
-            <div>
-              <label style="color:var(--muted);font-size:0.7rem;">Depth (m):</label>
-              <input type="number" id="tlDepth" value="0.0" step="1" style="width:100%;">
-            </div>
-            <div>
-              <label style="color:var(--muted);font-size:0.7rem;">Date Start:</label>
-              <input type="date" id="tlStart" value="" style="width:100%;">
-            </div>
-            <div>
-              <label style="color:var(--muted);font-size:0.7rem;">Date End:</label>
-              <input type="date" id="tlEnd" value="" style="width:100%;">
-            </div>
-            <div>
-              <label style="color:var(--muted);font-size:0.7rem;">Granularity:</label>
-              <select id="tlGran" style="width:100%;">
-                <option value="day">Day</option>
-                <option value="week">Week</option>
-                <option value="month">Month</option>
-              </select>
-            </div>
-            <div>
-              <button class="btn primary" onclick="runTimelineQuery()" style="width:100%;height:28px;">Fetch Timeline</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel" style="flex:1;min-height:380px;">
-        <div class="panel-header">
-          📈 Interactive Chart.js Timeline
-          <span class="badge" id="tlBadge">Chennai (Lat 13.08, Lon 80.27)</span>
-        </div>
-        <div class="panel-body" style="height:340px;position:relative;">
-          <canvas id="timelineChart"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── TAB 3: ARGO & IN-SITU ── -->
-    <div id="pane-argo" class="view-pane">
-      <div style="display:flex;flex-direction:column;gap:12px;">
-        <div class="panel">
-          <div class="panel-header">
-            🎯 Nearest Argo Float Search (GET /argo/nearest)
-          </div>
-          <div class="panel-body">
-            <div class="ctrl-row">
-              <label>Target Latitude:</label>
-              <input type="number" id="argoSearchLat" value="13.08" step="0.1" style="width:90px;">
-            </div>
-            <div class="ctrl-row">
-              <label>Target Longitude:</label>
-              <input type="number" id="argoSearchLon" value="80.27" step="0.1" style="width:90px;">
-            </div>
-            <div class="ctrl-row">
-              <label>Search Radius (km):</label>
-              <input type="number" id="argoSearchRad" value="500" min="10" max="2000" style="width:90px;">
-            </div>
-            <div class="ctrl-row">
-              <label>Float Type:</label>
-              <select id="argoSearchType" style="width:90px;">
-                <option value="both">Both</option>
-                <option value="core">Core</option>
-                <option value="bgc">BGC</option>
-              </select>
-            </div>
-            <button class="btn primary" onclick="runArgoNearestSearch()" style="width:100%;margin-top:4px;">Search Floats</button>
-          </div>
-        </div>
-
-        <div class="panel" style="flex:1;">
-          <div class="panel-header">
-            📍 Found Floats & Instruments
-            <span class="badge" id="argoCountBadge">0 found</span>
-          </div>
-          <div class="panel-body" id="argoListContainer" style="max-height:280px;overflow-y:auto;">
-            <div style="color:var(--muted)">Click 'Search Floats' to find nearest Argo floats or AODN CTD moorings.</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel" style="display:flex;flex-direction:column;">
-        <div class="panel-header">
-          📉 Vertical Depth Profile (GET /argo/profile & GET /api/aodn-data)
-          <span class="badge" id="argoActiveProfileBadge">Platform #2902765</span>
-        </div>
-        <div class="panel-body" style="flex:1;position:relative;min-height:420px;">
-          <canvas id="argoProfileChart"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── TAB 4: COMPLETE API TEST RUNNER ── -->
-    <div id="pane-tester" class="view-pane">
-      <div class="tester-sidebar">
-        <div class="tester-toolbar">
-          <button class="btn primary" onclick="runAllApiTests()">⚡ Run All 18 Tests</button>
-          <button class="btn" onclick="resetTestStatus()">Reset</button>
-          <span style="font-size:0.7rem;color:var(--muted);margin-left:auto;" id="testSummaryText">0/18 Tested</span>
-        </div>
-        <div class="tester-list" id="testCardsContainer">
-          <!-- Dynamically populated test cards -->
-        </div>
-      </div>
-
-      <div class="tester-detail">
-        <div class="panel">
-          <div class="panel-header" id="detailHeader">
-            Selected Endpoint: GET /
-          </div>
-          <div class="panel-body">
-            <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
-              <input type="text" id="detailUrl" style="flex:1;font-family:var(--mono);" value="http://localhost:8000/">
-              <button class="btn primary" onclick="runSelectedApiTest()">Send Request</button>
-            </div>
-            <div style="display:flex;gap:12px;font-size:0.72rem;color:var(--muted);margin-bottom:8px;">
-              <span>Status: <strong id="detailStatus" style="color:var(--green)">–</strong></span>
-              <span>Time: <strong id="detailTime">– ms</strong></span>
-              <span>Size: <strong id="detailSize">– KB</strong></span>
-            </div>
-            <div class="json-box" id="detailJson">// JSON response payload will appear here...</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── TAB 5: WEBSOCKET LIVE CONSOLE ── -->
-    <div id="pane-ws" class="view-pane">
-      <div class="panel">
-        <div class="panel-header">
-          ⚡ WebSocket Client Tester
-        </div>
-        <div class="panel-body">
-          <div class="ctrl-row">
-            <label>WebSocket Endpoint:</label>
-            <select id="wsSelector" style="flex:1;" onchange="updateWsPreset()">
-              <option value="/ws/ocean-stream">/ws/ocean-stream (Viewport & Point Streaming)</option>
-              <option value="/ws/coastal-temps">/ws/coastal-temps (Progressive Coastal Temps)</option>
-            </select>
-          </div>
-
-          <div style="margin-top:10px;margin-bottom:4px;color:var(--muted);font-size:0.72rem;">JSON Message to Send:</div>
-          <textarea id="wsMessageInput" style="width:100%;height:140px;background:var(--surface-3);color:#fff;border:1px solid var(--border);border-radius:6px;font-family:var(--mono);font-size:0.72rem;padding:8px;outline:none;"></textarea>
-
-          <div style="display:flex;gap:8px;margin-top:8px;">
-            <button class="btn primary" onclick="sendCustomWsMessage()" style="flex:1;">Send WS Message</button>
-            <button class="btn" onclick="clearWsLog()" style="width:80px;">Clear Log</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel" style="display:flex;flex-direction:column;">
-        <div class="panel-header">
-          📥 Real-Time WebSocket Message Stream
-        </div>
-        <div class="panel-body" style="flex:1;">
-          <div class="json-box" id="wsLogBox" style="max-height:500px;color:#a6e22e;">// Incoming WebSocket messages will stream here in real-time...</div>
-        </div>
-      </div>
-    </div>
-
+  <div class="status-row">
+    <span class="dot" id="apiDot"></span>
+    <span class="status-label" id="apiStatus">Connecting…</span>
+    <span class="dot" id="wsDot"></span>
+    <span class="status-label" id="wsStatus">WS…</span>
   </div>
-</div>
+</header>
+
+<!-- ============================================================ -->
+<!-- LAYOUT                                                       -->
+<!-- ============================================================ -->
+<div class="layout">
+
+  <!-- Sidebar tabs -->
+  <nav class="sidebar">
+    <button class="sidebar-btn active" onclick="switchPane('query',this)">🔍 Query &amp; 3D</button>
+    <button class="sidebar-btn" onclick="switchPane('argo',this)">🛰 Argo Floats</button>
+    <button class="sidebar-btn" onclick="switchPane('prewarm',this)">🔥 Pre-warm</button>
+    <button class="sidebar-btn" onclick="switchPane('apitests',this)">🧪 API Tests</button>
+    <button class="sidebar-btn" onclick="switchPane('wsconsole',this)">📡 WS Console</button>
+    <button class="sidebar-btn" onclick="switchPane('log',this)">📋 Log</button>
+  </nav>
+
+  <div class="content">
+
+    <!-- ======================================================= -->
+    <!-- PANE 1: COORDINATE QUERY + 3D                           -->
+    <!-- ======================================================= -->
+    <div class="pane active" id="pane-query">
+
+      <!-- Query Form -->
+      <div class="card">
+        <div class="card-title">📍 Coordinate Query</div>
+        <div class="form-row">
+          <div class="field"><label>Latitude</label><input type="number" id="qLat" value="13.08" step="0.01" min="-90" max="90" /></div>
+          <div class="field"><label>Longitude</label><input type="number" id="qLon" value="80.27" step="0.01" min="-180" max="180" /></div>
+          <div class="field"><label>Depth (m)</label><input type="number" id="qDepth" value="0" step="1" min="0" max="6000" /></div>
+          <div class="field"><label>Date (YYYY-MM-DD)</label><input type="date" id="qDate" /></div>
+          <button class="btn primary" id="qSubmitBtn" onclick="runCoordQuery()">▶ Query</button>
+          <button class="btn" onclick="querySnapshot()">🗺 Snapshot</button>
+        </div>
+
+        <!-- Snapshot BBox override -->
+        <div class="form-row" style="margin-top:10px;">
+          <div class="field"><label>BBox lat_min</label><input type="number" id="sLatMin" value="10.0" step="0.5" /></div>
+          <div class="field"><label>lat_max</label><input type="number" id="sLatMax" value="15.0" step="0.5" /></div>
+          <div class="field"><label>lon_min</label><input type="number" id="sLonMin" value="75.0" step="0.5" /></div>
+          <div class="field"><label>lon_max</label><input type="number" id="sLonMax" value="85.0" step="0.5" /></div>
+          <button class="btn" onclick="querySnapshot()">🗺 Load Snapshot</button>
+        </div>
+      </div>
+
+      <!-- 3D Deck.gl canvas -->
+      <div class="card" style="padding:0;overflow:hidden;">
+        <div id="deckgl-container">
+          <canvas id="deckgl-canvas"></canvas>
+          <div id="deckgl-overlay">
+            <span class="badge" id="deckgl-pts-badge">0 pts</span>
+            <span class="badge" id="deckgl-src-badge">—</span>
+          </div>
+          <div id="deckgl-info">Deck.gl ColumnLayer · drag to orbit · scroll to zoom</div>
+        </div>
+        <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;align-items:center;gap:16px;">
+          <div class="colorbar-row">
+            <span id="cbMin">—</span>
+            <canvas id="cbCanvas" width="160" height="10"></canvas>
+            <span id="cbMax">—</span>
+          </div>
+          <button class="btn" onclick="resetDeckView()">⟲ Reset View</button>
+          <span class="badge" id="deckPlaceholderBadge" style="display:none;">⚠ Synthetic Placeholder</span>
+        </div>
+      </div>
+
+      <!-- /ocean/point data inspector -->
+      <div class="card" id="pointInspector" style="display:none;">
+        <div class="card-title">🔎 /ocean/point Response</div>
+        <div id="pointDataGrid" class="data-grid"></div>
+      </div>
+
+      <!-- /ocean/snapshot summary -->
+      <div class="card" id="snapshotCard" style="display:none;">
+        <div class="card-title">
+          🗺 /ocean/snapshot Response
+          <span class="badge" id="snapCountBadge">0 pts</span>
+          <span class="badge" id="snapSourceBadge">—</span>
+          <span class="badge" id="snapTimeBadge">—</span>
+        </div>
+        <div id="snapCoverage" style="font-family:var(--mono);font-size:0.7rem;color:var(--muted);margin-bottom:10px;"></div>
+        <div class="card-title" style="margin-top:8px;margin-bottom:6px;">Raw JSON</div>
+        <pre class="json-box" id="snapRawJson" style="max-height:260px;"></pre>
+      </div>
+
+      <!-- /ocean/point raw JSON -->
+      <div class="card" id="pointRawCard" style="display:none;">
+        <div class="card-title">📄 /ocean/point Raw JSON</div>
+        <pre class="json-box" id="pointRawJson"></pre>
+      </div>
+
+    </div>
+
+    <!-- ======================================================= -->
+    <!-- PANE 2: ARGO FLOATS                                     -->
+    <!-- ======================================================= -->
+    <div class="pane" id="pane-argo">
+      <div class="card">
+        <div class="card-title">🛰 Nearest Argo / BGC Floats</div>
+        <div class="form-row">
+          <div class="field"><label>Lat</label><input type="number" id="argoLat" value="13.08" step="0.1" /></div>
+          <div class="field"><label>Lon</label><input type="number" id="argoLon" value="80.27" step="0.1" /></div>
+          <div class="field"><label>Radius (km)</label><input type="number" id="argoRad" value="500" step="50" /></div>
+          <div class="field"><label>Type</label>
+            <select id="argoType"><option value="both">Both</option><option value="core">Core</option><option value="bgc">BGC</option></select>
+          </div>
+          <button class="btn primary" onclick="searchArgo()">🔍 Search</button>
+        </div>
+        <div style="margin-top:8px;font-size:0.7rem;color:var(--muted);">
+          Source labels: <span class="badge green">argo_float</span> = real Argo data · 
+          <span class="badge amber">gridded_model</span> = synthesized (no floats in range) · 
+          <span class="badge purple">argovis_rest</span> = Argovis API
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;flex:1;">
+        <div class="card" style="overflow:hidden;">
+          <div class="card-title">Floats Found <span class="badge" id="argoCountBadge">0</span></div>
+          <div class="argo-list" id="argoList"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Depth Profile <span class="badge purple" id="argoProfileBadge">—</span></div>
+          <canvas id="argoProfileChart" style="max-height:320px;"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Raw Argo Response</div>
+        <pre class="json-box" id="argoRawJson" style="max-height:200px;"></pre>
+      </div>
+    </div>
+
+    <!-- ======================================================= -->
+    <!-- PANE 3: PRE-WARM STATUS                                 -->
+    <!-- ======================================================= -->
+    <div class="pane" id="pane-prewarm">
+      <div class="card">
+        <div class="card-title">
+          🔥 Pre-warm Status
+          <button class="btn" style="font-size:0.65rem;padding:3px 10px;" onclick="loadPrewarmStatus()">↺ Refresh</button>
+        </div>
+        <div id="prewarmSummary" style="font-family:var(--mono);font-size:0.72rem;color:var(--muted);margin-bottom:12px;"></div>
+        <table class="prewarm-table">
+          <thead>
+            <tr>
+              <th>Region</th><th>Bbox</th><th>Phase</th><th>Pinned</th><th>Page State</th>
+            </tr>
+          </thead>
+          <tbody id="prewarmTableBody"></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <div class="card-title">Pre-warm Mechanics</div>
+        <div style="font-size:0.72rem;color:var(--muted);line-height:1.6;">
+          <b style="color:var(--text);">Phase 1 — Synthetic</b> runs immediately at startup. Each region is populated with 
+          physically-plausible values from the analytical ocean model. These tiles are pinned in the page table 
+          and will never be evicted by LRU. Status: <span class="phase-pill synthetic">synthetic</span><br/><br/>
+          <b style="color:var(--text);">Phase 2 — Real</b> kicks off in the background if Copernicus credentials are 
+          present. Real data replaces synthetic data seamlessly, status upgrades to 
+          <span class="phase-pill real">real</span><br/><br/>
+          <b style="color:var(--text);">Pinned pages</b> are excluded from the LRU eviction algorithm so that heavy 
+          exploration of remote ocean areas never purges the Indian Ocean home region.
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================================================= -->
+    <!-- PANE 4: API TEST RUNNER                                 -->
+    <!-- ======================================================= -->
+    <div class="pane" id="pane-apitests">
+      <div class="card" style="flex-direction:row;display:flex;align-items:center;gap:12px;padding:10px 16px;">
+        <button class="btn primary" onclick="runAllApiTests()">▶ Run All</button>
+        <button class="btn" onclick="resetTestStatus()">↺ Reset</button>
+        <span class="badge" id="testSummaryText">0/0 Tested</span>
+      </div>
+      <div class="test-grid" style="flex:1;overflow:hidden;">
+        <div class="test-list" id="testCardsContainer"></div>
+        <div class="test-detail card">
+          <div style="font-family:var(--mono);font-size:0.8rem;color:var(--text);margin-bottom:8px;" id="detailHeader">—</div>
+          <div class="test-meta-row">
+            <span class="badge" id="detailStatus">—</span>
+            <span class="badge green" id="detailTime">—</span>
+            <span class="badge" id="detailSize">—</span>
+          </div>
+          <input class="test-url-box" id="detailUrl" type="text" readonly />
+          <button class="btn primary" onclick="runSelectedApiTest()" style="align-self:flex-start;margin-top:4px;">▶ Run This</button>
+          <pre class="json-box" id="detailJson" style="flex:1;max-height:none;min-height:200px;">// Select an endpoint and click Run</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================================================= -->
+    <!-- PANE 5: WS CONSOLE                                      -->
+    <!-- ======================================================= -->
+    <div class="pane" id="pane-wsconsole">
+      <div class="card">
+        <div class="card-title">📡 WebSocket Console (/ws/ocean-stream)</div>
+        <div class="form-row">
+          <div class="field" style="flex:1;">
+            <label>Message (JSON)</label>
+            <textarea id="wsMessageInput" rows="5"
+              style="width:100%;padding:8px;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:var(--mono);font-size:0.72rem;resize:vertical;">{
+  "lat_min": 10.0, "lat_max": 16.0,
+  "lon_min": 75.0, "lon_max": 85.0,
+  "depth_min": 0.0, "depth_max": 10.0,
+  "variable": "thetao"
+}</textarea>
+          </div>
+        </div>
+        <div class="form-row" style="margin-top:8px;">
+          <button class="btn primary" onclick="sendWsMessage()">▶ Send</button>
+          <button class="btn" onclick="clearWsLog()">🗑 Clear Log</button>
+          <span class="dot" id="wsDot2" style="margin-left:4px;"></span>
+          <span class="status-label" id="wsStatus2">Connecting…</span>
+        </div>
+      </div>
+      <div class="card" style="flex:1;">
+        <div class="card-title">Log</div>
+        <div id="wsLogBox">// WebSocket log will appear here...</div>
+      </div>
+    </div>
+
+    <!-- ======================================================= -->
+    <!-- PANE 6: LOG                                             -->
+    <!-- ======================================================= -->
+    <div class="pane" id="pane-log">
+      <div class="card" style="flex:1;">
+        <div class="card-title">📋 Activity Log <button class="btn danger" style="font-size:0.65rem;padding:3px 10px;" onclick="clearLog()">Clear</button></div>
+        <div id="logOutput"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Cache Stats</div>
+        <pre class="json-box" id="cacheStatsJson" style="max-height:200px;">// loading...</pre>
+        <div class="form-row" style="margin-top:8px;">
+          <button class="btn" onclick="loadCacheStats()">↺ Refresh</button>
+          <button class="btn danger" onclick="flushCache()">🗑 Flush L1</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- .content -->
+</div><!-- .layout -->
 
 <div id="toastContainer"></div>
 
 <!-- ============================================================ -->
-<!-- FRONTEND JAVASCRIPT LOGIC                                    -->
+<!-- JAVASCRIPT                                                   -->
 <!-- ============================================================ -->
 <script>
-const isHttp = window.location.protocol.startsWith("http");
-const API = isHttp ? window.location.origin : "http://localhost:8000";
-const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
-const WS_URL = isHttp ? `${wsProto}//${window.location.host}/ws/ocean-stream` : "ws://localhost:8000/ws/ocean-stream";
+'use strict';
 
-// App State
-let leafletMap = null;
-let deckInstance = null;
-let is3DMode = false;
-let ws = null;
-let customWs = null;
-let panDebounceTimer = null;
-let currentGridPoints = [];
-let mapLayerGroup = null;
-let argoMarkersGroup = null;
-let timelineChart = null;
-let argoProfileChart = null;
+/* ========================================================
+   CONFIG
+   ======================================================== */
+const isHttp = window.location.protocol.startsWith('http');
+const API    = isHttp ? window.location.origin : 'http://localhost:8000';
+const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_URL  = isHttp
+  ? `${wsProto}//${window.location.host}/ws/ocean-stream`
+  : 'ws://localhost:8000/ws/ocean-stream';
 
-function getCalculatedDates() {
-  const now = new Date();
-  const yest = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
-  const weekAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 8));
-  const monthAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 31));
-  const yearAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 366));
-  const toIso = (d) => d.toISOString().slice(0, 10);
-  return {
-    today: toIso(now),
-    yesterday: toIso(yest),
-    weekAgo: toIso(weekAgo),
-    monthAgo: toIso(monthAgo),
-    yearAgo: toIso(yearAgo),
-  };
-}
-
-const _initDates = getCalculatedDates();
-let depthMin = 0.0;
-let depthMax = 10.0;
-let selectedDate = _initDates.yesterday;
+/* ========================================================
+   STATE
+   ======================================================== */
+let deckInstance   = null;
+let ws             = null;
+let customWs       = null;
+let currentGrid    = [];        // [{lat, lon, value, ...}]
 let globalColorMin = 26.0;
 let globalColorMax = 31.0;
+let COLOR_RAMP     = null;
+let timelineChart  = null;
+let argoProfileChart = null;
+let activeTestIndex  = 0;
 
-let COLOR_RAMP = null;
-function initColorRamp() {
-  if (typeof chroma !== "undefined" && chroma.scale) {
-    COLOR_RAMP = chroma.scale(["#0077b6", "#00b4d8", "#90e0ef", "#ffd166", "#f54375"]).domain([0, 1]);
-  } else {
-    COLOR_RAMP = () => ({ hex: () => "#00b4d8" });
-  }
-}
-initColorRamp();
-
-// All 19 APIs catalogue
-const API_ENDPOINTS = [
-  { id: "root", method: "GET", path: "/", desc: "Root service info & version" },
-  { id: "date_info", method: "GET", path: "/api/date-info", desc: "Copernicus availability, server date & presets" },
-  { id: "point", method: "GET", path: `/ocean/point?lat=13.08&lon=80.27&depth=0&date=${_initDates.yesterday}`, desc: "Core click-to-query (Physics + BGC + Argo)" },
-  { id: "snapshot", method: "GET", path: `/ocean/snapshot?lat_min=10&lat_max=15&lon_min=75&lon_max=85&depth=0&date=${_initDates.yesterday}`, desc: "Spatial bounding box 2D grid" },
-  { id: "timeline", method: "GET", path: `/ocean/timeline?lat=13.08&lon=80.27&depth=0&preset=7d&granularity=day&variables=temperature,salinity`, desc: "Time-series with 7d preset (or custom dates)" },
-  { id: "nearest", method: "GET", path: "/argo/nearest?lat=13.08&lon=80.27&radius_km=500&type=both", desc: "Nearest Argo floats & AODN moorings" },
-  { id: "profile", method: "GET", path: "/argo/profile?platform_number=2902765", desc: "Full vertical depth profile for platform" },
-  { id: "coverage", method: "GET", path: "/ocean/coverage?lat_min=8&lat_max=22&lon_min=68&lon_max=90", desc: "Page table OS virtual memory state" },
-  { id: "metadata", method: "GET", path: "/api/metadata", desc: "Zarr dimensions, coordinates & stations" },
-  { id: "coastal", method: "GET", path: "/api/coastal-temps?variable=thetao", desc: "Coastal station temperature series" },
-  { id: "depth_prof", method: "GET", path: "/api/depth-profile?location=chennai&variable=thetao", desc: "Station depth profile" },
-  { id: "argo_floats", method: "GET", path: "/api/argo-floats?limit=20", desc: "Argo float observations list" },
-  { id: "argo_profs", method: "GET", path: "/api/argo-profiles?max_platforms=5", desc: "Grouped Argo platform profiles" },
-  { id: "argo_slider", method: "GET", path: `/api/argo-slider?date_start=${_initDates.weekAgo}&date_end=${_initDates.yesterday}`, desc: "Time-filtered float points" },
-  { id: "aodn", method: "GET", path: "/api/aodn-data", desc: "AODN CTD Mooring data" },
-  { id: "overview", method: "GET", path: "/api/ocean-overview", desc: "Spatial min/max/mean bounding box stats" },
-  { id: "cache_stats", method: "GET", path: "/api/cache-stats", desc: "L1 RAM / L2 Zarr telemetry" },
-  { id: "cache_clear", method: "POST", path: "/api/cache-clear", desc: "Flush L1 RAM cache" },
-  { id: "files", method: "GET", path: "/api/files", desc: "Zarr dataset files & sizes browser" },
-];
-
-let activeTestIndex = 0;
-
-// ---------------------------------------------------------------------------
-// 1. INITIALIZATION & BOOTSTRAP
-// ---------------------------------------------------------------------------
-function bootApp() {
+/* ========================================================
+   BOOT
+   ======================================================== */
+function boot() {
+  setDefaultDate();
   initColorRamp();
-  initMap();
   initDeckGL();
-  initCharts();
-  initControls();
-  buildMemoryGrid();
-  renderTestCards();
-  selectApiTest(0);
-  updateWsPreset();
-  connectWebSocket();
+  initArgoChart();
+  buildApiTestCards();
   checkApiHealth();
-
-  // Load initial timeline & argo search
-  runTimelineQuery();
-  runArgoNearestSearch();
+  connectWebSocket();
+  loadPrewarmStatus();
+  updateCacheStats();
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", bootApp);
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
 } else {
-  // If DOM is already parsed / interactive
-  bootApp();
+  boot();
 }
 
-// ---------------------------------------------------------------------------
-// 2. TAB SWITCHING
-// ---------------------------------------------------------------------------
-function switchTab(tabId, btn) {
-  document.querySelectorAll(".view-pane").forEach(p => p.classList.remove("active"));
-  document.querySelectorAll(".tab-btn").forEach(b => {
-    const isTarget = b === btn || (b.getAttribute("onclick") && b.getAttribute("onclick").includes(`'${tabId}'`));
-    b.classList.toggle("active", Boolean(isTarget));
-  });
+/* ========================================================
+   TABS
+   ======================================================== */
+function switchPane(id, btn) {
+  document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.sidebar-btn').forEach(b => b.classList.remove('active'));
+  const pane = document.getElementById(`pane-${id}`);
+  if (pane) pane.classList.add('active');
+  if (btn)  btn.classList.add('active');
+}
 
-  const target = document.getElementById(`pane-${tabId}`);
-  if (target) {
-    target.classList.add("active");
-    if (tabId === "map" && leafletMap) {
-      setTimeout(() => leafletMap.invalidateSize(), 150);
-    }
-    if (tabId === "timeline" && timelineChart) {
-      setTimeout(() => timelineChart.resize(), 150);
-    }
-    if (tabId === "argo" && argoProfileChart) {
-      setTimeout(() => argoProfileChart.resize(), 150);
-    }
+/* ========================================================
+   DATE HELPER
+   ======================================================== */
+function setDefaultDate() {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  document.getElementById('qDate').value = yesterday.toISOString().slice(0, 10);
+}
+
+/* ========================================================
+   COLOR RAMP
+   ======================================================== */
+function initColorRamp() {
+  if (typeof chroma !== 'undefined') {
+    COLOR_RAMP = chroma.scale(['#0077b6', '#00b4d8', '#90e0ef', '#ffd166', '#f54375']).domain([0, 1]);
+  } else {
+    COLOR_RAMP = () => ({ hex: () => '#00b4d8', rgb: () => [0, 180, 216] });
   }
 }
 
-// ---------------------------------------------------------------------------
-// 3. LEAFLET MAP & 3D ENGINE
-// ---------------------------------------------------------------------------
-function initMap() {
-  const mapEl = document.getElementById("leaflet-map");
-  if (!mapEl) return;
-  if (typeof L === "undefined") {
-    console.error("Leaflet library (L) is not loaded.");
-    addLog("fetch", "[ERROR] Leaflet library not loaded. Check network connection.");
+function colorForValue(v) {
+  const norm = Math.max(0, Math.min(1, (v - globalColorMin) / (globalColorMax - globalColorMin || 1)));
+  return COLOR_RAMP ? COLOR_RAMP(norm) : { hex: () => '#00b4d8', rgb: () => [0, 180, 216] };
+}
+
+function updateColorbar() {
+  const canvas = document.getElementById('cbCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = 160; canvas.height = 10;
+  const grad = ctx.createLinearGradient(0, 0, 160, 0);
+  for (let i = 0; i <= 10; i++) {
+    grad.addColorStop(i / 10, colorForValue(globalColorMin + (globalColorMax - globalColorMin) * i / 10).hex());
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 160, 10);
+  document.getElementById('cbMin').textContent = `${globalColorMin.toFixed(1)}°C`;
+  document.getElementById('cbMax').textContent = `${globalColorMax.toFixed(1)}°C`;
+}
+
+/* ========================================================
+   DECK.GL — STANDALONE 3D (no Leaflet dependency)
+   ======================================================== */
+function initDeckGL() {
+  const canvas = document.getElementById('deckgl-canvas');
+  if (!window.deck) {
+    addLog('err', '[Deck.gl] deck.gl library not loaded — check CDN');
     return;
   }
   try {
-    leafletMap = L.map("leaflet-map", {
-      center: [14.5, 80.0],
-      zoom: 6,
-      minZoom: 4,
-      maxZoom: 12,
+    deckInstance = new deck.Deck({
+      canvas,
+      width: '100%',
+      height: '100%',
+      controller: true,
+      useDevicePixels: true,
+      initialViewState: {
+        longitude: 80.0, latitude: 14.5,
+        zoom: 4.5, pitch: 50, bearing: -15,
+      },
+      onError: (err) => {
+        addLog('err', `[Deck.gl ERROR] ${err.message || err}`);
+        console.error('[Deck.gl]', err);
+      },
+      layers: [],
     });
-
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-      attribution: "&copy; OpenStreetMap &copy; CARTO",
-      subdomains: "abcd",
-      maxZoom: 19,
-    }).addTo(leafletMap);
-
-    mapLayerGroup = L.layerGroup().addTo(leafletMap);
-    argoMarkersGroup = L.layerGroup().addTo(leafletMap);
-
-    // Pan / Zoom triggers demand-paging WebSocket stream
-    leafletMap.on("moveend zoomend", () => {
-      onViewportChanged();
-      if (is3DMode) syncDeckView();
-    });
-
-    // Map Click triggers GET /ocean/point inspection!
-    leafletMap.on("click", (e) => {
-      inspectOceanPoint(e.latlng.lat, e.latlng.lng);
-    });
-
-    setTimeout(() => {
-      if (leafletMap) leafletMap.invalidateSize();
-    }, 200);
-  } catch (err) {
-    console.error("Failed to initialize Leaflet map:", err);
+    addLog('info', '[Deck.gl] Initialized successfully');
+  } catch (e) {
+    addLog('err', `[Deck.gl] Init failed: ${e.message}`);
+    console.error('[Deck.gl] Init error:', e);
   }
 }
 
-function onViewportChanged() {
-  clearTimeout(panDebounceTimer);
-  panDebounceTimer = setTimeout(() => {
-    triggerViewportFetch();
-    refreshCoverageStrip();
-  }, 250);
+function resetDeckView() {
+  if (!deckInstance) return;
+  deckInstance.setProps({
+    initialViewState: {
+      longitude: 80.0, latitude: 14.5,
+      zoom: 4.5, pitch: 50, bearing: -15,
+      transitionDuration: 600,
+    }
+  });
 }
 
-function triggerViewportFetch() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  const b = leafletMap.getBounds();
+function renderDeckGLLayers(grid) {
+  if (!deckInstance || !window.deck) return;
+  if (!grid || grid.length === 0) {
+    addLog('err', '[Deck.gl] renderDeckGLLayers called with empty grid');
+    return;
+  }
 
-  addLog("info", `[VIEWPORT] Lat [${b.getSouth().toFixed(2)}, ${b.getNorth().toFixed(2)}], Depth: ${depthMin}–${depthMax}m`);
+  // Validate data shape — Deck.gl needs [lon, lat] for getPosition
+  const valid = grid.filter(p =>
+    typeof p.lat === 'number' && typeof p.lon === 'number' &&
+    p.value !== null && p.value !== undefined
+  );
 
-  ws.send(JSON.stringify({
-    lat_min: b.getSouth(),
-    lat_max: b.getNorth(),
-    lon_min: b.getWest(),
-    lon_max: b.getEast(),
-    depth_min: depthMin,
-    depth_max: depthMax,
-    time: selectedDate,
-    variable: "thetao",
-  }));
-}
+  if (valid.length === 0) {
+    addLog('err', `[Deck.gl] No valid points after filtering — grid had ${grid.length} rows but all missing lat/lon/value`);
+    return;
+  }
 
-// Click-to-Query /ocean/point Inspector
-async function inspectOceanPoint(lat, lon) {
-  const inspector = document.getElementById("pointInspector");
-  const content = document.getElementById("piContent");
-  inspector.style.display = "block";
-  content.innerHTML = `<div style="color:var(--accent)">Querying /ocean/point for (${lat.toFixed(3)}°N, ${lon.toFixed(3)}°E)…</div>`;
+  // Compute global color range
+  const vals = valid.map(p => p.value);
+  globalColorMin = Math.min(...vals);
+  globalColorMax = Math.max(...vals);
+  if (globalColorMax === globalColorMin) globalColorMax += 1.0;
+  updateColorbar();
+
+  const isPlaceholder = valid[0]?.placeholder === true;
+  document.getElementById('deckPlaceholderBadge').style.display = isPlaceholder ? 'inline' : 'none';
+  document.getElementById('deckgl-pts-badge').textContent = `${valid.length} pts`;
 
   try {
-    const url = `${API}/ocean/point?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&depth=${depthMin}&date=${selectedDate}`;
-    const res = await fetch(url);
-    const data = await res.json();
+    const columnLayer = new deck.ColumnLayer({
+      id: 'ocean-columns-3d',
+      data: valid,
+      diskResolution: 6,
+      radius: 18000,           // ~18 km column radius — visible at zoom 4-5
+      extruded: true,
+      elevationScale: 5000,
+      getPosition: d => [d.lon, d.lat],
+      getElevation: d => Math.max(0.1, (d.value - globalColorMin) * 30),
+      getFillColor: d => {
+        const c = colorForValue(d.value);
+        // chroma returns rgb array; fallback to [0,180,216]
+        const rgb = (typeof c.rgb === 'function') ? c.rgb() : [0, 180, 216];
+        return [
+          Math.round(rgb[0]), Math.round(rgb[1]), Math.round(rgb[2]),
+          isPlaceholder ? 140 : 210   // more transparent for placeholder
+        ];
+      },
+      pickable: true,
+      onHover: ({object}) => {
+        if (object) {
+          document.getElementById('deckgl-info').textContent =
+            `Lat ${object.lat}° Lon ${object.lon}° · Temp ${object.value?.toFixed(2) ?? '—'}°C`;
+        }
+      },
+    });
 
-    const phy = data.physics || {};
-    const bgc = data.bgc || {};
-    const argo = data.nearest_argo_float;
-
-    let html = `
-      <div style="font-family:var(--mono);color:var(--accent);margin-bottom:4px;">
-        Lat: ${lat.toFixed(4)}° · Lon: ${lon.toFixed(4)}° · Depth: ${depthMin}m
-      </div>
-      <div style="display:flex;gap:6px;margin-bottom:6px;">
-        <span class="badge" style="background:rgba(0,224,140,0.15);color:var(--green)">Status: ${data.status}</span>
-        <span class="badge">Cache: ${data.cache || 'L2'}</span>
-        <span class="badge">${data.elapsed_ms || 0}ms</span>
-      </div>
-
-      <div style="background:var(--surface-3);padding:6px;border-radius:5px;margin-bottom:6px;">
-        <strong style="color:#fff;">Physics:</strong>
-        <div style="display:flex;justify-content:space-between;color:var(--text);margin-top:2px;">
-          <span>Temp: <strong>${phy.temperature_c !== undefined ? phy.temperature_c + ' °C' : '–'}</strong></span>
-          <span>Salinity: <strong>${phy.salinity_psu !== undefined ? phy.salinity_psu + ' PSU' : '–'}</strong></span>
-        </div>
-        <div style="display:flex;justify-content:space-between;color:var(--muted);font-size:0.68rem;margin-top:2px;">
-          <span>Cur U: ${phy.current_u_ms || '–'} m/s</span>
-          <span>Cur V: ${phy.current_v_ms || '–'} m/s</span>
-          <span>Sea Lvl: ${phy.sea_level_m || '–'} m</span>
-        </div>
-      </div>
-
-      <div style="background:var(--surface-3);padding:6px;border-radius:5px;margin-bottom:6px;">
-        <strong style="color:#fff;">Biogeochemistry (BGC):</strong>
-        <div style="display:flex;justify-content:space-between;color:var(--text);margin-top:2px;">
-          <span>Chl-a: <strong>${bgc.chlorophyll_mgl !== undefined ? bgc.chlorophyll_mgl + ' mg/m³' : '–'}</strong></span>
-          <span>Oxygen: <strong>${bgc.oxygen_mmolm3 !== undefined ? bgc.oxygen_mmolm3 + ' mmol/m³' : '–'}</strong></span>
-        </div>
-      </div>
-
-      <div style="background:var(--surface-3);padding:6px;border-radius:5px;">
-        <strong style="color:#fff;">Nearest Argo Float:</strong>
-        ${argo ? `
-          <div style="color:var(--text);margin-top:2px;">
-            Platform <strong>#${argo.platform_number}</strong> (${argo.type || 'core'}) · <strong>${argo.distance_km} km</strong> away
-          </div>
-          <button class="btn" style="width:100%;margin-top:4px;font-size:0.68rem;" onclick="loadFloatProfile('${argo.platform_number}')">View Full Profile Chart</button>
-        ` : `<div style="color:var(--muted)">No floats within radius.</div>`}
-      </div>
-    `;
-    content.innerHTML = html;
+    deckInstance.setProps({ layers: [columnLayer] });
+    addLog('res', `[Deck.gl] Rendered ${valid.length} ColumnLayer points`);
   } catch (e) {
-    content.innerHTML = `<div style="color:var(--rose)">Failed to query /ocean/point: ${e.message}</div>`;
+    addLog('err', `[Deck.gl] setProps failed: ${e.message}`);
+    console.error('[Deck.gl] render error:', e);
   }
 }
 
-function closePointInspector() {
-  document.getElementById("pointInspector").style.display = "none";
+/* ========================================================
+   /ocean/point QUERY
+   ======================================================== */
+async function runCoordQuery() {
+  const lat   = parseFloat(document.getElementById('qLat').value);
+  const lon   = parseFloat(document.getElementById('qLon').value);
+  const depth = parseFloat(document.getElementById('qDepth').value);
+  const date  = document.getElementById('qDate').value;
+
+  if (isNaN(lat) || isNaN(lon)) { showToast('Enter valid lat/lon', 'error'); return; }
+
+  const btn = document.getElementById('qSubmitBtn');
+  btn.textContent = '⏳ Querying…';
+  btn.disabled = true;
+
+  addLog('info', `[QUERY] /ocean/point lat=${lat} lon=${lon} depth=${depth} date=${date}`);
+
+  try {
+    const url = `${API}/ocean/point?lat=${lat}&lon=${lon}&depth=${depth}&date=${date}`;
+    const t0 = performance.now();
+    const res = await fetch(url);
+    const data = await res.json();
+    const elapsed = Math.round(performance.now() - t0);
+
+    addLog(res.ok ? 'res' : 'err', `[POINT] ${res.status} in ${elapsed}ms — cache:${data.cache || '?'}`);
+
+    renderPointInspector(lat, lon, depth, date, data);
+    document.getElementById('pointRawJson').textContent = JSON.stringify(data, null, 2);
+    document.getElementById('pointRawCard').style.display = 'block';
+
+    showToast(`/ocean/point: ${data.status} (${elapsed}ms, ${data.cache})`, res.ok ? 'success' : 'error');
+  } catch (e) {
+    addLog('err', `[POINT] fetch error: ${e.message}`);
+    showToast(`/ocean/point error: ${e.message}`, 'error');
+  } finally {
+    btn.textContent = '▶ Query';
+    btn.disabled = false;
+  }
 }
 
-// ---------------------------------------------------------------------------
-// 4. WEBSOCKET HANDLERS
-// ---------------------------------------------------------------------------
-function connectWebSocket() {
-  ws = new WebSocket(WS_URL);
+function renderPointInspector(lat, lon, depth, date, data) {
+  const phy  = data.physics || {};
+  const bgc  = data.bgc || {};
+  const argo = data.nearest_argo_float;
 
-  ws.onopen = () => {
-    document.getElementById("wsDot").className = "dot online";
-    document.getElementById("wsStatus").textContent = "WS Connected";
-    addLog("info", "[WS] Connected to oceanStream backend");
-    triggerViewportFetch();
-  };
+  const inspector = document.getElementById('pointInspector');
+  const grid = document.getElementById('pointDataGrid');
+  inspector.style.display = 'block';
 
-  ws.onclose = () => {
-    document.getElementById("wsDot").className = "dot offline";
-    document.getElementById("wsStatus").textContent = "WS Disconnected";
-    setTimeout(connectWebSocket, 2000);
-  };
+  const fields = [
+    { key: 'Status',      val: data.status,        extra: data.cache },
+    { key: 'Elapsed',     val: data.elapsed_ms ? `${data.elapsed_ms}ms` : '—' },
+    { key: 'Temp (°C)',   val: phy.temperature_c },
+    { key: 'Salinity PSU', val: phy.salinity_psu },
+    { key: 'Current U m/s', val: phy.current_u_ms },
+    { key: 'Current V m/s', val: phy.current_v_ms },
+    { key: 'Sea Level m', val: phy.sea_level_m },
+    { key: 'Chl-a mg/m³', val: bgc.chlorophyll_mgl },
+    { key: 'O₂ mmol/m³',  val: bgc.oxygen_mmolm3 },
+    { key: 'NO₃ mmol/m³', val: bgc.nitrate_mmolm3 },
+    { key: 'PO₄ mmol/m³', val: bgc.phosphate_mmolm3 },
+    { key: 'Si mmol/m³',  val: bgc.silicate_mmolm3 },
+    { key: 'pH',          val: bgc.ph },
+    { key: 'pCO₂ μatm',  val: bgc.pco2_uatm },
+    { key: 'Argo Float',  val: argo ? `#${argo.platform_number} (${argo.distance_km}km)` : 'None' },
+    { key: 'Argo Source', val: argo ? (argo.source || argo.type || '?') : '—' },
+  ];
 
-  ws.onerror = () => ws.close();
+  grid.innerHTML = fields.map(f => {
+    const isNull = f.val === null || f.val === undefined || f.val === '—';
+    const valStr = isNull ? '—' : String(f.val);
+    const extra  = f.extra ? `<span style="color:var(--muted);font-size:0.6rem;"> ${f.extra}</span>` : '';
+    return `<div class="data-cell">
+      <div class="data-cell-key">${f.key}</div>
+      <div class="data-cell-val${isNull ? ' null' : ''}">${valStr}${extra}</div>
+    </div>`;
+  }).join('');
+}
 
-  ws.onmessage = (event) => {
-    try {
-      const msg = JSON.parse(event.data);
-      handleWsMessage(msg);
-    } catch (e) {
-      console.error("WS Parse error", e);
+/* ========================================================
+   /ocean/snapshot QUERY + 3D RENDER
+   ======================================================== */
+async function querySnapshot() {
+  const latMin = parseFloat(document.getElementById('sLatMin').value);
+  const latMax = parseFloat(document.getElementById('sLatMax').value);
+  const lonMin = parseFloat(document.getElementById('sLonMin').value);
+  const lonMax = parseFloat(document.getElementById('sLonMax').value);
+  const depth  = parseFloat(document.getElementById('qDepth').value);
+  const date   = document.getElementById('qDate').value;
+
+  addLog('info', `[SNAPSHOT] bbox [${latMin},${latMax}]×[${lonMin},${lonMax}] depth=${depth}`);
+
+  try {
+    const url = `${API}/ocean/snapshot?lat_min=${latMin}&lat_max=${latMax}&lon_min=${lonMin}&lon_max=${lonMax}&depth=${depth}&date=${date}`;
+    const t0 = performance.now();
+    const res = await fetch(url);
+    const data = await res.json();
+    const elapsed = Math.round(performance.now() - t0);
+    const grid = data.grid || [];
+
+    addLog(res.ok ? 'res' : 'err',
+      `[SNAPSHOT] ${res.status} in ${elapsed}ms · ${grid.length} pts · source:${data.source || '?'} · placeholder:${data.placeholder}`);
+
+    // Update UI badges
+    document.getElementById('snapCountBadge').textContent = `${grid.length} pts`;
+    document.getElementById('snapSourceBadge').textContent = data.source || '?';
+    document.getElementById('snapTimeBadge').textContent = `${elapsed}ms`;
+    document.getElementById('snapshotCard').style.display = 'block';
+    document.getElementById('deckgl-src-badge').textContent = data.source || '?';
+
+    const cov = data.coverage || {};
+    document.getElementById('snapCoverage').textContent =
+      `Physics: ${cov.physics_coverage_pct ?? '?'}% · BGC: ${cov.bgc_coverage_pct ?? '?'}% · ` +
+      `cache: ${data.cache} · placeholder: ${data.placeholder ?? false}`;
+
+    // Show raw JSON (truncated for large grids)
+    const truncatedData = { ...data };
+    if (grid.length > 30) {
+      truncatedData.grid = [...grid.slice(0, 10), `... (${grid.length - 10} more pts truncated in view)`];
     }
-  };
+    document.getElementById('snapRawJson').textContent = JSON.stringify(truncatedData, null, 2);
+
+    // Render 3D
+    if (grid.length > 0) {
+      currentGrid = grid;
+      renderDeckGLLayers(grid);
+    } else {
+      addLog('err', '[SNAPSHOT] Received empty grid from API — cannot render 3D');
+    }
+
+    showToast(`Snapshot: ${grid.length} pts · ${elapsed}ms · ${data.source}`, res.ok ? 'success' : 'error');
+  } catch (e) {
+    addLog('err', `[SNAPSHOT] fetch error: ${e.message}`);
+    showToast(`/ocean/snapshot error: ${e.message}`, 'error');
+  }
+}
+
+/* ========================================================
+   WEBSOCKET  (for streaming data — optional)
+   ======================================================== */
+function connectWebSocket() {
+  try {
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => {
+      setDot('wsDot', 'online'); setTxt('wsStatus', 'WS Connected');
+      setDot('wsDot2', 'online'); setTxt('wsStatus2', 'WS Connected');
+      addLog('info', '[WS] Connected to /ws/ocean-stream');
+    };
+    ws.onclose = () => {
+      setDot('wsDot', 'offline'); setTxt('wsStatus', 'WS Disconnected');
+      setDot('wsDot2', 'offline'); setTxt('wsStatus2', 'Reconnecting…');
+      setTimeout(connectWebSocket, 3000);
+    };
+    ws.onerror = () => ws.close();
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        handleWsMessage(msg);
+      } catch(e) {}
+    };
+  } catch(e) {
+    addLog('err', `[WS] connect error: ${e.message}`);
+  }
 }
 
 function handleWsMessage(msg) {
-  if (msg.type === "stream_start") {
-    currentGridPoints = [];
-    addLog("info", `[START] Resident: ${msg.resident_count} pages, Missing: ${msg.missing_count} pages`);
-  }
-  else if (msg.stage === "resident") {
-    addLog("res", `[RESIDENT] Depth ${msg.depth_range}m · ${msg.grid?.length || 0} pts (${msg.elapsed_ms}ms)`);
-    mergeGridData(msg.grid);
-  }
-  else if (msg.stage === "fetching") {
-    addLog("fetch", `[FETCHING] Depth ${msg.depth_range}m · origin request`);
-  }
-  else if (msg.type === "stream_complete") {
-    addLog("info", `[COMPLETE] Rendered ${currentGridPoints.length} points in ${msg.total_elapsed_ms}ms`);
-    refreshCoverageStrip();
+  if (msg.stage === 'resident' && msg.grid && msg.grid.length > 0) {
+    // WS data has {lat, lon, value} shape — merge and re-render
+    const withValue = msg.grid.map(p => ({...p, value: p.value ?? p.temperature_c}));
+    currentGrid.push(...withValue);
+    if (currentGrid.length > 5000) currentGrid = currentGrid.slice(-5000);
+    renderDeckGLLayers(currentGrid);
   }
 }
 
-function mergeGridData(newGrid) {
-  if (!newGrid || !newGrid.length) return;
-  currentGridPoints.push(...newGrid);
-
-  if (currentGridPoints.length > 4000) {
-    currentGridPoints = currentGridPoints.slice(-4000);
-  }
-
-  const vals = currentGridPoints.map(p => p.value).filter(v => v !== null && v !== undefined);
-  if (vals.length > 0) {
-    globalColorMin = Math.min(...vals);
-    globalColorMax = Math.max(...vals);
-    if (globalColorMax === globalColorMin) globalColorMax += 1.0;
-    updateColorbar();
-  }
-
-  renderGridOnLeaflet();
-  if (is3DMode) renderDeckGLLayers();
-}
-
-function renderGridOnLeaflet() {
-  if (!mapLayerGroup) return;
-  mapLayerGroup.clearLayers();
-  const step = Math.max(1, Math.floor(currentGridPoints.length / 500));
-
-  for (let i = 0; i < currentGridPoints.length; i += step) {
-    const pt = currentGridPoints[i];
-    if (pt.value === null || pt.value === undefined) continue;
-
-    const norm = Math.max(0, Math.min(1, (pt.value - globalColorMin) / (globalColorMax - globalColorMin)));
-    const color = COLOR_RAMP ? COLOR_RAMP(norm).hex() : "#00b4d8";
-
-    const circle = L.circleMarker([pt.lat, pt.lon], {
-      radius: 5,
-      fillColor: color,
-      color: "transparent",
-      fillOpacity: 0.78,
-      weight: 0,
-    }).bindTooltip(`<b>${pt.lat.toFixed(3)}°N, ${pt.lon.toFixed(3)}°E</b><br>Temp: ${pt.value.toFixed(2)} °C`);
-
-    mapLayerGroup.addLayer(circle);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 5. DECK.GL 3D VIEW
-// ---------------------------------------------------------------------------
-function initDeckGL() {
-  const canvas = document.getElementById("deckgl-canvas");
-  if (!window.deck) return;
-
-  deckInstance = new deck.Deck({
-    canvas: canvas,
-    width: "100%",
-    height: "100%",
-    initialViewState: { longitude: 80.0, latitude: 14.5, zoom: 5, pitch: 0, bearing: 0 },
-    controller: false,
-    layers: [],
-  });
-}
-
-function syncDeckView() {
-  if (!deckInstance || !leafletMap) return;
-  const center = leafletMap.getCenter();
-  const zoom = leafletMap.getZoom();
-
-  deckInstance.setProps({
-    viewState: {
-      longitude: center.lng,
-      latitude: center.lat,
-      zoom: zoom - 1,
-      pitch: is3DMode ? 48 : 0,
-      bearing: is3DMode ? 25 : 0,
-    },
-  });
-  renderDeckGLLayers();
-}
-
-function toggle3DView() {
-  is3DMode = !is3DMode;
-  const btn = document.getElementById("btn3D");
-  const canvas = document.getElementById("deckgl-canvas");
-
-  if (is3DMode) {
-    btn.textContent = "🧊 3D Layer: ON";
-    btn.classList.add("primary");
-    canvas.style.display = "block";
-    syncDeckView();
-    showToast("3D Ocean Extrusion active (deck.gl ColumnLayer)", "success");
-  } else {
-    btn.textContent = "🧊 3D Layer: OFF";
-    btn.classList.remove("primary");
-    canvas.style.display = "none";
-    syncDeckView();
-  }
-}
-
-function renderDeckGLLayers() {
-  if (!deckInstance || !is3DMode || !window.deck) return;
-
-  const validPts = currentGridPoints.filter(p => p.value !== null && p.value !== undefined);
-
-  const columnLayer = new deck.ColumnLayer({
-    id: "ocean-columns-3d",
-    data: validPts,
-    diskResolution: 6,
-    radius: 14000,
-    extruded: true,
-    elevationScale: 4000,
-    getPosition: d => [d.lon, d.lat],
-    getElevation: d => Math.max(1, (d.value - globalColorMin) * 25),
-    getFillColor: d => {
-      const norm = Math.max(0, Math.min(1, (d.value - globalColorMin) / (globalColorMax - globalColorMin)));
-      const hex = COLOR_RAMP ? COLOR_RAMP(norm).hex() : "#00b4d8";
-      const rgb = typeof chroma !== "undefined" ? chroma(hex).rgb() : [0, 180, 216];
-      return [rgb[0], rgb[1], rgb[2], 210];
-    },
-    pickable: true,
-  });
-
-  deckInstance.setProps({ layers: [columnLayer] });
-}
-
-// ---------------------------------------------------------------------------
-// 6. CHARTS (TIMELINE & ARGO PROFILE)
-// ---------------------------------------------------------------------------
-function initCharts() {
-  if (typeof Chart === "undefined") {
-    console.warn("Chart.js is not loaded.");
+function sendWsMessage() {
+  const text = document.getElementById('wsMessageInput').value;
+  const box  = document.getElementById('wsLogBox');
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    appendWsLog('[ERROR] WS not connected');
     return;
   }
-  // Timeline Chart
-  const tlEl = document.getElementById("timelineChart");
-  if (tlEl) {
-    const ctxTl = tlEl.getContext("2d");
-    timelineChart = new Chart(ctxTl, {
-      type: "line",
-      data: { labels: [], datasets: [] },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: {
-          x: { grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" } },
-          y: { grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" } },
-        },
-        plugins: { legend: { labels: { color: "#d4e3f7" } } }
-      }
-    });
-  }
+  ws.send(text);
+  appendWsLog(`[SENT]:\n${text}`);
+}
 
-  // Argo Profile Chart
-  const argoEl = document.getElementById("argoProfileChart");
-  if (argoEl) {
-    const ctxArgo = argoEl.getContext("2d");
-    argoProfileChart = new Chart(ctxArgo, {
-    type: "line",
-    data: {
-      labels: [],
-      datasets: [{
-        label: "Temperature (°C)",
-        data: [],
-        borderColor: "#00c8ff",
-        backgroundColor: "rgba(0, 200, 255, 0.15)",
-        tension: 0.35,
-        fill: true,
-      }]
-    },
+function appendWsLog(msg) {
+  const box = document.getElementById('wsLogBox');
+  box.textContent += `\n${msg}`;
+  box.scrollTop = box.scrollHeight;
+}
+function clearWsLog() { document.getElementById('wsLogBox').textContent = '// Cleared.'; }
+
+/* ========================================================
+   ARGO PANEL
+   ======================================================== */
+function initArgoChart() {
+  const el = document.getElementById('argoProfileChart');
+  if (!el || typeof Chart === 'undefined') return;
+  argoProfileChart = new Chart(el.getContext('2d'), {
+    type: 'line',
+    data: { labels: [], datasets: [{
+      label: 'Temperature (°C)', data: [],
+      borderColor: '#00c8ff', backgroundColor: 'rgba(0,200,255,0.1)',
+      tension: 0.35, fill: true,
+    }]},
     options: {
-      indexAxis: "y",
-      responsive: true,
-      maintainAspectRatio: false,
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
       scales: {
-        x: {
-          title: { display: true, text: "Temperature (°C)", color: "#6b83a6" },
-          grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" }
-        },
-        y: {
-          reverse: true,
-          title: { display: true, text: "Depth (m)", color: "#6b83a6" },
-          grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" }
-        }
+        x: { title: {display:true,text:'Temp (°C)',color:'#6b83a6'}, grid:{color:'#1e3055'}, ticks:{color:'#6b83a6'} },
+        y: { reverse:true, title:{display:true,text:'Depth (m)',color:'#6b83a6'}, grid:{color:'#1e3055'}, ticks:{color:'#6b83a6'} },
       },
-      plugins: { legend: { labels: { color: "#d4e3f7" } } }
+      plugins: { legend:{labels:{color:'#d4e3f7'}} },
     }
   });
-  }
 }
 
-// Fetch and render GET /ocean/timeline
-async function runTimelineQuery() {
-  const lat = document.getElementById("tlLat").value;
-  const lon = document.getElementById("tlLon").value;
-  const depth = document.getElementById("tlDepth").value;
-  const start = document.getElementById("tlStart").value;
-  const end = document.getElementById("tlEnd").value;
-  const gran = document.getElementById("tlGran").value;
-
-  document.getElementById("tlBadge").textContent = `Lat ${lat}, Lon ${lon} · ${start} to ${end}`;
-
-  try {
-    const url = `${API}/ocean/timeline?lat=${lat}&lon=${lon}&depth=${depth}&date_start=${start}&date_end=${end}&granularity=${gran}&variables=temperature,salinity`;
-    const res = await fetch(url);
-    const data = await res.json();
-
-    const series = data.series || [];
-    const labels = series.map(s => s.date);
-    const temps = series.map(s => s.temperature_c !== undefined ? s.temperature_c : s.temperature);
-    const salinities = series.map(s => s.salinity_psu !== undefined ? s.salinity_psu : s.salinity);
-
-    timelineChart.data.labels = labels;
-    timelineChart.data.datasets = [
-      {
-        label: "Temperature (°C)",
-        data: temps,
-        borderColor: "#00c8ff",
-        backgroundColor: "rgba(0, 200, 255, 0.1)",
-        tension: 0.3,
-        yAxisID: "y",
-      },
-      {
-        label: "Salinity (PSU)",
-        data: salinities,
-        borderColor: "#00e08c",
-        backgroundColor: "transparent",
-        tension: 0.3,
-        yAxisID: "y",
-      }
-    ];
-    timelineChart.update();
-    showToast(`Loaded ${series.length} timeline points`, "success");
-  } catch (e) {
-    showToast(`Timeline fetch error: ${e.message}`, "error");
-  }
-}
-
-// Search and render GET /argo/nearest
-async function runArgoNearestSearch() {
-  const lat = document.getElementById("argoSearchLat").value;
-  const lon = document.getElementById("argoSearchLon").value;
-  const rad = document.getElementById("argoSearchRad").value;
-  const type = document.getElementById("argoSearchType").value;
+async function searchArgo() {
+  const lat  = document.getElementById('argoLat').value;
+  const lon  = document.getElementById('argoLon').value;
+  const rad  = document.getElementById('argoRad').value;
+  const type = document.getElementById('argoType').value;
+  addLog('info', `[ARGO] searching lat=${lat} lon=${lon} r=${rad}km type=${type}`);
 
   try {
     const url = `${API}/argo/nearest?lat=${lat}&lon=${lon}&radius_km=${rad}&type=${type}`;
@@ -1272,138 +1070,180 @@ async function runArgoNearestSearch() {
     const data = await res.json();
     const floats = data.floats || [];
 
-    document.getElementById("argoCountBadge").textContent = `${floats.length} found`;
-    const container = document.getElementById("argoListContainer");
-    container.innerHTML = "";
+    document.getElementById('argoCountBadge').textContent = `${floats.length} found`;
+    document.getElementById('argoRawJson').textContent = JSON.stringify(data, null, 2);
 
-    argoMarkersGroup.clearLayers();
+    const list = document.getElementById('argoList');
+    list.innerHTML = '';
 
     if (!floats.length) {
-      container.innerHTML = `<div style="color:var(--muted)">No floats found within ${rad} km.</div>`;
+      list.innerHTML = `<div style="color:var(--muted);font-size:0.72rem;">No floats found within ${rad} km.</div>`;
       return;
     }
 
-    floats.forEach(f => {
-      const card = document.createElement("div");
-      card.className = "test-card";
-      card.style.marginBottom = "6px";
+    floats.forEach((f, i) => {
+      const src = f.source || f.type || 'unknown';
+      const srcClass = src.includes('model') ? 'model' : src.includes('argovis') ? 'argovis' : 'real';
+      const card = document.createElement('div');
+      card.className = `argo-card${i === 0 ? ' active' : ''}`;
       card.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <strong style="color:#fff;">Platform #${f.platform_number || f.name}</strong>
-          <span class="badge" style="background:rgba(123,90,245,0.2);color:var(--accent-2);">${f.type}</span>
+          <strong style="color:#fff;font-size:0.72rem;">#${f.platform_number || f.name}</strong>
+          <span class="argo-source-badge ${srcClass}">${src}</span>
         </div>
-        <div style="font-size:0.68rem;color:var(--muted);margin-top:2px;">
-          Distance: <strong>${f.distance_km} km</strong> · Lat: ${f.lat}° · Lon: ${f.lon}°
-        </div>
-      `;
-      card.onclick = () => loadFloatProfile(f.platform_number || f.name);
-      container.appendChild(card);
-
-      // Add marker to map
-      if (f.lat && f.lon) {
-        const m = L.circleMarker([f.lat, f.lon], {
-          radius: 7, color: "#fff", weight: 2, fillColor: "#7b5af5", fillOpacity: 0.9
-        }).bindPopup(`<b>Platform #${f.platform_number || f.name}</b><br>Dist: ${f.distance_km} km<br><button onclick="loadFloatProfile('${f.platform_number || f.name}')">View Profile</button>`);
-        argoMarkersGroup.addLayer(m);
-      }
+        <div style="font-size:0.62rem;color:var(--muted);margin-top:3px;">
+          ${f.distance_km} km · ${f.lat}° · ${f.lon}° · ${f.type}
+        </div>`;
+      card.onclick = () => {
+        document.querySelectorAll('.argo-card').forEach(c => c.classList.remove('active'));
+        card.classList.add('active');
+        loadArgoProfile(f.platform_number || f.name);
+      };
+      list.appendChild(card);
     });
 
-    if (floats[0]) {
-      loadFloatProfile(floats[0].platform_number || floats[0].name);
-    }
+    if (floats[0]) loadArgoProfile(floats[0].platform_number || floats[0].name);
+    showToast(`Found ${floats.length} floats within ${rad}km`, 'success');
   } catch (e) {
-    showToast(`Argo nearest error: ${e.message}`, "error");
+    addLog('err', `[ARGO] search error: ${e.message}`);
+    showToast(`Argo search error: ${e.message}`, 'error');
   }
 }
 
-// Fetch and render GET /argo/profile
-async function loadFloatProfile(platform) {
-  document.getElementById("argoActiveProfileBadge").textContent = `Platform #${platform}`;
+async function loadArgoProfile(platform) {
+  document.getElementById('argoProfileBadge').textContent = `#${platform}`;
   try {
     const url = `${API}/argo/profile?platform_number=${platform}`;
     const res = await fetch(url);
     const data = await res.json();
     const prof = data.profile || [];
 
-    const depths = prof.map(p => p.depth_m !== undefined ? p.depth_m : p.depth);
-    const temps = prof.map(p => p.temperature_c !== undefined ? p.temperature_c : p.temperature);
+    const depths = prof.map(p => p.depth_m ?? p.depth ?? 0);
+    const temps  = prof.map(p => p.temperature_c ?? p.temperature ?? null);
 
-    argoProfileChart.data.labels = depths;
-    argoProfileChart.data.datasets[0].data = temps;
-    argoProfileChart.update();
-    showToast(`Loaded profile for #${platform} (${prof.length} levels)`, "success");
+    if (argoProfileChart) {
+      argoProfileChart.data.labels = depths;
+      argoProfileChart.data.datasets[0].data = temps;
+      argoProfileChart.update();
+    }
+    addLog('res', `[ARGO PROFILE] #${platform}: ${prof.length} levels`);
+    showToast(`Profile loaded: #${platform} (${prof.length} levels)`, 'success');
   } catch (e) {
-    showToast(`Argo profile error: ${e.message}`, "error");
+    addLog('err', `[ARGO PROFILE] ${e.message}`);
   }
 }
 
-// ---------------------------------------------------------------------------
-// 7. API TEST RUNNER SUITE (TAB 4)
-// ---------------------------------------------------------------------------
-function renderTestCards() {
-  const container = document.getElementById("testCardsContainer");
-  container.innerHTML = "";
+/* ========================================================
+   PRE-WARM STATUS
+   ======================================================== */
+async function loadPrewarmStatus() {
+  try {
+    const res = await fetch(`${API}/ocean/prewarm_status`);
+    const data = await res.json();
+    const tiles = data.tiles || [];
 
-  API_ENDPOINTS.forEach((ep, idx) => {
-    const card = document.createElement("div");
-    card.className = `test-card ${idx === activeTestIndex ? 'active' : ''}`;
-    card.id = `test-card-${idx}`;
+    document.getElementById('prewarmSummary').textContent =
+      `Total: ${data.total_tiles} tiles · Synthetic: ${data.synthetic_ready} · Real: ${data.real_ready}`;
+
+    const tbody = document.getElementById('prewarmTableBody');
+    tbody.innerHTML = tiles.map(t => {
+      const ph = t.prewarm_phase || 'not_started';
+      return `<tr>
+        <td>${t.label}</td>
+        <td style="font-size:0.6rem;">[${t.bbox.lat_min}–${t.bbox.lat_max}, ${t.bbox.lon_min}–${t.bbox.lon_max}]</td>
+        <td><span class="phase-pill ${ph}">${ph}</span></td>
+        <td>${t.pinned ? '📌 yes' : 'no'}</td>
+        <td><span class="badge">${t.page_state}</span></td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    addLog('err', `[PREWARM] status fetch error: ${e.message}`);
+  }
+}
+
+/* ========================================================
+   API TEST RUNNER
+   ======================================================== */
+const API_ENDPOINTS = [
+  { id:'root',        method:'GET',  path:'/',               desc:'Root service info & version' },
+  { id:'date_info',   method:'GET',  path:'/api/date-info',  desc:'Server date, Copernicus availability' },
+  { id:'point',       method:'GET',  path:'/ocean/point?lat=13.08&lon=80.27&depth=0&date=2024-09-12', desc:'Core click-to-query (Physics + BGC + Argo)' },
+  { id:'snapshot',    method:'GET',  path:'/ocean/snapshot?lat_min=10&lat_max=15&lon_min=75&lon_max=85&depth=0&date=2024-09-12', desc:'Spatial bounding box 2D grid' },
+  { id:'timeline',    method:'GET',  path:'/ocean/timeline?lat=13.08&lon=80.27&depth=0&preset=7d&granularity=day&variables=temperature,salinity', desc:'Time-series 7d preset' },
+  { id:'nearest',     method:'GET',  path:'/argo/nearest?lat=13.08&lon=80.27&radius_km=500&type=both', desc:'Nearest Argo floats' },
+  { id:'profile',     method:'GET',  path:'/argo/profile?platform_number=2902765', desc:'Depth profile for platform' },
+  { id:'coverage',    method:'GET',  path:'/ocean/coverage?lat_min=8&lat_max=22&lon_min=68&lon_max=90', desc:'Page table state' },
+  { id:'prewarm',     method:'GET',  path:'/ocean/prewarm_status', desc:'Pre-warm tile status' },
+  { id:'metadata',    method:'GET',  path:'/api/metadata',  desc:'Zarr dimensions & variables' },
+  { id:'coastal',     method:'GET',  path:'/api/coastal-temps?variable=thetao', desc:'Coastal station temps' },
+  { id:'depth_prof',  method:'GET',  path:'/api/depth-profile?location=chennai&variable=thetao', desc:'Depth profile at station' },
+  { id:'argo_floats', method:'GET',  path:'/api/argo-floats?limit=20', desc:'Argo float list' },
+  { id:'argo_profs',  method:'GET',  path:'/api/argo-profiles?max_platforms=5', desc:'Grouped platform profiles' },
+  { id:'aodn',        method:'GET',  path:'/api/aodn-data', desc:'AODN CTD mooring data' },
+  { id:'overview',    method:'GET',  path:'/api/ocean-overview', desc:'Spatial stats bbox' },
+  { id:'cache_stats', method:'GET',  path:'/api/cache-stats', desc:'L1/L2 cache telemetry' },
+  { id:'cache_clear', method:'POST', path:'/api/cache-clear', desc:'Flush L1 RAM cache' },
+  { id:'files',       method:'GET',  path:'/api/files',     desc:'Zarr files browser' },
+];
+
+function buildApiTestCards() {
+  const container = document.getElementById('testCardsContainer');
+  container.innerHTML = '';
+  API_ENDPOINTS.forEach((ep, i) => {
+    const card = document.createElement('div');
+    card.className = `test-card${i === 0 ? ' active' : ''}`;
+    card.id = `test-card-${i}`;
     card.innerHTML = `
       <div class="test-card-header">
         <span class="method-tag ${ep.method}">${ep.method}</span>
         <span class="test-endpoint">${ep.path.split('?')[0]}</span>
-        <span class="test-status-tag idle" id="badge-${idx}">READY</span>
+        <span class="test-status-tag idle" id="badge-${i}">READY</span>
       </div>
-      <div class="test-desc">${ep.desc}</div>
-    `;
-    card.onclick = () => selectApiTest(idx);
+      <div class="test-desc">${ep.desc}</div>`;
+    card.onclick = () => selectApiTest(i);
     container.appendChild(card);
   });
+  selectApiTest(0);
+  document.getElementById('testSummaryText').textContent = `0/${API_ENDPOINTS.length} Tested`;
 }
 
-function selectApiTest(idx) {
-  activeTestIndex = idx;
-  document.querySelectorAll(".test-card").forEach(c => c.classList.remove("active"));
-  const activeCard = document.getElementById(`test-card-${idx}`);
-  if (activeCard) activeCard.classList.add("active");
-
-  const ep = API_ENDPOINTS[idx];
-  document.getElementById("detailHeader").textContent = `${ep.method} ${ep.path}`;
-  document.getElementById("detailUrl").value = `${API}${ep.path}`;
+function selectApiTest(i) {
+  activeTestIndex = i;
+  document.querySelectorAll('.test-card').forEach(c => c.classList.remove('active'));
+  const c = document.getElementById(`test-card-${i}`);
+  if (c) c.classList.add('active');
+  const ep = API_ENDPOINTS[i];
+  document.getElementById('detailHeader').textContent = `${ep.method} ${ep.path}`;
+  document.getElementById('detailUrl').value = `${API}${ep.path}`;
 }
 
 async function runSelectedApiTest() {
-  const ep = API_ENDPOINTS[activeTestIndex];
-  const url = document.getElementById("detailUrl").value;
+  const ep  = API_ENDPOINTS[activeTestIndex];
+  const url = document.getElementById('detailUrl').value;
   const badge = document.getElementById(`badge-${activeTestIndex}`);
-
-  badge.className = "test-status-tag idle";
-  badge.textContent = "RUNNING";
-
+  badge.className = 'test-status-tag idle';
+  badge.textContent = 'RUNNING';
   const t0 = performance.now();
   try {
     const res = await fetch(url, { method: ep.method });
     const elapsed = Math.round(performance.now() - t0);
     const data = await res.json();
-    const sizeKb = (JSON.stringify(data).length / 1024).toFixed(1);
-
-    document.getElementById("detailStatus").textContent = `${res.status} ${res.statusText || 'OK'}`;
-    document.getElementById("detailStatus").style.color = res.ok ? "var(--green)" : "var(--rose)";
-    document.getElementById("detailTime").textContent = `${elapsed} ms`;
-    document.getElementById("detailSize").textContent = `${sizeKb} KB`;
-
-    document.getElementById("detailJson").textContent = JSON.stringify(data, null, 2);
-
+    const kb = (JSON.stringify(data).length / 1024).toFixed(1);
+    document.getElementById('detailStatus').textContent = `${res.status} ${res.statusText || 'OK'}`;
+    document.getElementById('detailStatus').style.color = res.ok ? 'var(--green)' : 'var(--rose)';
+    document.getElementById('detailTime').textContent = `${elapsed}ms`;
+    document.getElementById('detailSize').textContent = `${kb} KB`;
+    document.getElementById('detailJson').textContent = JSON.stringify(data, null, 2);
     badge.className = `test-status-tag ${res.ok ? 'ok' : 'err'}`;
-    badge.textContent = `${res.status} OK`;
-    showToast(`Test ${ep.method} ${ep.path.split('?')[0]} passed! (${elapsed}ms)`, "success");
+    badge.textContent = `${res.status}`;
+    showToast(`${ep.method} ${ep.path.split('?')[0]}: ${res.status} (${elapsed}ms)`, res.ok ? 'success' : 'error');
   } catch (e) {
-    document.getElementById("detailStatus").textContent = "ERR";
-    document.getElementById("detailStatus").style.color = "var(--rose)";
-    document.getElementById("detailJson").textContent = `Error: ${e.message}`;
-    badge.className = "test-status-tag err";
-    badge.textContent = "FAILED";
-    showToast(`Test failed: ${e.message}`, "error");
+    document.getElementById('detailStatus').textContent = 'ERR';
+    document.getElementById('detailStatus').style.color = 'var(--rose)';
+    document.getElementById('detailJson').textContent = `Error: ${e.message}`;
+    badge.className = 'test-status-tag err';
+    badge.textContent = 'FAIL';
+    showToast(`Test failed: ${e.message}`, 'error');
   }
 }
 
@@ -1413,310 +1253,98 @@ async function runAllApiTests() {
     selectApiTest(i);
     const ep = API_ENDPOINTS[i];
     const badge = document.getElementById(`badge-${i}`);
-    badge.className = "test-status-tag idle";
-    badge.textContent = "TESTING";
-
+    badge.className = 'test-status-tag idle'; badge.textContent = 'TESTING';
     const t0 = performance.now();
     try {
       const res = await fetch(`${API}${ep.path}`, { method: ep.method });
       const elapsed = Math.round(performance.now() - t0);
       const data = await res.json();
-      const sizeKb = (JSON.stringify(data).length / 1024).toFixed(1);
-
-      document.getElementById("detailStatus").textContent = `${res.status} OK`;
-      document.getElementById("detailTime").textContent = `${elapsed} ms`;
-      document.getElementById("detailSize").textContent = `${sizeKb} KB`;
-      document.getElementById("detailJson").textContent = JSON.stringify(data, null, 2);
-
-      if (res.ok) {
-        badge.className = "test-status-tag ok";
-        badge.textContent = `${res.status} OK`;
-        passed++;
-      } else {
-        badge.className = "test-status-tag err";
-        badge.textContent = `${res.status} ERR`;
-      }
-    } catch (e) {
-      badge.className = "test-status-tag err";
-      badge.textContent = "FAIL";
+      const kb = (JSON.stringify(data).length / 1024).toFixed(1);
+      document.getElementById('detailStatus').textContent = `${res.status}`;
+      document.getElementById('detailTime').textContent = `${elapsed}ms`;
+      document.getElementById('detailSize').textContent = `${kb} KB`;
+      document.getElementById('detailJson').textContent = JSON.stringify(data, null, 2);
+      badge.className = `test-status-tag ${res.ok ? 'ok' : 'err'}`;
+      badge.textContent = res.ok ? `${res.status}` : `${res.status} ERR`;
+      if (res.ok) passed++;
+    } catch(e) {
+      badge.className = 'test-status-tag err'; badge.textContent = 'FAIL';
     }
-    document.getElementById("testSummaryText").textContent = `${passed}/${API_ENDPOINTS.length} Passed`;
-    await new Promise(r => setTimeout(r, 120));
+    document.getElementById('testSummaryText').textContent = `${passed}/${API_ENDPOINTS.length} Passed`;
+    await new Promise(r => setTimeout(r, 100));
   }
-  showToast(`Completed! ${passed}/${API_ENDPOINTS.length} APIs passed with 200 OK`, "success");
+  showToast(`All done: ${passed}/${API_ENDPOINTS.length} passed`, 'success');
 }
 
 function resetTestStatus() {
-  API_ENDPOINTS.forEach((_, idx) => {
-    const badge = document.getElementById(`badge-${idx}`);
-    badge.className = "test-status-tag idle";
-    badge.textContent = "READY";
+  API_ENDPOINTS.forEach((_, i) => {
+    const b = document.getElementById(`badge-${i}`);
+    b.className = 'test-status-tag idle'; b.textContent = 'READY';
   });
-  document.getElementById("testSummaryText").textContent = `0/${API_ENDPOINTS.length} Tested`;
+  document.getElementById('testSummaryText').textContent = `0/${API_ENDPOINTS.length} Tested`;
 }
 
-// ---------------------------------------------------------------------------
-// 8. WEBSOCKET TEST CONSOLE (TAB 5)
-// ---------------------------------------------------------------------------
-function updateWsPreset() {
-  const sel = document.getElementById("wsSelector").value;
-  const input = document.getElementById("wsMessageInput");
-
-  if (sel === "/ws/ocean-stream") {
-    input.value = JSON.stringify({
-      lat_min: 10.0,
-      lat_max: 16.0,
-      lon_min: 75.0,
-      lon_max: 85.0,
-      depth_min: 0.0,
-      depth_max: 10.0,
-      time: selectedDate,
-      variable: "thetao"
-    }, null, 2);
-  } else {
-    input.value = JSON.stringify({
-      location: "chennai",
-      variable: "thetao"
-    }, null, 2);
-  }
-}
-
-function sendCustomWsMessage() {
-  const ep = document.getElementById("wsSelector").value;
-  const text = document.getElementById("wsMessageInput").value;
-  const wsUrl = isHttp ? `${wsProto}//${window.location.host}${ep}` : `ws://localhost:8000${ep}`;
-
-  if (customWs) customWs.close();
-
-  appendWsLog(`\n[CONNECTING] ${wsUrl}...`);
-  customWs = new WebSocket(wsUrl);
-
-  customWs.onopen = () => {
-    appendWsLog(`[CONNECTED] Sending message:\n${text}`);
-    customWs.send(text);
-  };
-
-  customWs.onmessage = (e) => {
-    appendWsLog(`[RECEIVED]:\n${e.data}`);
-  };
-
-  customWs.onerror = (e) => appendWsLog(`[ERROR]: ${e.message || 'WebSocket Error'}`);
-  customWs.onclose = () => appendWsLog(`[CLOSED]`);
-}
-
-function appendWsLog(msg) {
-  const box = document.getElementById("wsLogBox");
-  box.textContent += `\n${msg}`;
-  box.scrollTop = box.scrollHeight;
-}
-
-function clearWsLog() {
-  document.getElementById("wsLogBox").textContent = "// WebSocket Log Cleared.";
-}
-
-// ---------------------------------------------------------------------------
-// 9. UI HELPERS & COVERAGE STRIP
-// ---------------------------------------------------------------------------
-let serverDateInfo = null;
-
-async function initDateControls() {
-  const d = getCalculatedDates();
-  selectedDate = d.yesterday;
-
-  const dateInput = document.getElementById("dateInput");
-  const tlStart = document.getElementById("tlStart");
-  const tlEnd = document.getElementById("tlEnd");
-
-  if (dateInput) {
-    dateInput.value = d.yesterday;
-    dateInput.max = d.yesterday;
-    dateInput.min = "1993-01-01";
-  }
-
-  if (tlStart) tlStart.value = d.weekAgo;
-  if (tlEnd) {
-    tlEnd.value = d.yesterday;
-    tlEnd.max = d.yesterday;
-    tlEnd.min = "1993-01-01";
-  }
-
-  try {
-    const res = await fetch(`${API}/api/date-info`);
-    if (res.ok) {
-      serverDateInfo = await res.json();
-      if (serverDateInfo.latest_available) {
-        selectedDate = serverDateInfo.latest_available;
-        if (dateInput) {
-          dateInput.value = serverDateInfo.latest_available;
-          dateInput.max = serverDateInfo.latest_available;
-        }
-        if (tlEnd) {
-          tlEnd.value = serverDateInfo.latest_available;
-          tlEnd.max = serverDateInfo.latest_available;
-        }
-        if (tlStart && serverDateInfo.presets && serverDateInfo.presets["7d"]) {
-          tlStart.value = serverDateInfo.presets["7d"].start;
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("Could not fetch /api/date-info, using calculated fallback:", err);
-  }
-}
-
-function setTimePreset(preset) {
-  const d = getCalculatedDates();
-  const dateInput = document.getElementById("dateInput");
-  let target = d.yesterday;
-  if (preset === "yesterday") target = serverDateInfo?.yesterday || d.yesterday;
-  else if (preset === "7d") target = serverDateInfo?.presets?.["7d"]?.start || d.weekAgo;
-  else if (preset === "30d") target = serverDateInfo?.presets?.["30d"]?.start || d.monthAgo;
-  else if (preset === "1y") target = serverDateInfo?.presets?.["1y"]?.start || d.yearAgo;
-
-  selectedDate = target;
-  if (dateInput) dateInput.value = target;
-  showToast(`Time slice set to ${preset.toUpperCase()}: ${target}`, "info");
-  onViewportChanged();
-}
-
-function setTimelinePreset(preset) {
-  const d = getCalculatedDates();
-  const tlStart = document.getElementById("tlStart");
-  const tlEnd = document.getElementById("tlEnd");
-
-  let end = serverDateInfo?.latest_available || d.yesterday;
-  let start = d.weekAgo;
-
-  if (preset === "yesterday") {
-    start = end;
-  } else if (preset === "7d") {
-    start = serverDateInfo?.presets?.["7d"]?.start || d.weekAgo;
-  } else if (preset === "30d") {
-    start = serverDateInfo?.presets?.["30d"]?.start || d.monthAgo;
-  } else if (preset === "1y") {
-    start = serverDateInfo?.presets?.["1y"]?.start || d.yearAgo;
-  }
-
-  if (tlStart) tlStart.value = start;
-  if (tlEnd) tlEnd.value = end;
-  showToast(`Timeline range set to ${preset.toUpperCase()} (${start} to ${end})`, "info");
-  runTimelineQuery();
-}
-
-function initControls() {
-  initDateControls();
-
-  const slider = document.getElementById("depthSlider");
-  const label = document.getElementById("depthLabel");
-  const dateInput = document.getElementById("dateInput");
-
-  slider.addEventListener("input", (e) => {
-    depthMax = parseFloat(e.target.value);
-    depthMin = 0.0;
-    label.textContent = `0–${depthMax.toFixed(0)}m`;
-    document.getElementById("stripRangeText").textContent = `0–${depthMax.toFixed(0)}m`;
-    onViewportChanged();
-  });
-
-  dateInput.addEventListener("change", (e) => {
-    selectedDate = e.target.value;
-    onViewportChanged();
-  });
-}
-
-function buildMemoryGrid() {
-  const container = document.getElementById("memoryGrid");
-  container.innerHTML = "";
-  for (let i = 0; i < 25; i++) {
-    const d0 = i * 2;
-    const cell = document.createElement("div");
-    cell.className = "mem-cell ON_DISK";
-    cell.textContent = `${d0}`;
-    cell.title = `Depth ${d0}–${d0+2}m: ON_DISK (L2)`;
-    container.appendChild(cell);
-  }
-}
-
-async function refreshCoverageStrip() {
-  if (!leafletMap) return;
-  const b = leafletMap.getBounds();
-  const url = `${API}/ocean/coverage?lat_min=${b.getSouth()}&lat_max=${b.getNorth()}&lon_min=${b.getWest()}&lon_max=${b.getEast()}`;
-
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return;
-    const data = await res.json();
-    const strip = document.getElementById("stripCells");
-    strip.innerHTML = "";
-
-    const activeBuckets = Math.ceil(depthMax / 2);
-    for (let i = 0; i < activeBuckets; i++) {
-      const block = document.createElement("div");
-      block.className = "strip-block";
-      block.style.background = "var(--green)";
-      strip.appendChild(block);
-    }
-  } catch (e) {}
-}
-
-function updateColorbar() {
-  const canvas = document.getElementById("cbCanvas");
-  const ctx = canvas.getContext("2d");
-  canvas.width = 160;
-  canvas.height = 10;
-
-  const grad = ctx.createLinearGradient(0, 0, 160, 0);
-  for (let i = 0; i <= 10; i++) {
-    grad.addColorStop(i / 10, COLOR_RAMP(i / 10).hex());
-  }
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 160, 10);
-
-  document.getElementById("cbMin").textContent = `${globalColorMin.toFixed(1)}°C`;
-  document.getElementById("cbMax").textContent = `${globalColorMax.toFixed(1)}°C`;
-}
-
+/* ========================================================
+   CACHE / HEALTH
+   ======================================================== */
 async function checkApiHealth() {
   try {
     const res = await fetch(`${API}/`);
-    if (res.ok) {
-      document.getElementById("apiDot").className = "dot online";
-      document.getElementById("apiStatus").textContent = "API Ready";
-    }
-  } catch (e) {
-    document.getElementById("apiDot").className = "dot offline";
-    document.getElementById("apiStatus").textContent = "API Offline";
+    if (res.ok) { setDot('apiDot', 'online'); setTxt('apiStatus', 'API Ready'); }
+    else         { setDot('apiDot', 'offline'); setTxt('apiStatus', `API ${res.status}`); }
+  } catch(e)   { setDot('apiDot', 'offline'); setTxt('apiStatus', 'API Offline'); }
+}
+
+async function loadCacheStats() {
+  try {
+    const res = await fetch(`${API}/api/cache-stats`);
+    const data = await res.json();
+    document.getElementById('cacheStatsJson').textContent = JSON.stringify(data, null, 2);
+  } catch(e) {
+    document.getElementById('cacheStatsJson').textContent = `Error: ${e.message}`;
   }
+}
+
+async function updateCacheStats() {
+  await loadCacheStats();
+  setTimeout(updateCacheStats, 30000);   // auto-refresh every 30s
 }
 
 async function flushCache() {
   try {
-    await fetch(`${API}/api/cache-clear`, { method: "POST" });
-    showToast("L1 RAM cache cleared", "success");
-    addLog("info", "[CACHE] L1 cache flushed by user");
-  } catch (e) {
-    showToast("Failed to clear cache", "error");
-  }
+    await fetch(`${API}/api/cache-clear`, { method: 'POST' });
+    showToast('L1 RAM cache flushed', 'success');
+    addLog('info', '[CACHE] L1 flushed by user');
+    loadCacheStats();
+  } catch(e) { showToast(`Flush failed: ${e.message}`, 'error'); }
 }
 
+/* ========================================================
+   UTILITY
+   ======================================================== */
+function setDot(id, cls) { const d = document.getElementById(id); if(d) d.className = `dot ${cls}`; }
+function setTxt(id, t)   { const e = document.getElementById(id); if(e) e.textContent = t; }
+
 function addLog(type, text) {
-  const out = document.getElementById("logOutput");
+  const out = document.getElementById('logOutput');
   if (!out) return;
-  const line = document.createElement("div");
+  const line = document.createElement('div');
   line.className = `log-line ${type}`;
   const now = new Date().toISOString().slice(11, 19);
   line.textContent = `${now} ${text}`;
   out.prepend(line);
-  if (out.children.length > 50) out.removeChild(out.lastChild);
+  if (out.children.length > 80) out.removeChild(out.lastChild);
 }
 
-function showToast(msg, type = "success") {
-  const container = document.getElementById("toastContainer");
-  const toast = document.createElement("div");
-  toast.className = `toast ${type}`;
-  toast.textContent = msg;
-  container.appendChild(toast);
-  setTimeout(() => toast.remove(), 3200);
+function clearLog() { document.getElementById('logOutput').innerHTML = ''; }
+
+function showToast(msg, type = 'success') {
+  const container = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.textContent = msg;
+  container.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
 }
 </script>
 </body>
