@@ -473,6 +473,16 @@
         <div id="leaflet-map"></div>
         <canvas id="deckgl-canvas"></canvas>
 
+        <!-- 3D Camera Controls Toolbar (Active in 3D Mode) -->
+        <div id="deck3dToolbar" style="position:absolute;top:16px;left:60px;z-index:1000;display:none;background:rgba(13,21,37,0.92);border:1px solid var(--border-bright);border-radius:8px;padding:6px 10px;gap:8px;align-items:center;backdrop-filter:blur(8px);box-shadow:0 4px 16px rgba(0,0,0,0.5);">
+          <span style="font-size:0.75rem;font-weight:700;color:var(--accent);">🧊 3D Engine:</span>
+          <button class="btn" style="padding:3px 8px;font-size:0.68rem;" onclick="tilt3D(55, 30)">📐 3D Tilt</button>
+          <button class="btn" style="padding:3px 8px;font-size:0.68rem;" onclick="rotate3D(-30)">↺ Rotate L</button>
+          <button class="btn" style="padding:3px 8px;font-size:0.68rem;" onclick="rotate3D(30)">↻ Rotate R</button>
+          <button class="btn" style="padding:3px 8px;font-size:0.68rem;" onclick="reset3DCamera()">🧭 Top-Down</button>
+          <span class="badge" id="deck3dCountBadge">0 columns</span>
+        </div>
+
         <div id="coverageStripOverlay">
           <div class="strip-header">
             <span>Viewport Depth Range: <strong id="stripRangeText">0–10m</strong></span>
@@ -804,16 +814,23 @@ if (document.readyState === "loading") {
 // 2. TAB SWITCHING
 // ---------------------------------------------------------------------------
 function switchTab(tabId, btn) {
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
   document.querySelectorAll(".view-pane").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".tab-btn").forEach(b => {
+    const isTarget = b === btn || (b.getAttribute("onclick") && b.getAttribute("onclick").includes(`'${tabId}'`));
+    b.classList.toggle("active", Boolean(isTarget));
+  });
 
-  const activeBtn = btn || (typeof event !== "undefined" && event ? event.currentTarget : null);
-  if (activeBtn) activeBtn.classList.add("active");
   const target = document.getElementById(`pane-${tabId}`);
   if (target) {
     target.classList.add("active");
     if (tabId === "map" && leafletMap) {
       setTimeout(() => leafletMap.invalidateSize(), 150);
+    }
+    if (tabId === "timeline" && timelineChart) {
+      setTimeout(() => timelineChart.resize(), 150);
+    }
+    if (tabId === "argo" && argoProfileChart) {
+      setTimeout(() => argoProfileChart.resize(), 150);
     }
   }
 }
