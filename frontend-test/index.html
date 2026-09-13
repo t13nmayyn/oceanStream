@@ -17,11 +17,11 @@
   <link rel="preload" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" as="style" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
-  <!-- Deferred Scripts to Eliminate Render-Blocking and Reduce Element Render Delay -->
-  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script defer src="https://unpkg.com/deck.gl@9.0.18/dist.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/chroma-js@2.4.2/chroma.min.js"></script>
+  <!-- Core Libraries (synchronous to guarantee availability before inline scripts) -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/deck.gl@9.0.18/dist.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chroma-js@2.4.2/chroma.min.js"></script>
 
   <style>
     :root {
@@ -696,8 +696,10 @@
 <!-- FRONTEND JAVASCRIPT LOGIC                                    -->
 <!-- ============================================================ -->
 <script>
-const API = "http://localhost:8000";
-const WS_URL = "ws://localhost:8000/ws/ocean-stream";
+const isHttp = window.location.protocol.startsWith("http");
+const API = isHttp ? window.location.origin : "http://localhost:8000";
+const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+const WS_URL = isHttp ? `${wsProto}//${window.location.host}/ws/ocean-stream` : "ws://localhost:8000/ws/ocean-stream";
 
 // App State
 let leafletMap = null;
@@ -734,7 +736,16 @@ let depthMax = 10.0;
 let selectedDate = _initDates.yesterday;
 let globalColorMin = 26.0;
 let globalColorMax = 31.0;
-const COLOR_RAMP = chroma.scale(["#0077b6", "#00b4d8", "#90e0ef", "#ffd166", "#f54375"]).domain([0, 1]);
+
+let COLOR_RAMP = null;
+function initColorRamp() {
+  if (typeof chroma !== "undefined" && chroma.scale) {
+    COLOR_RAMP = chroma.scale(["#0077b6", "#00b4d8", "#90e0ef", "#ffd166", "#f54375"]).domain([0, 1]);
+  } else {
+    COLOR_RAMP = () => ({ hex: () => "#00b4d8" });
+  }
+}
+initColorRamp();
 
 // All 19 APIs catalogue
 const API_ENDPOINTS = [
@@ -762,9 +773,10 @@ const API_ENDPOINTS = [
 let activeTestIndex = 0;
 
 // ---------------------------------------------------------------------------
-// 1. INITIALIZATION
+// 1. INITIALIZATION & BOOTSTRAP
 // ---------------------------------------------------------------------------
-document.addEventListener("DOMContentLoaded", () => {
+function bootApp() {
+  initColorRamp();
   initMap();
   initDeckGL();
   initCharts();
@@ -779,16 +791,24 @@ document.addEventListener("DOMContentLoaded", () => {
   // Load initial timeline & argo search
   runTimelineQuery();
   runArgoNearestSearch();
-});
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bootApp);
+} else {
+  // If DOM is already parsed / interactive
+  bootApp();
+}
 
 // ---------------------------------------------------------------------------
 // 2. TAB SWITCHING
 // ---------------------------------------------------------------------------
-function switchTab(tabId) {
+function switchTab(tabId, btn) {
   document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
   document.querySelectorAll(".view-pane").forEach(p => p.classList.remove("active"));
 
-  event.currentTarget.classList.add("active");
+  const activeBtn = btn || (typeof event !== "undefined" && event ? event.currentTarget : null);
+  if (activeBtn) activeBtn.classList.add("active");
   const target = document.getElementById(`pane-${tabId}`);
   if (target) {
     target.classList.add("active");
@@ -802,32 +822,47 @@ function switchTab(tabId) {
 // 3. LEAFLET MAP & 3D ENGINE
 // ---------------------------------------------------------------------------
 function initMap() {
-  leafletMap = L.map("leaflet-map", {
-    center: [14.5, 80.0],
-    zoom: 6,
-    minZoom: 4,
-    maxZoom: 12,
-  });
+  const mapEl = document.getElementById("leaflet-map");
+  if (!mapEl) return;
+  if (typeof L === "undefined") {
+    console.error("Leaflet library (L) is not loaded.");
+    addLog("fetch", "[ERROR] Leaflet library not loaded. Check network connection.");
+    return;
+  }
+  try {
+    leafletMap = L.map("leaflet-map", {
+      center: [14.5, 80.0],
+      zoom: 6,
+      minZoom: 4,
+      maxZoom: 12,
+    });
 
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-    attribution: "&copy; OpenStreetMap &copy; CARTO",
-    subdomains: "abcd",
-    maxZoom: 19,
-  }).addTo(leafletMap);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      attribution: "&copy; OpenStreetMap &copy; CARTO",
+      subdomains: "abcd",
+      maxZoom: 19,
+    }).addTo(leafletMap);
 
-  mapLayerGroup = L.layerGroup().addTo(leafletMap);
-  argoMarkersGroup = L.layerGroup().addTo(leafletMap);
+    mapLayerGroup = L.layerGroup().addTo(leafletMap);
+    argoMarkersGroup = L.layerGroup().addTo(leafletMap);
 
-  // Pan / Zoom triggers demand-paging WebSocket stream
-  leafletMap.on("moveend zoomend", () => {
-    onViewportChanged();
-    if (is3DMode) syncDeckView();
-  });
+    // Pan / Zoom triggers demand-paging WebSocket stream
+    leafletMap.on("moveend zoomend", () => {
+      onViewportChanged();
+      if (is3DMode) syncDeckView();
+    });
 
-  // Map Click triggers GET /ocean/point inspection!
-  leafletMap.on("click", (e) => {
-    inspectOceanPoint(e.latlng.lat, e.latlng.lng);
-  });
+    // Map Click triggers GET /ocean/point inspection!
+    leafletMap.on("click", (e) => {
+      inspectOceanPoint(e.latlng.lat, e.latlng.lng);
+    });
+
+    setTimeout(() => {
+      if (leafletMap) leafletMap.invalidateSize();
+    }, 200);
+  } catch (err) {
+    console.error("Failed to initialize Leaflet map:", err);
+  }
 }
 
 function onViewportChanged() {
@@ -993,6 +1028,7 @@ function mergeGridData(newGrid) {
 }
 
 function renderGridOnLeaflet() {
+  if (!mapLayerGroup) return;
   mapLayerGroup.clearLayers();
   const step = Math.max(1, Math.floor(currentGridPoints.length / 500));
 
@@ -1001,7 +1037,7 @@ function renderGridOnLeaflet() {
     if (pt.value === null || pt.value === undefined) continue;
 
     const norm = Math.max(0, Math.min(1, (pt.value - globalColorMin) / (globalColorMax - globalColorMin)));
-    const color = COLOR_RAMP(norm).hex();
+    const color = COLOR_RAMP ? COLOR_RAMP(norm).hex() : "#00b4d8";
 
     const circle = L.circleMarker([pt.lat, pt.lon], {
       radius: 5,
@@ -1084,7 +1120,8 @@ function renderDeckGLLayers() {
     getElevation: d => Math.max(1, (d.value - globalColorMin) * 25),
     getFillColor: d => {
       const norm = Math.max(0, Math.min(1, (d.value - globalColorMin) / (globalColorMax - globalColorMin)));
-      const rgb = chroma(COLOR_RAMP(norm).hex()).rgb();
+      const hex = COLOR_RAMP ? COLOR_RAMP(norm).hex() : "#00b4d8";
+      const rgb = typeof chroma !== "undefined" ? chroma(hex).rgb() : [0, 180, 216];
       return [rgb[0], rgb[1], rgb[2], 210];
     },
     pickable: true,
@@ -1097,25 +1134,34 @@ function renderDeckGLLayers() {
 // 6. CHARTS (TIMELINE & ARGO PROFILE)
 // ---------------------------------------------------------------------------
 function initCharts() {
+  if (typeof Chart === "undefined") {
+    console.warn("Chart.js is not loaded.");
+    return;
+  }
   // Timeline Chart
-  const ctxTl = document.getElementById("timelineChart").getContext("2d");
-  timelineChart = new Chart(ctxTl, {
-    type: "line",
-    data: { labels: [], datasets: [] },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        x: { grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" } },
-        y: { grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" } },
-      },
-      plugins: { legend: { labels: { color: "#d4e3f7" } } }
-    }
-  });
+  const tlEl = document.getElementById("timelineChart");
+  if (tlEl) {
+    const ctxTl = tlEl.getContext("2d");
+    timelineChart = new Chart(ctxTl, {
+      type: "line",
+      data: { labels: [], datasets: [] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" } },
+          y: { grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" } },
+        },
+        plugins: { legend: { labels: { color: "#d4e3f7" } } }
+      }
+    });
+  }
 
   // Argo Profile Chart
-  const ctxArgo = document.getElementById("argoProfileChart").getContext("2d");
-  argoProfileChart = new Chart(ctxArgo, {
+  const argoEl = document.getElementById("argoProfileChart");
+  if (argoEl) {
+    const ctxArgo = argoEl.getContext("2d");
+    argoProfileChart = new Chart(ctxArgo, {
     type: "line",
     data: {
       labels: [],
@@ -1146,6 +1192,7 @@ function initCharts() {
       plugins: { legend: { labels: { color: "#d4e3f7" } } }
     }
   });
+  }
 }
 
 // Fetch and render GET /ocean/timeline
@@ -1420,7 +1467,7 @@ function updateWsPreset() {
 function sendCustomWsMessage() {
   const ep = document.getElementById("wsSelector").value;
   const text = document.getElementById("wsMessageInput").value;
-  const wsUrl = `ws://localhost:8000${ep}`;
+  const wsUrl = isHttp ? `${wsProto}//${window.location.host}${ep}` : `ws://localhost:8000${ep}`;
 
   if (customWs) customWs.close();
 

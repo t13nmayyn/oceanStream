@@ -21,16 +21,22 @@ import asyncio
 import logging
 import math
 import os
+import sys
 import time
 from datetime import date as _date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
 import numpy as np
 import xarray as xr
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 # ---------------------------------------------------------------------------
 # Env / dotenv
@@ -92,6 +98,16 @@ app.add_middleware(
     allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
 )
+
+FRONTEND_DIR = ROOT_DIR / "frontend-test"
+if FRONTEND_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+
+    @app.get("/ui", include_in_schema=False)
+    @app.get("/test", include_in_schema=False)
+    @app.get("/index.html", include_in_schema=False)
+    def serve_frontend_ui():
+        return FileResponse(FRONTEND_DIR / "index.html")
 
 # ==============================================================================
 # L1 in-memory cache  (key → {data, ts})
@@ -487,12 +503,18 @@ def _schedule_prefetch(lat: float, lon: float, depth: float, date_str: str):
 # ==============================================================================
 
 @app.get("/")
-def root():
+def root(request: Request):
+    accept = request.headers.get("accept", "")
+    frontend_index = FRONTEND_DIR / "index.html"
+    if accept.startswith("text/html") and frontend_index.exists():
+        return FileResponse(frontend_index)
     return {
         "service":  "oceanStream API",
         "version":  "3.0.0",
         "status":   "online",
+        "ui":       "/ui",
         "endpoints": {
+            "GET /ui":              "Interactive Web Dashboard & 3D Map UI",
             "GET /ocean/point":     "Click-to-query: physics + BGC + nearest Argo float",
             "GET /ocean/snapshot":  "Bbox grid payload for map / rendering",
             "GET /ocean/timeline":  "Time-series at a point or region (charts)",
