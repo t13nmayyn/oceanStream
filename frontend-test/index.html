@@ -3,44 +3,45 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>oceanStream — Debug Testbench</title>
-  <meta name="description" content="Internal debug testbench for oceanStream API — raw data inspector, 3D renderer, API tester." />
+  <title>oceanStream — 3D Cesium Ocean Globe & API Test Suite</title>
 
-  <!-- Google Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <!-- Preconnect & DNS-Prefetch for Fast CDN and Tiles -->
+  <link rel="preconnect" href="https://unpkg.com" crossorigin />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="preconnect" href="https://basemaps.cartocdn.com" crossorigin />
+  <link rel="dns-prefetch" href="https://basemaps.cartocdn.com" />
 
-  <!-- Deck.gl (standalone build — no React needed) -->
-  <script src="https://unpkg.com/deck.gl@latest/dist.min.js"></script>
-
-  <!-- Chart.js -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-
-  <!-- chroma.js for color ramps -->
-  <script src="https://cdn.jsdelivr.net/npm/chroma-js@2/chroma.min.js"></script>
+  <!-- Leaflet & Chart.js -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chroma-js@2.4.2/chroma.min.js"></script>
 
   <style>
     /* =========================================================
        DESIGN TOKENS
        ========================================================= */
     :root {
-      --bg:        #050d1a;
-      --surface:   #0a1628;
-      --surface-2: #0f1e35;
-      --surface-3: #162442;
-      --border:    #1e3055;
-      --accent:    #00c8ff;
-      --accent-2:  #7b5af5;
-      --green:     #00e08c;
-      --rose:      #f54375;
-      --amber:     #ffd166;
-      --text:      #d4e3f7;
-      --muted:     #6b83a6;
-      --mono:      'JetBrains Mono', monospace;
-      --sans:      'Inter', sans-serif;
+      --bg:            #06090f;
+      --surface:       #0d1525;
+      --surface-2:     #111d35;
+      --surface-3:     #172647;
+      --border:        #1e3055;
+      --border-bright: #2d4880;
+      --text:          #d4e3f7;
+      --muted:         #6b83a6;
+      --accent:        #00c8ff;
+      --accent-2:      #7b5af5;
+      --green:         #00e08c;
+      --amber:         #f5a623;
+      --orange:        #ff7700;
+      --rose:          #f54375;
+      --dark-page:     #121b2d;
+      --mono:          'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
     }
 
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; overflow: hidden; }
 
     body {
       font-family: var(--sans);
@@ -69,23 +70,49 @@
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
     .dot.online  { background: var(--green); box-shadow: 0 0 6px var(--green); }
     .dot.offline { background: var(--rose); }
-    .dot.pending { background: var(--amber); animation: pulse 1s ease-in-out infinite; }
-    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-    .status-label { font-size: 0.68rem; color: var(--muted); }
+    .dot.pulse   { background: var(--amber); animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.85)} }
 
-    /* =========================================================
-       MAIN LAYOUT  (sidebar + content)
-       ========================================================= */
-    .layout { display: flex; flex: 1; overflow: hidden; height: calc(100vh - 49px); }
+    .topbar-right { display: flex; gap: 10px; align-items: center; margin-left: auto; }
+    .btn {
+      padding: 5px 12px; border-radius: 6px; font-size: 0.74rem; font-weight: 600;
+      border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+      cursor: pointer; transition: all .15s; display: inline-flex; align-items: center; gap: 5px;
+    }
+    .btn:hover { border-color: var(--accent); color: var(--accent); }
+    .btn.primary { background: #0077b6; border-color: var(--accent); color: #fff; }
+    .btn.primary:hover { background: var(--accent); color: #000; }
+    .btn.success { background: rgba(0,224,140,0.15); border-color: var(--green); color: var(--green); }
+    .btn.danger { background: rgba(245,67,117,0.12); border-color: var(--rose); color: var(--rose); }
 
-    /* ---- Left sidebar: tabs ---- */
-    .sidebar {
-      width: 200px;
-      flex-shrink: 0;
+    /* ── Content Panes ── */
+    #main-content {
+      position: relative;
+      height: 100%;
+      overflow: hidden;
+    }
+    .view-pane {
+      display: none;
+      height: 100%;
+      width: 100%;
+    }
+    .view-pane.active {
+      display: grid;
+    }
+
+    /* ── TAB 1: MAP & 3D ENGINE ── */
+    #pane-map {
+      grid-template-columns: 360px 1fr;
+      height: 100%;
+    }
+    .map-sidebar {
+      background: var(--surface);
       border-right: 1px solid var(--border);
       background: var(--surface);
       display: flex;
       flex-direction: column;
+      gap: 12px;
+      z-index: 20;
     }
     .sidebar-btn {
       padding: 12px 16px;
@@ -137,28 +164,150 @@
       color: var(--accent);
       border: 1px solid rgba(0,200,255,0.2);
     }
-    .badge.green  { background: rgba(0,224,140,0.1); color: var(--green); border-color: rgba(0,224,140,0.2); }
-    .badge.rose   { background: rgba(245,67,117,0.1); color: var(--rose);  border-color: rgba(245,67,117,0.2); }
-    .badge.amber  { background: rgba(255,209,102,0.1); color: var(--amber); border-color: rgba(255,209,102,0.2); }
-    .badge.purple { background: rgba(123,90,245,0.15); color: var(--accent-2); border-color: rgba(123,90,245,0.25); }
+    .panel-body { padding: 10px 12px; }
 
-    /* =========================================================
-       FORM CONTROLS
-       ========================================================= */
-    .form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
-    .field { display: flex; flex-direction: column; gap: 4px; }
-    .field label { font-size: 0.65rem; color: var(--muted); font-family: var(--mono); }
-    .field input, .field select {
-      padding: 6px 10px;
+    .ctrl-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .ctrl-row label { color: var(--muted); font-size: 0.72rem; }
+    input[type="range"] { accent-color: var(--accent); cursor: pointer; flex: 1; }
+    input[type="date"], input[type="text"], input[type="number"], select {
+      background: var(--surface-3); color: var(--text); border: 1px solid var(--border);
+      padding: 4px 8px; border-radius: 5px; font-size: 0.75rem; font-family: var(--mono); outline: none;
+    }
+    input:focus, select:focus { border-color: var(--accent); }
+
+    /* Map & Cesium Wrapper */
+    #map-wrapper {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+
+    #cesiumContainer {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: block;
+    }
+
+    #leaflet-map {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: none;
+    }
+
+    /* Cesium UI adjustments */
+    .cesium-viewer-bottom { display: none !important; }
+    .cesium-credit-logoContainer, .cesium-credit-textContainer { display: none !important; }
+
+    /* Top Overlay Controls on Map */
+    #globeHUDOverlay {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      z-index: 1000;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: rgba(13,21,37,0.88);
       border: 1px solid var(--border);
+      padding: 6px 10px;
+      border-radius: 8px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+
+    .engine-btn {
+      padding: 4px 10px;
       border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .engine-btn:hover { color: #fff; border-color: var(--border-bright); }
+    .engine-btn.active { background: #0077b6; border-color: var(--accent); color: #fff; font-weight: 700; }
+
+    #globePresetsOverlay {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      z-index: 1000;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      background: rgba(13,21,37,0.88);
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      border-radius: 8px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    .preset-btn {
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--surface-3);
+      color: var(--text);
+      font-size: 0.68rem;
+      cursor: pointer;
+    }
+    .preset-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Floating Globe Navigation & Zoom Controls */
+    #globeZoomControls {
+      position: absolute;
+      top: 60px;
+      left: 14px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      background: rgba(13,21,37,0.88);
+      border: 1px solid var(--border);
+      padding: 4px;
+      border-radius: 8px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    .zoom-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
       background: var(--surface-2);
       color: var(--text);
-      font-family: var(--mono);
-      font-size: 0.78rem;
-      outline: none;
-      min-width: 90px;
-      transition: border-color 0.15s;
+      font-size: 0.95rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+    }
+    .zoom-btn:hover { background: var(--accent); color: #000; border-color: var(--accent); }
+
+    /* Memory Grid */
+    .coverage-legend { display: flex; gap: 8px; font-size: 0.68rem; margin-bottom: 6px; flex-wrap: wrap; }
+    .leg-item { display: flex; align-items: center; gap: 4px; }
+    .leg-box { width: 9px; height: 9px; border-radius: 2px; }
+    .leg-box.resident { background: var(--green); }
+    .leg-box.ondisk { background: var(--amber); }
+    .leg-box.fetching { background: var(--orange); animation: pulse 0.8s infinite; }
+    .leg-box.notfetched { background: var(--dark-page); border: 1px solid var(--border); }
+
+    .memory-grid {
+      display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px;
+      background: rgba(0,0,0,0.3); padding: 6px; border-radius: 6px; border: 1px solid var(--border);
     }
     .field input:focus, .field select:focus { border-color: var(--accent); }
 
@@ -198,12 +347,16 @@
       display: flex; gap: 6px; align-items: center;
       pointer-events: none;
     }
-    #deckgl-info {
-      position: absolute;
-      bottom: 10px; left: 12px;
-      font-family: var(--mono);
-      font-size: 0.62rem;
-      color: var(--muted);
+    #colorbar canvas { width: 100%; height: 10px; border-radius: 2px; margin: 3px 0; }
+    .cb-labels { display: flex; justify-content: space-between; color: var(--muted); font-family: var(--mono); font-size: 0.62rem; }
+
+    /* Map Click Point Modal / Floating Card */
+    #pointInspector {
+      position: absolute; top: 60px; right: 16px; width: 340px;
+      background: rgba(13,21,37,0.96); border: 1px solid var(--border-bright);
+      border-radius: 9px; padding: 12px; z-index: 2000;
+      backdrop-filter: blur(8px); box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+      display: none;
     }
     /* Colorbar */
     .colorbar-row { display: flex; align-items: center; gap: 8px; font-size: 0.62rem; font-family: var(--mono); color: var(--muted); }
@@ -369,6 +522,34 @@
   </style>
 </head>
 <body>
+<div id="app">
+
+  <!-- ======================================================= -->
+  <!-- TOPBAR: GLOBAL NAVIGATION & STATUS                      -->
+  <!-- ======================================================= -->
+  <div id="topbar">
+    <div class="brand">
+      🌊 oceanStream <span class="brand-tag">3D CESIUM GLOBE & API SUITE</span>
+    </div>
+    <div class="sep"></div>
+
+    <div class="nav-tabs">
+      <button class="tab-btn active" onclick="switchTab('map')">
+        <span class="tab-icon">🌐</span> 3D Ocean Globe & Map
+      </button>
+      <button class="tab-btn" onclick="switchTab('timeline')">
+        <span class="tab-icon">📈</span> Timeline Analytics
+      </button>
+      <button class="tab-btn" onclick="switchTab('argo')">
+        <span class="tab-icon">🎯</span> Argo & In-Situ
+      </button>
+      <button class="tab-btn" onclick="switchTab('tester')">
+        <span class="tab-icon">🧪</span> All APIs Test Runner
+      </button>
+      <button class="tab-btn" onclick="switchTab('ws')">
+        <span class="tab-icon">⚡</span> WebSocket Console
+      </button>
+    </div>
 
 <!-- ============================================================ -->
 <!-- HEADER                                                       -->
@@ -386,110 +567,249 @@
   </div>
 </header>
 
-<!-- ============================================================ -->
-<!-- LAYOUT                                                       -->
-<!-- ============================================================ -->
-<div class="layout">
+  <!-- ======================================================= -->
+  <!-- MAIN PANES                                              -->
+  <!-- ======================================================= -->
+  <div id="main-content">
 
-  <!-- Sidebar tabs -->
-  <nav class="sidebar">
-    <button class="sidebar-btn active" onclick="switchPane('query',this)">🔍 Query &amp; 3D</button>
-    <button class="sidebar-btn" onclick="switchPane('argo',this)">🛰 Argo Floats</button>
-    <button class="sidebar-btn" onclick="switchPane('prewarm',this)">🔥 Pre-warm</button>
-    <button class="sidebar-btn" onclick="switchPane('apitests',this)">🧪 API Tests</button>
-    <button class="sidebar-btn" onclick="switchPane('wsconsole',this)">📡 WS Console</button>
-    <button class="sidebar-btn" onclick="switchPane('log',this)">📋 Log</button>
-  </nav>
+    <!-- ── TAB 1: MAP & 3D CESIUM GLOBE ── -->
+    <div id="pane-map" class="view-pane active">
+      <div class="map-sidebar">
 
-  <div class="content">
-
-    <!-- ======================================================= -->
-    <!-- PANE 1: COORDINATE QUERY + 3D                           -->
-    <!-- ======================================================= -->
-    <div class="pane active" id="pane-query">
-
-      <!-- Query Form -->
-      <div class="card">
-        <div class="card-title">📍 Coordinate Query</div>
-        <div class="form-row">
-          <div class="field"><label>Latitude</label><input type="number" id="qLat" value="13.08" step="0.01" min="-90" max="90" /></div>
-          <div class="field"><label>Longitude</label><input type="number" id="qLon" value="80.27" step="0.01" min="-180" max="180" /></div>
-          <div class="field"><label>Depth (m)</label><input type="number" id="qDepth" value="0" step="1" min="0" max="6000" /></div>
-          <div class="field"><label>Date (YYYY-MM-DD)</label><input type="date" id="qDate" /></div>
-          <button class="btn primary" id="qSubmitBtn" onclick="runCoordQuery()">▶ Query</button>
-          <button class="btn" onclick="querySnapshot()">🗺 Snapshot</button>
+        <!-- Controls -->
+        <div class="panel">
+          <div class="panel-header">
+            🕹️ Viewport & Layer Controls
+          </div>
+          <div class="panel-body">
+            <div class="ctrl-row">
+              <label>Depth (0–50m):</label>
+              <input type="range" id="depthSlider" min="2" max="50" step="2" value="10">
+              <strong id="depthLabel" style="color:var(--accent);font-family:var(--mono);min-width:55px;">0–10m</strong>
+            </div>
+            <div class="ctrl-row">
+              <label>Time Slice:</label>
+              <input type="date" id="dateInput" value="">
+            </div>
+            <div style="display:flex;gap:4px;margin-top:4px;margin-bottom:6px;">
+              <button class="btn" style="flex:1;font-size:0.65rem;padding:3px;" onclick="setTimePreset('yesterday')">Yesterday</button>
+              <button class="btn" style="flex:1;font-size:0.65rem;padding:3px;" onclick="setTimePreset('7d')">7 Days</button>
+              <button class="btn" style="flex:1;font-size:0.65rem;padding:3px;" onclick="setTimePreset('30d')">30 Days</button>
+              <button class="btn" style="flex:1;font-size:0.65rem;padding:3px;" onclick="setTimePreset('1y')">1 Year</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:6px;">
+              <button class="btn primary" onclick="triggerViewportFetch()" style="flex:1;">🔄 Re-fetch Area</button>
+              <button class="btn" onclick="toggleCesiumAtmosphere()" style="flex:1;">✨ Atmosphere</button>
+            </div>
+          </div>
         </div>
 
-        <!-- Snapshot BBox override -->
-        <div class="form-row" style="margin-top:10px;">
-          <div class="field"><label>BBox lat_min</label><input type="number" id="sLatMin" value="10.0" step="0.5" /></div>
-          <div class="field"><label>lat_max</label><input type="number" id="sLatMax" value="15.0" step="0.5" /></div>
-          <div class="field"><label>lon_min</label><input type="number" id="sLonMin" value="75.0" step="0.5" /></div>
-          <div class="field"><label>lon_max</label><input type="number" id="sLonMax" value="85.0" step="0.5" /></div>
-          <button class="btn" onclick="querySnapshot()">🗺 Load Snapshot</button>
+        <!-- OS Virtual Memory Map Panel -->
+        <div class="panel">
+          <div class="panel-header">
+            💾 OS Demand-Paging Table
+            <span class="badge" id="residentBadge">100% Warm</span>
+          </div>
+          <div class="panel-body">
+            <div class="coverage-legend">
+              <div class="leg-item"><div class="leg-box resident"></div><span>RESIDENT</span></div>
+              <div class="leg-item"><div class="leg-box ondisk"></div><span>ON_DISK</span></div>
+              <div class="leg-item"><div class="leg-box fetching"></div><span>FETCHING</span></div>
+              <div class="leg-item"><div class="leg-box notfetched"></div><span>NOT_FETCHED</span></div>
+            </div>
+
+            <div style="font-size:0.68rem;color:var(--muted);margin-bottom:4px;">Depth Page Allocation (2m Bins):</div>
+            <div class="memory-grid" id="memoryGrid"></div>
+
+            <div style="margin-top:8px;">
+              <div class="stat-row"><span>Pages Registered:</span><strong id="statTotalPages">11,160</strong></div>
+              <div class="stat-row"><span>L1 RAM Hit Rate:</span><strong id="statHitRate" style="color:var(--green)">100%</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Stream Packet Feed -->
+        <div class="panel" style="flex:1;">
+          <div class="panel-header">
+            ⚡ WebSocket Live Stream
+            <span class="badge" id="streamPacketBadge">Live</span>
+          </div>
+          <div class="panel-body">
+            <div id="logOutput">
+              <div class="log-line info">[INIT] 3D Cesium Ocean Engine ready. Left-click anywhere on the globe to query physics & BGC.</div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- 3D Deck.gl canvas -->
-      <div class="card" style="padding:0;overflow:hidden;">
-        <div id="deckgl-container">
-          <canvas id="deckgl-canvas"></canvas>
-          <div id="deckgl-overlay">
-            <span class="badge" id="deckgl-pts-badge">0 pts</span>
-            <span class="badge" id="deckgl-src-badge">—</span>
+      <!-- Globe & Map Viewport -->
+      <div id="map-wrapper">
+        <!-- 3D Cesium Container -->
+        <div id="cesiumContainer"></div>
+
+        <!-- 2D Leaflet Fallback Container -->
+        <div id="leaflet-map"></div>
+
+        <!-- HUD: Engine & Basemap Switcher -->
+        <div id="globeHUDOverlay">
+          <button class="engine-btn active" id="btnMode3D" onclick="setEngineMode('3d')">🌍 3D Cesium Globe</button>
+          <button class="engine-btn" id="btnMode2D" onclick="setEngineMode('2d')">🗺️ 2D Leaflet Map</button>
+          <div style="width:1px;height:18px;background:var(--border);margin:0 2px;"></div>
+          <select id="basemapSelector" style="font-size:0.68rem;padding:2px 6px;" onchange="changeBasemap(this.value)">
+            <option value="ocean" selected>🌊 Ocean Bathymetry (Esri)</option>
+            <option value="satellite">🛰️ Satellite (Esri Imagery)</option>
+            <option value="dark">🌑 Dark Canvas (Esri)</option>
+            <option value="osm">🗺️ OpenStreetMap</option>
+          </select>
+        </div>
+
+        <!-- HUD: Ocean Region Presets -->
+        <div id="globePresetsOverlay">
+          <span style="font-size:0.68rem;color:var(--muted);margin-right:2px;">Fly to:</span>
+          <button class="preset-btn" onclick="flyToRegion('bay_of_bengal')">🇮🇳 Bay of Bengal</button>
+          <button class="preset-btn" onclick="flyToRegion('arabian_sea')">🌀 Arabian Sea</button>
+          <button class="preset-btn" onclick="flyToRegion('indian_ocean')">🌊 Indian Ocean</button>
+          <button class="preset-btn" onclick="flyToRegion('pacific')">🌎 Pacific</button>
+          <button class="preset-btn" onclick="flyToRegion('global')">🌐 Global</button>
+        </div>
+
+        <!-- Floating Zoom & Camera Tools -->
+        <div id="globeZoomControls">
+          <button class="zoom-btn" title="Zoom In" onclick="globeZoomIn()">➕</button>
+          <button class="zoom-btn" title="Zoom Out" onclick="globeZoomOut()">➖</button>
+          <button class="zoom-btn" title="Reset View (Indian Ocean)" onclick="flyToRegion('bay_of_bengal')">🎯</button>
+          <button class="zoom-btn" title="North Align" onclick="globeAlignNorth()">🧭</button>
+          <button class="zoom-btn" title="Toggle 3D Perspective Pitch" onclick="globeTogglePitch()">📐</button>
+        </div>
+
+        <!-- Coverage Overlay -->
+        <div id="coverageStripOverlay">
+          <div class="strip-header">
+            <span>Viewport Depth Range: <strong id="stripRangeText">0–10m</strong></span>
+            <span id="stripStatusText">100% Resident in L1/L2</span>
           </div>
           <div id="deckgl-info">Deck.gl ColumnLayer · drag to orbit · scroll to zoom</div>
         </div>
-        <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;align-items:center;gap:16px;">
-          <div class="colorbar-row">
-            <span id="cbMin">—</span>
-            <canvas id="cbCanvas" width="160" height="10"></canvas>
-            <span id="cbMax">—</span>
+
+        <!-- Colorbar -->
+        <div id="colorbar">
+          <div style="font-weight:700;color:#fff;">Sea Temperature</div>
+          <canvas id="cbCanvas" height="10"></canvas>
+          <div class="cb-labels">
+            <span id="cbMin">26.0°C</span>
+            <span id="cbMax">31.0°C</span>
           </div>
           <button class="btn" onclick="resetDeckView()">⟲ Reset View</button>
           <span class="badge" id="deckPlaceholderBadge" style="display:none;">⚠ Synthetic Placeholder</span>
         </div>
       </div>
 
-      <!-- /ocean/point data inspector -->
-      <div class="card" id="pointInspector" style="display:none;">
-        <div class="card-title">🔎 /ocean/point Response</div>
-        <div id="pointDataGrid" class="data-grid"></div>
+        <!-- Floating Click-to-Query Inspector (Testing GET /ocean/point) -->
+        <div id="pointInspector">
+          <div class="pi-head">
+            <span>📍 Click-to-Query (/ocean/point)</span>
+            <span class="close-btn" onclick="closePointInspector()">&times;</span>
+          </div>
+          <div id="piContent" style="font-size:0.72rem;display:flex;flex-direction:column;gap:6px;">
+            <div style="color:var(--muted)">Click anywhere on the 3D globe to test <strong>/ocean/point</strong> API!</div>
+          </div>
+        </div>
       </div>
 
-      <!-- /ocean/snapshot summary -->
-      <div class="card" id="snapshotCard" style="display:none;">
-        <div class="card-title">
-          🗺 /ocean/snapshot Response
-          <span class="badge" id="snapCountBadge">0 pts</span>
-          <span class="badge" id="snapSourceBadge">—</span>
-          <span class="badge" id="snapTimeBadge">—</span>
+    <!-- ── TAB 2: TIMELINE & TIME-SERIES ── -->
+    <div id="pane-timeline" class="view-pane">
+      <div class="panel">
+        <div class="panel-header">
+          📊 Time-Series Query Form (GET /ocean/timeline & GET /api/coastal-temps)
+        </div>
+        <div class="panel-body">
+          <div style="display:flex;gap:6px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
+            <span style="font-size:0.7rem;color:var(--muted);font-weight:600;">Presets:</span>
+            <button class="btn" style="font-size:0.7rem;padding:3px 8px;" onclick="setTimelinePreset('yesterday')">Yesterday</button>
+            <button class="btn" style="font-size:0.7rem;padding:3px 8px;" onclick="setTimelinePreset('7d')">Last 7 Days</button>
+            <button class="btn" style="font-size:0.7rem;padding:3px 8px;" onclick="setTimelinePreset('30d')">Last 30 Days</button>
+            <button class="btn" style="font-size:0.7rem;padding:3px 8px;" onclick="setTimelinePreset('1y')">Last 1 Year</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:10px;align-items:end;">
+            <div>
+              <label style="color:var(--muted);font-size:0.7rem;">Latitude:</label>
+              <input type="text" id="tlLat" value="13.08" style="width:100%;">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:0.7rem;">Longitude:</label>
+              <input type="text" id="tlLon" value="80.27" style="width:100%;">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:0.7rem;">Depth (m):</label>
+              <input type="number" id="tlDepth" value="0" min="0" max="5000" style="width:100%;">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:0.7rem;">Date Start:</label>
+              <input type="date" id="tlStart" value="" style="width:100%;">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:0.7rem;">Date End:</label>
+              <input type="date" id="tlEnd" value="" style="width:100%;">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:0.7rem;">Granularity:</label>
+              <select id="tlGran" style="width:100%;">
+                <option value="day">Day</option>
+                <option value="week">Week</option>
+                <option value="month">Month</option>
+                <option value="year">Year</option>
+              </select>
+            </div>
+            <div>
+              <button class="btn primary" style="width:100%;height:30px;" onclick="runTimelineQuery()">📈 Fetch Timeline</button>
+            </div>
+          </div>
         </div>
         <div id="snapCoverage" style="font-family:var(--mono);font-size:0.7rem;color:var(--muted);margin-bottom:10px;"></div>
         <div class="card-title" style="margin-top:8px;margin-bottom:6px;">Raw JSON</div>
         <pre class="json-box" id="snapRawJson" style="max-height:260px;"></pre>
       </div>
 
-      <!-- /ocean/point raw JSON -->
-      <div class="card" id="pointRawCard" style="display:none;">
-        <div class="card-title">📄 /ocean/point Raw JSON</div>
-        <pre class="json-box" id="pointRawJson"></pre>
+      <div class="panel" style="display:flex;flex-direction:column;min-height:450px;">
+        <div class="panel-header">
+          📈 Ocean Timeline Chart
+          <span class="badge" id="tlBadge">Chennai Coast (13.08°N, 80.27°E)</span>
+        </div>
+        <div class="panel-body" style="flex:1;position:relative;">
+          <canvas id="timelineChart"></canvas>
+        </div>
       </div>
 
     </div>
 
-    <!-- ======================================================= -->
-    <!-- PANE 2: ARGO FLOATS                                     -->
-    <!-- ======================================================= -->
-    <div class="pane" id="pane-argo">
-      <div class="card">
-        <div class="card-title">🛰 Nearest Argo / BGC Floats</div>
-        <div class="form-row">
-          <div class="field"><label>Lat</label><input type="number" id="argoLat" value="13.08" step="0.1" /></div>
-          <div class="field"><label>Lon</label><input type="number" id="argoLon" value="80.27" step="0.1" /></div>
-          <div class="field"><label>Radius (km)</label><input type="number" id="argoRad" value="500" step="50" /></div>
-          <div class="field"><label>Type</label>
-            <select id="argoType"><option value="both">Both</option><option value="core">Core</option><option value="bgc">BGC</option></select>
+    <!-- ── TAB 3: ARGO & IN-SITU ── -->
+    <div id="pane-argo" class="view-pane">
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="panel">
+          <div class="panel-header">
+            🔍 Argo Float Spatial Search
+          </div>
+          <div class="panel-body">
+            <div class="ctrl-row">
+              <label>Lat / Lon:</label>
+              <div style="display:flex;gap:4px;">
+                <input type="text" id="argoSearchLat" value="13.08" style="width:70px;">
+                <input type="text" id="argoSearchLon" value="80.27" style="width:70px;">
+              </div>
+            </div>
+            <div class="ctrl-row">
+              <label>Search Radius (km):</label>
+              <input type="number" id="argoSearchRad" value="500" min="50" max="2500" style="width:90px;">
+            </div>
+            <div class="ctrl-row">
+              <label>Instrument Type:</label>
+              <select id="argoSearchType" style="width:120px;">
+                <option value="both">Core + BGC</option>
+                <option value="core">Core Argo</option>
+                <option value="bgc">BGC-Argo</option>
+              </select>
+            </div>
+            <button class="btn primary" style="width:100%;margin-top:4px;" onclick="runArgoNearestSearch()">🎯 Search Nearest Floats</button>
           </div>
           <button class="btn primary" onclick="searchArgo()">🔍 Search</button>
         </div>
@@ -631,75 +951,373 @@
 <div id="toastContainer"></div>
 
 <!-- ============================================================ -->
-<!-- JAVASCRIPT                                                   -->
+<!-- FRONTEND JAVASCRIPT & CESIUM 3D GLOBE ENGINE                 -->
 <!-- ============================================================ -->
-<script>
-'use strict';
+<script type="module">
+import * as Cesium from 'cesium';
+window.Cesium = Cesium;
 
-/* ========================================================
-   CONFIG
-   ======================================================== */
-const isHttp = window.location.protocol.startsWith('http');
-const API    = isHttp ? window.location.origin : 'http://localhost:8000';
-const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const WS_URL  = isHttp
-  ? `${wsProto}//${window.location.host}/ws/ocean-stream`
-  : 'ws://localhost:8000/ws/ocean-stream';
+const API = "http://localhost:8000";
+const WS_URL = "ws://localhost:8000/ws/ocean-stream";
 
-/* ========================================================
-   STATE
-   ======================================================== */
-let deckInstance   = null;
-let ws             = null;
-let customWs       = null;
-let currentGrid    = [];        // [{lat, lon, value, ...}]
+// App State
+let cesiumViewer = null;
+let cesiumPointsCollection = null;
+let cesiumArgoCollection = null;
+let leafletMap = null;
+let activeEngineMode = "3d"; // "3d" or "2d"
+let ws = null;
+let customWs = null;
+let panDebounceTimer = null;
+let currentGridPoints = [];
+let mapLayerGroup = null;
+let argoMarkersGroup = null;
+let timelineChart = null;
+let argoProfileChart = null;
+
+function getCalculatedDates() {
+  const now = new Date();
+  const yest = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
+  const weekAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 8));
+  const monthAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 31));
+  const yearAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 366));
+  const toIso = (d) => d.toISOString().slice(0, 10);
+  return {
+    today: toIso(now),
+    yesterday: toIso(yest),
+    weekAgo: toIso(weekAgo),
+    monthAgo: toIso(monthAgo),
+    yearAgo: toIso(yearAgo),
+  };
+}
+
+const _initDates = getCalculatedDates();
+let depthMin = 0.0;
+let depthMax = 10.0;
+let selectedDate = _initDates.yesterday;
 let globalColorMin = 26.0;
 let globalColorMax = 31.0;
-let COLOR_RAMP     = null;
-let timelineChart  = null;
-let argoProfileChart = null;
-let activeTestIndex  = 0;
+const COLOR_RAMP = chroma.scale(["#0077b6", "#00b4d8", "#90e0ef", "#ffd166", "#f54375"]).domain([0, 1]);
 
-/* ========================================================
-   BOOT
-   ======================================================== */
-function boot() {
-  setDefaultDate();
-  initColorRamp();
-  initDeckGL();
-  initArgoChart();
-  buildApiTestCards();
+// All 19 APIs catalogue
+const API_ENDPOINTS = [
+  { id: "root", method: "GET", path: "/", desc: "Root service info & version" },
+  { id: "date_info", method: "GET", path: "/api/date-info", desc: "Copernicus availability, server date & presets" },
+  { id: "point", method: "GET", path: `/ocean/point?lat=13.08&lon=80.27&depth=0&date=${_initDates.yesterday}`, desc: "Core click-to-query (Physics + BGC + Argo)" },
+  { id: "snapshot", method: "GET", path: `/ocean/snapshot?lat_min=10&lat_max=15&lon_min=75&lon_max=85&depth=0&date=${_initDates.yesterday}`, desc: "Spatial bounding box 2D grid" },
+  { id: "timeline", method: "GET", path: `/ocean/timeline?lat=13.08&lon=80.27&depth=0&preset=7d&granularity=day&variables=temperature,salinity`, desc: "Time-series with 7d preset (or custom dates)" },
+  { id: "nearest", method: "GET", path: "/argo/nearest?lat=13.08&lon=80.27&radius_km=500&type=both", desc: "Nearest Argo floats & AODN moorings" },
+  { id: "profile", method: "GET", path: "/argo/profile?platform_number=2902765", desc: "Full vertical depth profile for platform" },
+  { id: "coverage", method: "GET", path: "/ocean/coverage?lat_min=8&lat_max=22&lon_min=68&lon_max=90", desc: "Page table OS virtual memory state" },
+  { id: "metadata", method: "GET", path: "/api/metadata", desc: "Zarr dimensions, coordinates & stations" },
+  { id: "coastal", method: "GET", path: "/api/coastal-temps?variable=thetao", desc: "Coastal station temperature series" },
+  { id: "depth_prof", method: "GET", path: "/api/depth-profile?location=chennai&variable=thetao", desc: "Station depth profile" },
+  { id: "argo_floats", method: "GET", path: "/api/argo-floats?limit=20", desc: "Argo float observations list" },
+  { id: "argo_profs", method: "GET", path: "/api/argo-profiles?max_platforms=5", desc: "Grouped Argo platform profiles" },
+  { id: "argo_slider", method: "GET", path: `/api/argo-slider?date_start=${_initDates.weekAgo}&date_end=${_initDates.yesterday}`, desc: "Time-filtered float points" },
+  { id: "aodn", method: "GET", path: "/api/aodn-data", desc: "AODN CTD Mooring data" },
+  { id: "overview", method: "GET", path: "/api/ocean-overview", desc: "Spatial min/max/mean bounding box stats" },
+  { id: "cache_stats", method: "GET", path: "/api/cache-stats", desc: "L1 RAM / L2 Zarr telemetry" },
+  { id: "cache_clear", method: "POST", path: "/api/cache-clear", desc: "Flush L1 RAM cache" },
+  { id: "files", method: "GET", path: "/api/files", desc: "Zarr dataset files & sizes browser" },
+];
+
+let activeTestIndex = 0;
+
+// ---------------------------------------------------------------------------
+// 1. INITIALIZATION
+// ---------------------------------------------------------------------------
+document.addEventListener("DOMContentLoaded", () => {
+  initCesiumGlobe();
+  initLeafletMap();
+  initCharts();
+  initControls();
+  buildMemoryGrid();
+  renderTestCards();
+  selectApiTest(0);
+  updateWsPreset();
+  connectWebSocket();
   checkApiHealth();
   connectWebSocket();
   loadPrewarmStatus();
   updateCacheStats();
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', boot);
-} else {
-  boot();
+  // Load initial timeline & argo search
+  runTimelineQuery();
+  runArgoNearestSearch();
+});
+
+const BASEMAP_URLS = {
+  ocean: "https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}",
+  satellite: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  dark: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+  osm: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+};
+
+let currentBasemap = "ocean";
+let leafletTileLayer = null;
+
+window.changeBasemap = function(type) {
+  currentBasemap = type;
+  const url = BASEMAP_URLS[type] || BASEMAP_URLS.ocean;
+
+  // Update Cesium
+  if (cesiumViewer) {
+    cesiumViewer.imageryLayers.removeAll();
+    const provider = new Cesium.UrlTemplateImageryProvider({
+      url: url,
+      maximumLevel: type === "osm" ? 19 : 18,
+    });
+    cesiumViewer.imageryLayers.addImageryProvider(provider);
+  }
+
+  // Update Leaflet
+  if (leafletMap) {
+    if (leafletTileLayer) leafletMap.removeLayer(leafletTileLayer);
+    leafletTileLayer = L.tileLayer(url, {
+      maxZoom: 19,
+      attribution: "&copy; Esri &copy; OpenStreetMap",
+    }).addTo(leafletMap);
+  }
+
+  showToast(`Basemap changed to ${type.toUpperCase()}`, "info");
+};
+
+// ---------------------------------------------------------------------------
+// 2. 3D CESIUM GLOBE INITIALIZATION & INTERACTION
+// ---------------------------------------------------------------------------
+function initCesiumGlobe() {
+  const container = document.getElementById("cesiumContainer");
+  if (!container) return;
+
+  try {
+    cesiumViewer = new Cesium.Viewer("cesiumContainer", {
+      animation: false,
+      timeline: false,
+      fullscreenButton: false,
+      geocoder: false,
+      homeButton: false,
+      sceneModePicker: false,
+      baseLayerPicker: false,
+      navigationHelpButton: false,
+      infoBox: false,
+      selectionIndicator: false,
+      scene3DOnly: true,
+      shouldAnimate: true,
+      terrainProvider: undefined,
+    });
+
+    // Dark sleek atmospheric ocean lighting
+    const scene = cesiumViewer.scene;
+    const globe = scene.globe;
+    globe.enableLighting = true;
+    globe.depthTestAgainstTerrain = false;
+    globe.baseColor = Cesium.Color.fromCssColorString("#060e1d");
+
+    // Controller zoom distance clamping & silky-smooth damping (Fixes scrolling too small)
+    const controller = scene.screenSpaceCameraController;
+    controller.minimumZoomDistance = 100000;    // 100 km (prevents clipping through ground)
+    controller.maximumZoomDistance = 13500000;  // 13,500 km (stops shrinking into a tiny speck!)
+    controller.enableCollisionDetection = true;
+    controller.inertiaSpin = 0.84;
+    controller.inertiaTranslate = 0.84;
+    controller.inertiaZoom = 0.76;
+    controller.zoomFactor = 2.2;
+
+    // Load initial high-res bathymetry/satellite ocean basemap (No API key needed!)
+    changeBasemap(currentBasemap);
+
+    // Initial camera position comfortably focused on the Bay of Bengal & Indian Ocean
+    cesiumViewer.camera.setView({
+      destination: Cesium.Cartesian3.fromDegrees(80.0, 14.0, 3400000),
+      orientation: {
+        heading: Cesium.Math.toRadians(0),
+        pitch: Cesium.Math.toRadians(-68),
+        roll: 0,
+      }
+    });
+
+    // Primitive collections for high-performance 3D points
+    cesiumPointsCollection = scene.primitives.add(new Cesium.PointPrimitiveCollection());
+    cesiumArgoCollection = scene.primitives.add(new Cesium.PointPrimitiveCollection());
+
+    // Left click on 3D Globe triggers click-to-query /ocean/point!
+    const handler = new Cesium.ScreenSpaceEventHandler(scene.canvas);
+    handler.setInputAction((movement) => {
+      const ray = cesiumViewer.camera.getPickRay(movement.position);
+      const cartesian = scene.globe.pick(ray, scene);
+      if (cartesian) {
+        const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+        const lat = Cesium.Math.toDegrees(cartographic.latitude);
+        const lon = Cesium.Math.toDegrees(cartographic.longitude);
+        inspectOceanPoint(lat, lon);
+      }
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    // Camera movement triggers WebSocket viewport stream
+    cesiumViewer.camera.moveEnd.addEventListener(() => {
+      if (activeEngineMode === "3d") {
+        onViewportChanged();
+      }
+    });
+
+    addLog("info", "[CESIUM] 3D Ocean Globe initialized with viewport controls");
+  } catch (err) {
+    console.error("Cesium initialization error:", err);
+    addLog("fetch", `[CESIUM ERROR] ${err.message}`);
+  }
 }
 
-/* ========================================================
-   TABS
-   ======================================================== */
-function switchPane(id, btn) {
-  document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.sidebar-btn').forEach(b => b.classList.remove('active'));
-  const pane = document.getElementById(`pane-${id}`);
-  if (pane) pane.classList.add('active');
-  if (btn)  btn.classList.add('active');
-}
+// On-screen Zoom & Camera Helpers
+window.globeZoomIn = function() {
+  if (activeEngineMode === "3d" && cesiumViewer) {
+    const camera = cesiumViewer.camera;
+    const height = camera.positionCartographic.height;
+    camera.zoomIn(Math.max(120000, height * 0.32));
+  } else if (leafletMap) {
+    leafletMap.zoomIn();
+  }
+};
 
-/* ========================================================
-   DATE HELPER
-   ======================================================== */
-function setDefaultDate() {
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  document.getElementById('qDate').value = yesterday.toISOString().slice(0, 10);
-}
+window.globeZoomOut = function() {
+  if (activeEngineMode === "3d" && cesiumViewer) {
+    const camera = cesiumViewer.camera;
+    const height = camera.positionCartographic.height;
+    if (height < 13000000) {
+      camera.zoomOut(Math.max(120000, height * 0.32));
+    }
+  } else if (leafletMap) {
+    leafletMap.zoomOut();
+  }
+};
+
+window.globeAlignNorth = function() {
+  if (activeEngineMode === "3d" && cesiumViewer) {
+    const camera = cesiumViewer.camera;
+    const carto = camera.positionCartographic;
+    camera.flyTo({
+      destination: Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height),
+      orientation: { heading: 0, pitch: camera.pitch, roll: 0 },
+      duration: 0.8
+    });
+    showToast("Camera aligned North", "info");
+  }
+};
+
+window.globeTogglePitch = function() {
+  if (activeEngineMode === "3d" && cesiumViewer) {
+    const camera = cesiumViewer.camera;
+    const carto = camera.positionCartographic;
+    const currentPitchDeg = Cesium.Math.toDegrees(camera.pitch);
+    const newPitch = currentPitchDeg < -75 ? -50 : -88;
+    camera.flyTo({
+      destination: Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height),
+      orientation: { heading: camera.heading, pitch: Cesium.Math.toRadians(newPitch), roll: 0 },
+      duration: 0.8
+    });
+    showToast(`Perspective switched to ${newPitch === -50 ? '3D Oblique' : 'Top-Down'}`, "info");
+  }
+};
+
+// Region Navigation Presets
+window.flyToRegion = function(region) {
+  if (!cesiumViewer) return;
+
+  const targets = {
+    bay_of_bengal: { lon: 85.0, lat: 14.5, height: 2600000, pitch: -65 },
+    arabian_sea:   { lon: 66.0, lat: 16.5, height: 2600000, pitch: -65 },
+    indian_ocean:  { lon: 78.0, lat: 5.0,  height: 4800000, pitch: -72 },
+    pacific:       { lon: 160.0, lat: 0.0, height: 7500000, pitch: -80 },
+    global:        { lon: 80.0, lat: 10.0, height: 12500000, pitch: -88 },
+  };
+
+  const target = targets[region] || targets.global;
+  cesiumViewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(target.lon, target.lat, target.height),
+    orientation: {
+      heading: Cesium.Math.toRadians(0),
+      pitch: Cesium.Math.toRadians(target.pitch),
+      roll: 0
+    },
+    duration: 1.8
+  });
+
+  if (leafletMap) {
+    leafletMap.setView([target.lat, target.lon], 5);
+  }
+
+  showToast(`Flying to ${region.replace(/_/g, ' ').toUpperCase()}`, 'info');
+};
+
+window.toggleCesiumAtmosphere = function() {
+  if (!cesiumViewer) return;
+  const globe = cesiumViewer.scene.globe;
+  globe.showGroundAtmosphere = !globe.showGroundAtmosphere;
+  showToast(`Atmosphere ${globe.showGroundAtmosphere ? 'Enabled' : 'Disabled'}`, 'info');
+};
+
+// Engine Mode Switcher (3D Cesium vs 2D Leaflet)
+window.setEngineMode = function(mode) {
+  activeEngineMode = mode;
+  const cesiumEl = document.getElementById("cesiumContainer");
+  const leafletEl = document.getElementById("leaflet-map");
+  const btn3D = document.getElementById("btnMode3D");
+  const btn2D = document.getElementById("btnMode2D");
+
+  if (mode === "3d") {
+    cesiumEl.style.display = "block";
+    leafletEl.style.display = "none";
+    btn3D.classList.add("active");
+    btn2D.classList.remove("active");
+    if (cesiumViewer) cesiumViewer.resize();
+    showToast("3D Cesium Ocean Globe Mode Active", "success");
+  } else {
+    cesiumEl.style.display = "none";
+    leafletEl.style.display = "block";
+    btn2D.classList.add("active");
+    btn3D.classList.remove("active");
+    if (leafletMap) leafletMap.invalidateSize();
+    showToast("2D Leaflet Map Mode Active", "success");
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 3. TAB SWITCHING
+// ---------------------------------------------------------------------------
+window.switchTab = function(tabId) {
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".view-pane").forEach(p => p.classList.remove("active"));
+
+  event.currentTarget.classList.add("active");
+  const target = document.getElementById(`pane-${tabId}`);
+  if (target) {
+    target.classList.add("active");
+    if (tabId === "map") {
+      if (activeEngineMode === "3d" && cesiumViewer) {
+        setTimeout(() => cesiumViewer.resize(), 100);
+      } else if (leafletMap) {
+        setTimeout(() => leafletMap.invalidateSize(), 100);
+      }
+    }
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 4. LEAFLET MAP (2D BACKUP)
+// ---------------------------------------------------------------------------
+function initLeafletMap() {
+  leafletMap = L.map("leaflet-map", {
+    center: [14.5, 80.0],
+    zoom: 6,
+    minZoom: 3,
+    maxZoom: 12,
+  });
+
+  leafletTileLayer = L.tileLayer(BASEMAP_URLS.ocean, {
+    attribution: "&copy; Esri &copy; OpenStreetMap",
+    maxZoom: 19,
+  }).addTo(leafletMap);
 
 /* ========================================================
    COLOR RAMP
@@ -712,23 +1330,15 @@ function initColorRamp() {
   }
 }
 
-function colorForValue(v) {
-  const norm = Math.max(0, Math.min(1, (v - globalColorMin) / (globalColorMax - globalColorMin || 1)));
-  return COLOR_RAMP ? COLOR_RAMP(norm) : { hex: () => '#00b4d8', rgb: () => [0, 180, 216] };
-}
+  leafletMap.on("moveend zoomend", () => {
+    if (activeEngineMode === "2d") {
+      onViewportChanged();
+    }
+  });
 
-function updateColorbar() {
-  const canvas = document.getElementById('cbCanvas');
-  const ctx = canvas.getContext('2d');
-  canvas.width = 160; canvas.height = 10;
-  const grad = ctx.createLinearGradient(0, 0, 160, 0);
-  for (let i = 0; i <= 10; i++) {
-    grad.addColorStop(i / 10, colorForValue(globalColorMin + (globalColorMax - globalColorMin) * i / 10).hex());
-  }
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 160, 10);
-  document.getElementById('cbMin').textContent = `${globalColorMin.toFixed(1)}°C`;
-  document.getElementById('cbMax').textContent = `${globalColorMax.toFixed(1)}°C`;
+  leafletMap.on("click", (e) => {
+    inspectOceanPoint(e.latlng.lat, e.latlng.lng);
+  });
 }
 
 /* ========================================================
@@ -764,23 +1374,57 @@ function initDeckGL() {
   }
 }
 
-function resetDeckView() {
-  if (!deckInstance) return;
-  deckInstance.setProps({
-    initialViewState: {
-      longitude: 80.0, latitude: 14.5,
-      zoom: 4.5, pitch: 50, bearing: -15,
-      transitionDuration: 600,
-    }
-  });
+window.triggerViewportFetch = function() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  let bounds = { south: 8, north: 22, west: 68, east: 90 };
+
+  if (activeEngineMode === "3d" && cesiumViewer) {
+    const cBounds = getCesiumVisibleBounds();
+    if (cBounds) bounds = cBounds;
+  } else if (leafletMap) {
+    const b = leafletMap.getBounds();
+    bounds = { south: b.getSouth(), north: b.getNorth(), west: b.getWest(), east: b.getEast() };
+  }
+
+  addLog("info", `[VIEWPORT] Lat [${bounds.south.toFixed(2)}, ${bounds.north.toFixed(2)}], Lon [${bounds.west.toFixed(2)}, ${bounds.east.toFixed(2)}], Depth: ${depthMin}–${depthMax}m`);
+
+  ws.send(JSON.stringify({
+    lat_min: bounds.south,
+    lat_max: bounds.north,
+    lon_min: bounds.west,
+    lon_max: bounds.east,
+    depth_min: depthMin,
+    depth_max: depthMax,
+    time: selectedDate,
+    variable: "thetao",
+  }));
+};
+
+function getCesiumVisibleBounds() {
+  if (!cesiumViewer) return null;
+  const camera = cesiumViewer.camera;
+  const cartographic = camera.positionCartographic;
+  const lat = Cesium.Math.toDegrees(cartographic.latitude);
+  const lon = Cesium.Math.toDegrees(cartographic.longitude);
+  const height = cartographic.height;
+
+  // Approximate span based on altitude
+  const span = Math.min(60, Math.max(4, height / 180000));
+  return {
+    south: Math.max(-85, lat - span * 0.5),
+    north: Math.min(85, lat + span * 0.5),
+    west: lon - span * 0.6,
+    east: lon + span * 0.6,
+  };
 }
 
-function renderDeckGLLayers(grid) {
-  if (!deckInstance || !window.deck) return;
-  if (!grid || grid.length === 0) {
-    addLog('err', '[Deck.gl] renderDeckGLLayers called with empty grid');
-    return;
-  }
+// Click-to-Query /ocean/point Inspector
+window.inspectOceanPoint = async function(lat, lon) {
+  const inspector = document.getElementById("pointInspector");
+  const content = document.getElementById("piContent");
+  inspector.style.display = "block";
+  content.innerHTML = `<div style="color:var(--accent)">Querying /ocean/point for (${lat.toFixed(3)}°N, ${lon.toFixed(3)}°E)…</div>`;
 
   // Validate data shape — Deck.gl needs [lon, lat] for getPosition
   const valid = grid.filter(p =>
@@ -838,16 +1482,24 @@ function renderDeckGLLayers(grid) {
     addLog('err', `[Deck.gl] setProps failed: ${e.message}`);
     console.error('[Deck.gl] render error:', e);
   }
-}
+};
 
-/* ========================================================
-   /ocean/point QUERY
-   ======================================================== */
-async function runCoordQuery() {
-  const lat   = parseFloat(document.getElementById('qLat').value);
-  const lon   = parseFloat(document.getElementById('qLon').value);
-  const depth = parseFloat(document.getElementById('qDepth').value);
-  const date  = document.getElementById('qDate').value;
+window.closePointInspector = function() {
+  document.getElementById("pointInspector").style.display = "none";
+};
+
+// ---------------------------------------------------------------------------
+// 5. WEBSOCKET HANDLERS & 3D GLOBE RENDERING
+// ---------------------------------------------------------------------------
+function connectWebSocket() {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    document.getElementById("wsDot").className = "dot online";
+    document.getElementById("wsStatus").textContent = "WS Connected";
+    addLog("info", "[WS] Connected to oceanStream backend");
+    triggerViewportFetch();
+  };
 
   if (isNaN(lat) || isNaN(lon)) { showToast('Enter valid lat/lon', 'error'); return; }
 
@@ -866,9 +1518,9 @@ async function runCoordQuery() {
 
     addLog(res.ok ? 'res' : 'err', `[POINT] ${res.status} in ${elapsed}ms — cache:${data.cache || '?'}`);
 
-    renderPointInspector(lat, lon, depth, date, data);
-    document.getElementById('pointRawJson').textContent = JSON.stringify(data, null, 2);
-    document.getElementById('pointRawCard').style.display = 'block';
+  if (currentGridPoints.length > 5000) {
+    currentGridPoints = currentGridPoints.slice(-5000);
+  }
 
     showToast(`/ocean/point: ${data.status} (${elapsed}ms, ${data.cache})`, res.ok ? 'success' : 'error');
   } catch (e) {
@@ -878,46 +1530,40 @@ async function runCoordQuery() {
     btn.textContent = '▶ Query';
     btn.disabled = false;
   }
+
+  renderGridOnCesium();
+  renderGridOnLeaflet();
 }
 
-function renderPointInspector(lat, lon, depth, date, data) {
-  const phy  = data.physics || {};
-  const bgc  = data.bgc || {};
-  const argo = data.nearest_argo_float;
+// 3D Cesium Ocean Point Cloud Rendering
+function renderGridOnCesium() {
+  if (!cesiumPointsCollection) return;
+  cesiumPointsCollection.removeAll();
 
-  const inspector = document.getElementById('pointInspector');
-  const grid = document.getElementById('pointDataGrid');
-  inspector.style.display = 'block';
+  const step = Math.max(1, Math.floor(currentGridPoints.length / 1800));
 
-  const fields = [
-    { key: 'Status',      val: data.status,        extra: data.cache },
-    { key: 'Elapsed',     val: data.elapsed_ms ? `${data.elapsed_ms}ms` : '—' },
-    { key: 'Temp (°C)',   val: phy.temperature_c },
-    { key: 'Salinity PSU', val: phy.salinity_psu },
-    { key: 'Current U m/s', val: phy.current_u_ms },
-    { key: 'Current V m/s', val: phy.current_v_ms },
-    { key: 'Sea Level m', val: phy.sea_level_m },
-    { key: 'Chl-a mg/m³', val: bgc.chlorophyll_mgl },
-    { key: 'O₂ mmol/m³',  val: bgc.oxygen_mmolm3 },
-    { key: 'NO₃ mmol/m³', val: bgc.nitrate_mmolm3 },
-    { key: 'PO₄ mmol/m³', val: bgc.phosphate_mmolm3 },
-    { key: 'Si mmol/m³',  val: bgc.silicate_mmolm3 },
-    { key: 'pH',          val: bgc.ph },
-    { key: 'pCO₂ μatm',  val: bgc.pco2_uatm },
-    { key: 'Argo Float',  val: argo ? `#${argo.platform_number} (${argo.distance_km}km)` : 'None' },
-    { key: 'Argo Source', val: argo ? (argo.source || argo.type || '?') : '—' },
-  ];
+  for (let i = 0; i < currentGridPoints.length; i += step) {
+    const pt = currentGridPoints[i];
+    if (pt.value === null || pt.value === undefined) continue;
 
-  grid.innerHTML = fields.map(f => {
-    const isNull = f.val === null || f.val === undefined || f.val === '—';
-    const valStr = isNull ? '—' : String(f.val);
-    const extra  = f.extra ? `<span style="color:var(--muted);font-size:0.6rem;"> ${f.extra}</span>` : '';
-    return `<div class="data-cell">
-      <div class="data-cell-key">${f.key}</div>
-      <div class="data-cell-val${isNull ? ' null' : ''}">${valStr}${extra}</div>
-    </div>`;
-  }).join('');
+    const norm = Math.max(0, Math.min(1, (pt.value - globalColorMin) / (globalColorMax - globalColorMin)));
+    const hexColor = COLOR_RAMP(norm).hex();
+    const cColor = Cesium.Color.fromCssColorString(hexColor).withAlpha(0.85);
+
+    cesiumPointsCollection.add({
+      position: Cesium.Cartesian3.fromDegrees(pt.lon, pt.lat, 1500),
+      color: cColor,
+      pixelSize: 6,
+      outlineColor: Cesium.Color.BLACK,
+      outlineWidth: 1,
+    });
+  }
 }
+
+function renderGridOnLeaflet() {
+  if (!mapLayerGroup) return;
+  mapLayerGroup.clearLayers();
+  const step = Math.max(1, Math.floor(currentGridPoints.length / 500));
 
 /* ========================================================
    /ocean/snapshot QUERY + 3D RENDER
@@ -977,75 +1623,15 @@ async function querySnapshot() {
   }
 }
 
-/* ========================================================
-   WEBSOCKET  (for streaming data — optional)
-   ======================================================== */
-function connectWebSocket() {
-  try {
-    ws = new WebSocket(WS_URL);
-    ws.onopen = () => {
-      setDot('wsDot', 'online'); setTxt('wsStatus', 'WS Connected');
-      setDot('wsDot2', 'online'); setTxt('wsStatus2', 'WS Connected');
-      addLog('info', '[WS] Connected to /ws/ocean-stream');
-    };
-    ws.onclose = () => {
-      setDot('wsDot', 'offline'); setTxt('wsStatus', 'WS Disconnected');
-      setDot('wsDot2', 'offline'); setTxt('wsStatus2', 'Reconnecting…');
-      setTimeout(connectWebSocket, 3000);
-    };
-    ws.onerror = () => ws.close();
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        handleWsMessage(msg);
-      } catch(e) {}
-    };
-  } catch(e) {
-    addLog('err', `[WS] connect error: ${e.message}`);
-  }
-}
-
-function handleWsMessage(msg) {
-  if (msg.stage === 'resident' && msg.grid && msg.grid.length > 0) {
-    // WS data has {lat, lon, value} shape — merge and re-render
-    const withValue = msg.grid.map(p => ({...p, value: p.value ?? p.temperature_c}));
-    currentGrid.push(...withValue);
-    if (currentGrid.length > 5000) currentGrid = currentGrid.slice(-5000);
-    renderDeckGLLayers(currentGrid);
-  }
-}
-
-function sendWsMessage() {
-  const text = document.getElementById('wsMessageInput').value;
-  const box  = document.getElementById('wsLogBox');
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    appendWsLog('[ERROR] WS not connected');
-    return;
-  }
-  ws.send(text);
-  appendWsLog(`[SENT]:\n${text}`);
-}
-
-function appendWsLog(msg) {
-  const box = document.getElementById('wsLogBox');
-  box.textContent += `\n${msg}`;
-  box.scrollTop = box.scrollHeight;
-}
-function clearWsLog() { document.getElementById('wsLogBox').textContent = '// Cleared.'; }
-
-/* ========================================================
-   ARGO PANEL
-   ======================================================== */
-function initArgoChart() {
-  const el = document.getElementById('argoProfileChart');
-  if (!el || typeof Chart === 'undefined') return;
-  argoProfileChart = new Chart(el.getContext('2d'), {
-    type: 'line',
-    data: { labels: [], datasets: [{
-      label: 'Temperature (°C)', data: [],
-      borderColor: '#00c8ff', backgroundColor: 'rgba(0,200,255,0.1)',
-      tension: 0.35, fill: true,
-    }]},
+// ---------------------------------------------------------------------------
+// 6. CHARTS (TIMELINE & ARGO PROFILE)
+// ---------------------------------------------------------------------------
+function initCharts() {
+  // Timeline Chart
+  const ctxTl = document.getElementById("timelineChart").getContext("2d");
+  timelineChart = new Chart(ctxTl, {
+    type: "line",
+    data: { labels: [], datasets: [] },
     options: {
       indexAxis: 'y', responsive: true, maintainAspectRatio: false,
       scales: {
@@ -1055,14 +1641,95 @@ function initArgoChart() {
       plugins: { legend:{labels:{color:'#d4e3f7'}} },
     }
   });
+
+  // Argo Profile Chart
+  const ctxArgo = document.getElementById("argoProfileChart").getContext("2d");
+  argoProfileChart = new Chart(ctxArgo, {
+    type: "line",
+    data: {
+      labels: [],
+      datasets: [{
+        label: "Temperature (°C)",
+        data: [],
+        borderColor: "#00c8ff",
+        backgroundColor: "rgba(0, 200, 255, 0.15)",
+        tension: 0.35,
+        fill: true,
+      }]
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          title: { display: true, text: "Temperature (°C)", color: "#6b83a6" },
+          grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" }
+        },
+        y: {
+          reverse: true,
+          title: { display: true, text: "Depth (m)", color: "#6b83a6" },
+          grid: { color: "#1e3055" }, ticks: { color: "#6b83a6" }
+        }
+      },
+      plugins: { legend: { labels: { color: "#d4e3f7" } } }
+    }
+  });
 }
 
-async function searchArgo() {
-  const lat  = document.getElementById('argoLat').value;
-  const lon  = document.getElementById('argoLon').value;
-  const rad  = document.getElementById('argoRad').value;
-  const type = document.getElementById('argoType').value;
-  addLog('info', `[ARGO] searching lat=${lat} lon=${lon} r=${rad}km type=${type}`);
+// Fetch and render GET /ocean/timeline
+window.runTimelineQuery = async function() {
+  const lat = document.getElementById("tlLat").value;
+  const lon = document.getElementById("tlLon").value;
+  const depth = document.getElementById("tlDepth").value;
+  const start = document.getElementById("tlStart").value;
+  const end = document.getElementById("tlEnd").value;
+  const gran = document.getElementById("tlGran").value;
+
+  document.getElementById("tlBadge").textContent = `Lat ${lat}, Lon ${lon} · ${start} to ${end}`;
+
+  try {
+    const url = `${API}/ocean/timeline?lat=${lat}&lon=${lon}&depth=${depth}&date_start=${start}&date_end=${end}&granularity=${gran}&variables=temperature,salinity`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    const series = data.series || [];
+    const labels = series.map(s => s.date);
+    const temps = series.map(s => s.temperature_c !== undefined ? s.temperature_c : s.temperature);
+    const salinities = series.map(s => s.salinity_psu !== undefined ? s.salinity_psu : s.salinity);
+
+    timelineChart.data.labels = labels;
+    timelineChart.data.datasets = [
+      {
+        label: "Temperature (°C)",
+        data: temps,
+        borderColor: "#00c8ff",
+        backgroundColor: "rgba(0, 200, 255, 0.1)",
+        tension: 0.3,
+        yAxisID: "y",
+      },
+      {
+        label: "Salinity (PSU)",
+        data: salinities,
+        borderColor: "#00e08c",
+        backgroundColor: "transparent",
+        tension: 0.3,
+        yAxisID: "y",
+      }
+    ];
+    timelineChart.update();
+    showToast(`Loaded ${series.length} timeline points`, "success");
+  } catch (e) {
+    showToast(`Timeline fetch error: ${e.message}`, "error");
+  }
+};
+
+// Search and render GET /argo/nearest
+window.runArgoNearestSearch = async function() {
+  const lat = document.getElementById("argoSearchLat").value;
+  const lon = document.getElementById("argoSearchLon").value;
+  const rad = document.getElementById("argoSearchRad").value;
+  const type = document.getElementById("argoSearchType").value;
 
   try {
     const url = `${API}/argo/nearest?lat=${lat}&lon=${lon}&radius_km=${rad}&type=${type}`;
@@ -1073,8 +1740,8 @@ async function searchArgo() {
     document.getElementById('argoCountBadge').textContent = `${floats.length} found`;
     document.getElementById('argoRawJson').textContent = JSON.stringify(data, null, 2);
 
-    const list = document.getElementById('argoList');
-    list.innerHTML = '';
+    if (argoMarkersGroup) argoMarkersGroup.clearLayers();
+    if (cesiumArgoCollection) cesiumArgoCollection.removeAll();
 
     if (!floats.length) {
       list.innerHTML = `<div style="color:var(--muted);font-size:0.72rem;">No floats found within ${rad} km.</div>`;
@@ -1091,15 +1758,31 @@ async function searchArgo() {
           <strong style="color:#fff;font-size:0.72rem;">#${f.platform_number || f.name}</strong>
           <span class="argo-source-badge ${srcClass}">${src}</span>
         </div>
-        <div style="font-size:0.62rem;color:var(--muted);margin-top:3px;">
-          ${f.distance_km} km · ${f.lat}° · ${f.lon}° · ${f.type}
-        </div>`;
-      card.onclick = () => {
-        document.querySelectorAll('.argo-card').forEach(c => c.classList.remove('active'));
-        card.classList.add('active');
-        loadArgoProfile(f.platform_number || f.name);
-      };
-      list.appendChild(card);
+        <div style="font-size:0.68rem;color:var(--muted);margin-top:2px;">
+          Distance: <strong>${f.distance_km} km</strong> · Lat: ${f.lat}° · Lon: ${f.lon}°
+        </div>
+      `;
+      card.onclick = () => loadFloatProfile(f.platform_number || f.name);
+      container.appendChild(card);
+
+      // Add to Cesium 3D Globe
+      if (cesiumArgoCollection && f.lat && f.lon) {
+        cesiumArgoCollection.add({
+          position: Cesium.Cartesian3.fromDegrees(f.lon, f.lat, 5000),
+          color: Cesium.Color.MAGENTA,
+          pixelSize: 10,
+          outlineColor: Cesium.Color.WHITE,
+          outlineWidth: 2,
+        });
+      }
+
+      // Add marker to Leaflet
+      if (argoMarkersGroup && f.lat && f.lon) {
+        const m = L.circleMarker([f.lat, f.lon], {
+          radius: 7, color: "#fff", weight: 2, fillColor: "#7b5af5", fillOpacity: 0.9
+        }).bindPopup(`<b>Platform #${f.platform_number || f.name}</b><br>Dist: ${f.distance_km} km<br><button onclick="loadFloatProfile('${f.platform_number || f.name}')">View Profile</button>`);
+        argoMarkersGroup.addLayer(m);
+      }
     });
 
     if (floats[0]) loadArgoProfile(floats[0].platform_number || floats[0].name);
@@ -1108,10 +1791,11 @@ async function searchArgo() {
     addLog('err', `[ARGO] search error: ${e.message}`);
     showToast(`Argo search error: ${e.message}`, 'error');
   }
-}
+};
 
-async function loadArgoProfile(platform) {
-  document.getElementById('argoProfileBadge').textContent = `#${platform}`;
+// Fetch and render GET /argo/profile
+window.loadFloatProfile = async function(platform) {
+  document.getElementById("argoActiveProfileBadge").textContent = `Platform #${platform}`;
   try {
     const url = `${API}/argo/profile?platform_number=${platform}`;
     const res = await fetch(url);
@@ -1159,7 +1843,7 @@ async function loadPrewarmStatus() {
   } catch (e) {
     addLog('err', `[PREWARM] status fetch error: ${e.message}`);
   }
-}
+};
 
 /* ========================================================
    API TEST RUNNER
@@ -1207,19 +1891,20 @@ function buildApiTestCards() {
   document.getElementById('testSummaryText').textContent = `0/${API_ENDPOINTS.length} Tested`;
 }
 
-function selectApiTest(i) {
-  activeTestIndex = i;
-  document.querySelectorAll('.test-card').forEach(c => c.classList.remove('active'));
-  const c = document.getElementById(`test-card-${i}`);
-  if (c) c.classList.add('active');
-  const ep = API_ENDPOINTS[i];
-  document.getElementById('detailHeader').textContent = `${ep.method} ${ep.path}`;
-  document.getElementById('detailUrl').value = `${API}${ep.path}`;
-}
+window.selectApiTest = function(idx) {
+  activeTestIndex = idx;
+  document.querySelectorAll(".test-card").forEach(c => c.classList.remove("active"));
+  const activeCard = document.getElementById(`test-card-${idx}`);
+  if (activeCard) activeCard.classList.add("active");
 
-async function runSelectedApiTest() {
-  const ep  = API_ENDPOINTS[activeTestIndex];
-  const url = document.getElementById('detailUrl').value;
+  const ep = API_ENDPOINTS[idx];
+  document.getElementById("detailHeader").textContent = `${ep.method} ${ep.path}`;
+  document.getElementById("detailUrl").value = `${API}${ep.path}`;
+};
+
+window.runSelectedApiTest = async function() {
+  const ep = API_ENDPOINTS[activeTestIndex];
+  const url = document.getElementById("detailUrl").value;
   const badge = document.getElementById(`badge-${activeTestIndex}`);
   badge.className = 'test-status-tag idle';
   badge.textContent = 'RUNNING';
@@ -1245,9 +1930,9 @@ async function runSelectedApiTest() {
     badge.textContent = 'FAIL';
     showToast(`Test failed: ${e.message}`, 'error');
   }
-}
+};
 
-async function runAllApiTests() {
+window.runAllApiTests = async function() {
   let passed = 0;
   for (let i = 0; i < API_ENDPOINTS.length; i++) {
     selectApiTest(i);
@@ -1273,29 +1958,212 @@ async function runAllApiTests() {
     document.getElementById('testSummaryText').textContent = `${passed}/${API_ENDPOINTS.length} Passed`;
     await new Promise(r => setTimeout(r, 100));
   }
-  showToast(`All done: ${passed}/${API_ENDPOINTS.length} passed`, 'success');
-}
+  showToast(`Completed! ${passed}/${API_ENDPOINTS.length} APIs passed with 200 OK`, "success");
+};
 
-function resetTestStatus() {
-  API_ENDPOINTS.forEach((_, i) => {
-    const b = document.getElementById(`badge-${i}`);
-    b.className = 'test-status-tag idle'; b.textContent = 'READY';
+window.resetTestStatus = function() {
+  API_ENDPOINTS.forEach((_, idx) => {
+    const badge = document.getElementById(`badge-${idx}`);
+    badge.className = "test-status-tag idle";
+    badge.textContent = "READY";
   });
-  document.getElementById('testSummaryText').textContent = `0/${API_ENDPOINTS.length} Tested`;
+  document.getElementById("testSummaryText").textContent = `0/${API_ENDPOINTS.length} Tested`;
+};
+
+// ---------------------------------------------------------------------------
+// 8. WEBSOCKET TEST CONSOLE (TAB 5)
+// ---------------------------------------------------------------------------
+window.updateWsPreset = function() {
+  const sel = document.getElementById("wsSelector").value;
+  const input = document.getElementById("wsMessageInput");
+
+  if (sel === "/ws/ocean-stream") {
+    input.value = JSON.stringify({
+      lat_min: 10.0,
+      lat_max: 16.0,
+      lon_min: 75.0,
+      lon_max: 85.0,
+      depth_min: 0.0,
+      depth_max: 10.0,
+      time: selectedDate,
+      variable: "thetao"
+    }, null, 2);
+  } else {
+    input.value = JSON.stringify({
+      location: "chennai",
+      variable: "thetao"
+    }, null, 2);
+  }
+};
+
+window.sendCustomWsMessage = function() {
+  const ep = document.getElementById("wsSelector").value;
+  const text = document.getElementById("wsMessageInput").value;
+  const wsUrl = `ws://localhost:8000${ep}`;
+
+  if (customWs) customWs.close();
+
+  appendWsLog(`\n[CONNECTING] ${wsUrl}...`);
+  customWs = new WebSocket(wsUrl);
+
+  customWs.onopen = () => {
+    appendWsLog(`[CONNECTED] Sending message:\n${text}`);
+    customWs.send(text);
+  };
+
+  customWs.onmessage = (e) => {
+    appendWsLog(`[RECEIVED]:\n${e.data}`);
+  };
+
+  customWs.onerror = (e) => appendWsLog(`[ERROR]: ${e.message || 'WebSocket Error'}`);
+  customWs.onclose = () => appendWsLog(`[CLOSED]`);
+};
+
+function appendWsLog(msg) {
+  const box = document.getElementById("wsLogBox");
+  box.textContent += `\n${msg}`;
+  box.scrollTop = box.scrollHeight;
 }
 
-/* ========================================================
-   CACHE / HEALTH
-   ======================================================== */
-async function checkApiHealth() {
+window.clearWsLog = function() {
+  document.getElementById("wsLogBox").textContent = "// WebSocket Log Cleared.";
+};
+
+// ---------------------------------------------------------------------------
+// 9. UI HELPERS & COVERAGE STRIP
+// ---------------------------------------------------------------------------
+let serverDateInfo = null;
+
+async function initDateControls() {
+  const d = getCalculatedDates();
+  selectedDate = d.yesterday;
+
+  const dateInput = document.getElementById("dateInput");
+  const tlStart = document.getElementById("tlStart");
+  const tlEnd = document.getElementById("tlEnd");
+
+  if (dateInput) {
+    dateInput.value = d.yesterday;
+    dateInput.max = d.yesterday;
+    dateInput.min = "1993-01-01";
+  }
+
+  if (tlStart) tlStart.value = d.weekAgo;
+  if (tlEnd) {
+    tlEnd.value = d.yesterday;
+    tlEnd.max = d.yesterday;
+    tlEnd.min = "1993-01-01";
+  }
+
   try {
-    const res = await fetch(`${API}/`);
-    if (res.ok) { setDot('apiDot', 'online'); setTxt('apiStatus', 'API Ready'); }
-    else         { setDot('apiDot', 'offline'); setTxt('apiStatus', `API ${res.status}`); }
-  } catch(e)   { setDot('apiDot', 'offline'); setTxt('apiStatus', 'API Offline'); }
+    const res = await fetch(`${API}/api/date-info`);
+    if (res.ok) {
+      serverDateInfo = await res.json();
+      if (serverDateInfo.latest_available) {
+        selectedDate = serverDateInfo.latest_available;
+        if (dateInput) {
+          dateInput.value = serverDateInfo.latest_available;
+          dateInput.max = serverDateInfo.latest_available;
+        }
+        if (tlEnd) {
+          tlEnd.value = serverDateInfo.latest_available;
+          tlEnd.max = serverDateInfo.latest_available;
+        }
+        if (tlStart && serverDateInfo.presets && serverDateInfo.presets["7d"]) {
+          tlStart.value = serverDateInfo.presets["7d"].start;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Could not fetch /api/date-info, using calculated fallback:", err);
+  }
 }
 
-async function loadCacheStats() {
+window.setTimePreset = function(preset) {
+  const d = getCalculatedDates();
+  const dateInput = document.getElementById("dateInput");
+  let target = d.yesterday;
+  if (preset === "yesterday") target = serverDateInfo?.yesterday || d.yesterday;
+  else if (preset === "7d") target = serverDateInfo?.presets?.["7d"]?.start || d.weekAgo;
+  else if (preset === "30d") target = serverDateInfo?.presets?.["30d"]?.start || d.monthAgo;
+  else if (preset === "1y") target = serverDateInfo?.presets?.["1y"]?.start || d.yearAgo;
+
+  selectedDate = target;
+  if (dateInput) dateInput.value = target;
+  showToast(`Time slice set to ${preset.toUpperCase()}: ${target}`, "info");
+  onViewportChanged();
+};
+
+window.setTimelinePreset = function(preset) {
+  const d = getCalculatedDates();
+  const tlStart = document.getElementById("tlStart");
+  const tlEnd = document.getElementById("tlEnd");
+
+  let end = serverDateInfo?.latest_available || d.yesterday;
+  let start = d.weekAgo;
+
+  if (preset === "yesterday") {
+    start = end;
+  } else if (preset === "7d") {
+    start = serverDateInfo?.presets?.["7d"]?.start || d.weekAgo;
+  } else if (preset === "30d") {
+    start = serverDateInfo?.presets?.["30d"]?.start || d.monthAgo;
+  } else if (preset === "1y") {
+    start = serverDateInfo?.presets?.["1y"]?.start || d.yearAgo;
+  }
+
+  if (tlStart) tlStart.value = start;
+  if (tlEnd) tlEnd.value = end;
+  showToast(`Timeline range set to ${preset.toUpperCase()} (${start} to ${end})`, "info");
+  runTimelineQuery();
+};
+
+function initControls() {
+  initDateControls();
+
+  const slider = document.getElementById("depthSlider");
+  const label = document.getElementById("depthLabel");
+  const dateInput = document.getElementById("dateInput");
+
+  slider.addEventListener("input", (e) => {
+    depthMax = parseFloat(e.target.value);
+    depthMin = 0.0;
+    label.textContent = `0–${depthMax.toFixed(0)}m`;
+    document.getElementById("stripRangeText").textContent = `0–${depthMax.toFixed(0)}m`;
+    onViewportChanged();
+  });
+
+  dateInput.addEventListener("change", (e) => {
+    selectedDate = e.target.value;
+    onViewportChanged();
+  });
+}
+
+function buildMemoryGrid() {
+  const container = document.getElementById("memoryGrid");
+  container.innerHTML = "";
+  for (let i = 0; i < 25; i++) {
+    const d0 = i * 2;
+    const cell = document.createElement("div");
+    cell.className = "mem-cell ON_DISK";
+    cell.textContent = `${d0}`;
+    cell.title = `Depth ${d0}–${d0+2}m: ON_DISK (L2)`;
+    container.appendChild(cell);
+  }
+}
+
+async function refreshCoverageStrip() {
+  let bounds = { south: 8, north: 22, west: 68, east: 90 };
+  if (activeEngineMode === "3d" && cesiumViewer) {
+    const cb = getCesiumVisibleBounds();
+    if (cb) bounds = cb;
+  } else if (leafletMap) {
+    const b = leafletMap.getBounds();
+    bounds = { south: b.getSouth(), north: b.getNorth(), west: b.getWest(), east: b.getEast() };
+  }
+
+  const url = `${API}/ocean/coverage?lat_min=${bounds.south}&lat_max=${bounds.north}&lon_min=${bounds.west}&lon_max=${bounds.east}`;
+
   try {
     const res = await fetch(`${API}/api/cache-stats`);
     const data = await res.json();
@@ -1310,14 +2178,15 @@ async function updateCacheStats() {
   setTimeout(updateCacheStats, 30000);   // auto-refresh every 30s
 }
 
-async function flushCache() {
+window.flushCache = async function() {
   try {
-    await fetch(`${API}/api/cache-clear`, { method: 'POST' });
-    showToast('L1 RAM cache flushed', 'success');
-    addLog('info', '[CACHE] L1 flushed by user');
-    loadCacheStats();
-  } catch(e) { showToast(`Flush failed: ${e.message}`, 'error'); }
-}
+    await fetch(`${API}/api/cache-clear`, { method: "POST" });
+    showToast("L1 RAM cache cleared", "success");
+    addLog("info", "[CACHE] L1 cache flushed by user");
+  } catch (e) {
+    showToast("Failed to clear cache", "error");
+  }
+};
 
 /* ========================================================
    UTILITY
