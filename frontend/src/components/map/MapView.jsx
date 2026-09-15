@@ -13,7 +13,7 @@ import CoverageStrip from './CoverageStrip';
 import Colorbar from './Colorbar';
 import PointInspector from './PointInspector';
 
-export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfile }) {
+export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfile, hideSidebar = false }) {
   const { engineMode } = useApp();
   const cesiumRef = useRef(null);
   const leafletRef = useRef(null);
@@ -60,13 +60,15 @@ export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfil
   }, []);
 
   return (
-    <div className="grid grid-cols-[360px_1fr] h-full w-full overflow-hidden">
-      {/* Left Sidebar */}
-      <div className="bg-surface border-r border-border overflow-y-auto p-3 flex flex-col gap-3 z-20">
-        <ViewportControls onTriggerFetch={onTriggerViewportFetch} />
-        <PagingTable />
-        <StreamLog />
-      </div>
+    <div className={`${hideSidebar ? '' : 'grid grid-cols-[360px_1fr]'} h-full w-full overflow-hidden`}>
+      {/* Left Sidebar (hidden when ExplorerPage provides its own) */}
+      {!hideSidebar && (
+        <div className="bg-surface border-r border-border overflow-y-auto p-3 flex flex-col gap-3 z-20">
+          <ViewportControls onTriggerFetch={onTriggerViewportFetch} />
+          <PagingTable />
+          <StreamLog />
+        </div>
+      )}
 
       {/* Map Canvas / Globe Viewport */}
       <div className="relative w-full h-full bg-black overflow-hidden">
