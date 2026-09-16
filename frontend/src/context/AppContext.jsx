@@ -1,28 +1,60 @@
-import { createContext, useContext, useReducer } from 'react';
+import { createContext, useContext, useReducer, useEffect } from 'react';
 import { getCalculatedDates } from '../utils/dates';
 
 const d = getCalculatedDates();
 
+const getInitialMode = () => {
+  try {
+    const saved = localStorage.getItem('oceanstream_mode');
+    return saved === 'scientist' ? 'scientist' : 'student';
+  } catch {
+    return 'student';
+  }
+};
+
 const initialState = {
+  // Mode: 'student' (immersive 3D deep sea / educational) | 'scientist' (advanced research workbench)
+  userMode: getInitialMode(),
+
   activeTab: 'map',
   engineMode: '3d',        // '3d' | '2d'
   basemap: 'satellite',    // 'satellite' | 'ocean' | 'dark' | 'osm'
   renderMode: 'heatmap',   // 'heatmap' | 'points' | 'hybrid'
+  
+  // Visual layer toggles
   showThermalHeatmap: true,
   showStreamlines: true,
+  showArgoLayer: true,
+  argoFilter: 'both',      // 'both' | 'core' | 'bgc'
+  
+  // Streamlines / Particles
   streamlineSpeed: 1.5,
   streamlineParticles: 3500,
+
+  // Heatmap rendering
   heatmapOpacity: 0.88,
   heatmapRadius: 36,
   heatmapBlur: 20,
-  colorPalette: 'ocean',   // 'ocean' | 'plasma' | 'turbo' | 'coolwarm' | 'viridis'
+  colorPalette: 'coolwarm', // 'coolwarm' | 'viridis' | 'turbo' | 'plasma' | 'emerald' | 'hypoxia'
+  
+  // Scientific parameters
+  selectedVariable: 'temperature',
+  selectedDepth: 0,
   depthMin: 0,
-  depthMax: 10,
+  depthMax: 0,
   selectedDate: d.yesterday,
+  isPlayingTime: false,
+  playbackSpeed: 1,
+
+  // Selected telemetry / inspection
+  activePointQuery: null,
+  activeArgoProfile: null,
+  selectedPlatformNumber: null,
+
   gridPoints: [],
-  colorMin: 0.0,
+  colorMin: 20.0,
   colorMax: 32.0,
-  logs: [{ type: 'info', text: '[INIT] 3D Cesium Ocean Surface Engine ready.' }],
+  logs: [{ type: 'info', text: '[INIT] INCOIS 3D/4D Ocean Data Platform ready.' }],
   apiStatus: 'checking',   // 'online' | 'offline' | 'checking'
   wsStatus: 'connecting',  // 'connected' | 'disconnected' | 'connecting'
   serverDateInfo: null,
@@ -31,6 +63,14 @@ const initialState = {
 
 function appReducer(state, action) {
   switch (action.type) {
+    case 'SET_USER_MODE': {
+      try {
+        localStorage.setItem('oceanstream_mode', action.payload);
+      } catch {}
+      return { ...state, userMode: action.payload };
+    }
+    case 'SET_SELECTED_VARIABLE':
+      return { ...state, selectedVariable: action.payload };
     case 'SET_TAB':
       return { ...state, activeTab: action.payload };
     case 'SET_ENGINE_MODE':
@@ -43,6 +83,10 @@ function appReducer(state, action) {
       return { ...state, showStreamlines: action.payload !== undefined ? action.payload : !state.showStreamlines };
     case 'TOGGLE_HEATMAP':
       return { ...state, showThermalHeatmap: action.payload !== undefined ? action.payload : !state.showThermalHeatmap };
+    case 'TOGGLE_ARGO_LAYER':
+      return { ...state, showArgoLayer: action.payload !== undefined ? action.payload : !state.showArgoLayer };
+    case 'SET_ARGO_FILTER':
+      return { ...state, argoFilter: action.payload };
     case 'SET_STREAMLINE_SPEED':
       return { ...state, streamlineSpeed: action.payload };
     case 'SET_HEATMAP_OPACITY':
@@ -54,9 +98,21 @@ function appReducer(state, action) {
     case 'SET_COLOR_PALETTE':
       return { ...state, colorPalette: action.payload };
     case 'SET_DEPTH':
-      return { ...state, depthMin: 0, depthMax: action.payload };
+      return { ...state, selectedDepth: action.payload, depthMin: 0, depthMax: action.payload };
     case 'SET_DATE':
       return { ...state, selectedDate: action.payload };
+    case 'SET_PLAYING_TIME':
+      return { ...state, isPlayingTime: action.payload };
+    case 'SET_PLAYBACK_SPEED':
+      return { ...state, playbackSpeed: action.payload };
+    case 'SET_ACTIVE_POINT_QUERY':
+      return { ...state, activePointQuery: action.payload };
+    case 'SET_ACTIVE_ARGO_PROFILE':
+      return { ...state, activeArgoProfile: action.payload };
+    case 'SET_SELECTED_PLATFORM':
+      return { ...state, selectedPlatformNumber: action.payload };
+    case 'SET_COLOR_RANGE':
+      return { ...state, colorMin: action.payload.min, colorMax: action.payload.max };
     case 'SET_GRID_POINTS': {
       let pts = [...state.gridPoints, ...action.payload];
       if (pts.length > 5000) pts = pts.slice(-5000);
@@ -90,6 +146,12 @@ const AppDispatchContext = createContext(null);
 
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(appReducer, initialState);
+
+  // Sync mode changes to body class for styling if needed
+  useEffect(() => {
+    document.documentElement.setAttribute('data-mode', state.userMode);
+  }, [state.userMode]);
+
   return (
     <AppContext.Provider value={state}>
       <AppDispatchContext.Provider value={dispatch}>

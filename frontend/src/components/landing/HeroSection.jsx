@@ -251,16 +251,28 @@ export default function HeroSection() {
             real-world observations and multidimensional marine data.
           </p>
 
-          <div ref={actionsRef} className="os-hero-actions">
-            <Link to="/explorer" className="os-button os-button-primary">
-              Explore the Ocean
+          <div ref={actionsRef} className="os-hero-actions flex-wrap gap-3">
+            <Link
+              to="/explorer"
+              onClick={() => {
+                try { localStorage.setItem('oceanstream_mode', 'student'); } catch {}
+              }}
+              className="os-button os-button-primary flex items-center gap-2"
+            >
+              <span>🎓 Student 3D Dive</span>
               <ArrowUpRight size={17} strokeWidth={1.8} />
             </Link>
 
-            <a href="#challenge" className="os-button os-button-quiet">
-              Discover the platform
-              <ChevronDown size={16} strokeWidth={1.7} />
-            </a>
+            <Link
+              to="/explorer"
+              onClick={() => {
+                try { localStorage.setItem('oceanstream_mode', 'scientist'); } catch {}
+              }}
+              className="os-button os-button-quiet flex items-center gap-2 border border-violet-500/40 text-violet-200 hover:bg-violet-950/40"
+            >
+              <span>🔬 Scientist Workbench</span>
+              <ArrowUpRight size={17} strokeWidth={1.8} />
+            </Link>
           </div>
         </div>
 

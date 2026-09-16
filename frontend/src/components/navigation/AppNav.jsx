@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Waves, BarChart3, Eye, Settings, ChevronDown, Activity, Database, Zap } from 'lucide-react';
 import { useApp, useAppDispatch } from '../../context/AppContext';
 import { API_BASE } from '../../config/api';
+import ModeSwitcher from '../mode/ModeSwitcher';
 
 const navLinks = [
   { to: '/explorer',      label: 'Explore',       icon: Waves },
@@ -94,10 +95,10 @@ export default function AppNav() {
                     top: 'calc(100% + 6px)',
                     left: 0,
                     width: '200px',
-                    background: '#ffffff',
-                    border: '1px solid #dce4e2',
+                    background: '#0d1525',
+                    border: '1px solid #1e3055',
                     borderRadius: '12px',
-                    boxShadow: '0 12px 32px rgba(22,40,44,0.1)',
+                    boxShadow: '0 12px 32px rgba(0,0,0,0.6)',
                     overflow: 'hidden',
                     zIndex: 99999,
                   }}
@@ -108,13 +109,13 @@ export default function AppNav() {
                       style={{
                         width: '100%', display: 'flex', alignItems: 'center', gap: '8px',
                         padding: '8px 10px', borderRadius: '8px', border: 'none', background: 'transparent',
-                        fontSize: '13px', color: '#4a6068', cursor: 'pointer', textAlign: 'left',
+                        fontSize: '13px', color: '#d4e3f7', cursor: 'pointer', textAlign: 'left',
                         transition: 'background 0.15s',
                       }}
-                      onMouseEnter={e => e.currentTarget.style.background = '#edf2f1'}
+                      onMouseEnter={e => e.currentTarget.style.background = '#172647'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                     >
-                      <Zap size={13} style={{ color: '#c08a2a' }} />
+                      <Zap size={13} style={{ color: '#f5a623' }} />
                       System Diagnostics
                     </button>
                     <button
@@ -122,11 +123,11 @@ export default function AppNav() {
                       style={{
                         width: '100%', display: 'flex', alignItems: 'center', gap: '8px',
                         padding: '8px 10px', borderRadius: '8px', border: 'none', background: 'transparent',
-                        fontSize: '13px', color: '#4a6068', cursor: 'pointer', textAlign: 'left',
+                        fontSize: '13px', color: '#d4e3f7', cursor: 'pointer', textAlign: 'left',
                         transition: 'background 0.15s',
                       }}
-                      onMouseEnter={e => { e.currentTarget.style.background = '#fdf0f0'; e.currentTarget.style.color = '#c04040'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#4a6068'; }}
+                      onMouseEnter={e => { e.currentTarget.style.background = '#32141c'; e.currentTarget.style.color = '#f54375'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#d4e3f7'; }}
                     >
                       <Database size={13} />
                       Flush L1 Cache
@@ -136,6 +137,11 @@ export default function AppNav() {
               )}
             </AnimatePresence>
           </div>
+        </div>
+
+        {/* Global Mode Switcher in Navbar */}
+        <div style={{ marginLeft: '16px' }} className="hidden md:block">
+          <ModeSwitcher compact={true} />
         </div>
 
         {/* Right — Status */}
@@ -151,18 +157,13 @@ export default function AppNav() {
           </div>
 
           {/* WS */}
-          <div className="app-nav-status" style={{ paddingLeft: '12px', borderLeft: '1px solid #dce4e2' }}>
+          <div className="app-nav-status" style={{ paddingLeft: '12px', borderLeft: '1px solid #1e3055' }}>
             <Activity
               size={11}
               strokeWidth={2}
-              style={{ color: wsConnected ? '#168ca0' : '#b0bcbf' }}
+              style={{ color: wsConnected ? '#00c8ff' : '#6b83a6' }}
             />
             <span>{wsConnected ? 'Stream Active' : 'Offline'}</span>
-          </div>
-
-          {/* Badge */}
-          <div className="app-nav-badge" style={{ display: 'none' }} data-desktop="true">
-            SIH · MoES
           </div>
         </div>
       </div>
