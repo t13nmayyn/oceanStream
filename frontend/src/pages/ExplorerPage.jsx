@@ -1,83 +1,66 @@
-import { useCallback, useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { useAppDispatch } from '../context/AppContext';
+import { useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useApp } from '../context/AppContext';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useApiHealth } from '../hooks/useApiHealth';
 import { useDateControls } from '../hooks/useDateControls';
 
 import AppNav from '../components/navigation/AppNav';
-import MapView from '../components/map/MapView';
-import ExplorerSidebar from '../components/explorer/ExplorerSidebar';
-import StatusBar from '../components/explorer/StatusBar';
+import StudentExplorer from '../components/student/StudentExplorer';
+import ScientistExplorer from '../components/scientist/ScientistExplorer';
 
-// Inner component that can access context
-function ExplorerInner() {
-  const dispatch = useAppDispatch();
-  const { sendViewport } = useWebSocket();
+export default function ExplorerPage() {
+  const { userMode } = useApp();
+  useWebSocket();
   useApiHealth();
   useDateControls();
 
-  const [selectedVariable, setSelectedVariable] = useState('temperature');
-  const [lastCacheLevel, setLastCacheLevel] = useState(null);
-
-  const handleTriggerViewportFetch = useCallback((bounds) => {
-    const defaultBounds = bounds || { south: 8, north: 22, west: 68, east: 90 };
-    sendViewport(defaultBounds);
-  }, [sendViewport]);
-
-  const handleSelectFloatForProfile = useCallback((platformId) => {
-    // Could navigate to /observations with this float pre-selected
-    // For now, keep within explorer context
+  // Lock body scroll in explorer
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = '';
+    };
   }, []);
 
   return (
     <div
-      className="explorer-layout flex flex-col"
-      style={{ height: '100vh', overflow: 'hidden' }}
+      className="explorer-layout flex flex-col w-screen h-screen overflow-hidden bg-slate-950 text-slate-100"
     >
-      {/* Top navigation — fixed */}
+      {/* Top navigation */}
       <AppNav />
 
-      {/* Main area below nav */}
+      {/* Main View Area */}
       <div
-        className="flex flex-1 overflow-hidden"
-        style={{ paddingTop: '56px', paddingBottom: '32px' }}
+        className="flex-1 relative overflow-hidden"
+        style={{ paddingTop: '56px' }}
       >
-        {/* Left sidebar — redesigned controls */}
-        <ExplorerSidebar onVariableChange={setSelectedVariable} />
-
-        {/* Globe/Map viewport fills the rest — hideSidebar removes internal old sidebar */}
-        <div className="flex-1 relative overflow-hidden">
-          <MapView
-            onTriggerViewportFetch={handleTriggerViewportFetch}
-            onSelectFloatForProfile={handleSelectFloatForProfile}
-            hideSidebar={true}
-          />
-        </div>
+        <AnimatePresence mode="wait">
+          {userMode === 'student' ? (
+            <motion.div
+              key="student-mode"
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              transition={{ duration: 0.3 }}
+              className="w-full h-full absolute inset-0"
+            >
+              <StudentExplorer />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="scientist-mode"
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              transition={{ duration: 0.3 }}
+              className="w-full h-full absolute inset-0"
+            >
+              <ScientistExplorer />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
-
-      {/* Bottom status bar */}
-      <StatusBar selectedVariable={selectedVariable} lastCacheLevel={lastCacheLevel} />
     </div>
-  );
-}
-
-export default function ExplorerPage() {
-  // Explorer locks body scroll
-  useEffect(() => {
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = ''; };
-  }, []);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.25 }}
-      style={{ height: '100vh', overflow: 'hidden' }}
-    >
-      <ExplorerInner />
-    </motion.div>
   );
 }

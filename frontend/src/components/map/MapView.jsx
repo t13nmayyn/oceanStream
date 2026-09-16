@@ -3,19 +3,16 @@ import { useApp } from '../../context/AppContext';
 import ViewportControls from './ViewportControls';
 import PagingTable from '../sidebar/PagingTable';
 import StreamLog from '../sidebar/StreamLog';
-import CesiumGlobe from './CesiumGlobe';
+import GlobeGlViewer from './GlobeGlViewer';
 import LeafletMap from './LeafletMap';
 import MapHUD from './MapHUD';
 import RegionPresets from './RegionPresets';
 import ZoomControls from './ZoomControls';
-import HeatmapControls from './HeatmapControls';
-import CoverageStrip from './CoverageStrip';
-import Colorbar from './Colorbar';
 import PointInspector from './PointInspector';
 
 export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfile, hideSidebar = false }) {
   const { engineMode } = useApp();
-  const cesiumRef = useRef(null);
+  const globeRef = useRef(null);
   const leafletRef = useRef(null);
   const [selectedPoint, setSelectedPoint] = useState(null);
 
@@ -25,7 +22,7 @@ export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfil
 
   const handleFlyTo = useCallback((region) => {
     if (engineMode === '3d') {
-      cesiumRef.current?.flyTo(region.lon, region.lat, region.height, region.pitch);
+      globeRef.current?.flyTo(region.lon, region.lat, 1.8);
     } else {
       leafletRef.current?.setView(region.lat, region.lon, region.zoom);
     }
@@ -33,7 +30,7 @@ export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfil
 
   const handleZoomIn = useCallback(() => {
     if (engineMode === '3d') {
-      cesiumRef.current?.zoomIn();
+      globeRef.current?.zoomIn();
     } else {
       leafletRef.current?.zoomIn();
     }
@@ -41,27 +38,27 @@ export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfil
 
   const handleZoomOut = useCallback(() => {
     if (engineMode === '3d') {
-      cesiumRef.current?.zoomOut();
+      globeRef.current?.zoomOut();
     } else {
       leafletRef.current?.zoomOut();
     }
   }, [engineMode]);
 
   const handleReset = useCallback(() => {
-    handleFlyTo({ lon: 85.0, lat: 14.5, height: 2600000, pitch: -65, zoom: 5 });
-  }, [handleFlyTo]);
+    if (engineMode === '3d') {
+      globeRef.current?.resetFocus();
+    } else {
+      handleFlyTo({ lon: 78.5, lat: 14.5, zoom: 5 });
+    }
+  }, [engineMode, handleFlyTo]);
 
   const handleNorth = useCallback(() => {
-    cesiumRef.current?.alignNorth();
-  }, []);
-
-  const handlePitch = useCallback(() => {
-    cesiumRef.current?.togglePitch();
+    globeRef.current?.alignNorth();
   }, []);
 
   return (
-    <div className={`${hideSidebar ? '' : 'grid grid-cols-[360px_1fr]'} h-full w-full overflow-hidden`}>
-      {/* Left Sidebar (hidden when ExplorerPage provides its own) */}
+    <div className={`${hideSidebar ? '' : 'grid grid-cols-[360px_1fr]'} h-full w-full overflow-hidden bg-slate-950`}>
+      {/* Left Sidebar (hidden when Explorer provides its own) */}
       {!hideSidebar && (
         <div className="bg-surface border-r border-border overflow-y-auto p-3 flex flex-col gap-3 z-20">
           <ViewportControls onTriggerFetch={onTriggerViewportFetch} />
@@ -71,13 +68,14 @@ export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfil
       )}
 
       {/* Map Canvas / Globe Viewport */}
-      <div className="relative w-full h-full bg-black overflow-hidden">
-        {/* 3D Cesium Globe */}
+      <div className="relative w-full h-full bg-slate-950 overflow-hidden">
+        {/* 3D Globe.gl Multidimensional Earth */}
         <div className={`w-full h-full absolute inset-0 ${engineMode === '3d' ? 'block' : 'hidden'}`}>
-          <CesiumGlobe
-            ref={cesiumRef}
+          <GlobeGlViewer
+            ref={globeRef}
             onViewportChange={onTriggerViewportFetch}
             onPointClick={handlePointClick}
+            onSelectFloatForProfile={onSelectFloatForProfile}
           />
         </div>
 
@@ -90,20 +88,16 @@ export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfil
           />
         </div>
 
-        {/* Floating Overlays */}
-        <MapHUD />
+        {/* Floating Controls */}
         <RegionPresets onFlyTo={handleFlyTo} />
         <ZoomControls
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
           onReset={handleReset}
           onNorth={handleNorth}
-          onPitch={handlePitch}
         />
-        <HeatmapControls />
-        <CoverageStrip />
-        <Colorbar />
 
+        {/* Point Inspector */}
         <PointInspector
           point={selectedPoint}
           onClose={() => setSelectedPoint(null)}
