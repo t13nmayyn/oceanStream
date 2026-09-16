@@ -1,113 +1,158 @@
- import { useEffect, useRef } from 'react';
+ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, ChevronDown } from 'lucide-react';
 import { gsap } from 'gsap';
 
-const eyebrow = 'MINISTRY OF EARTH SCIENCES  ·  INCOIS  ·  SIH 2026';
+const EYEBROW = 'MINISTRY OF EARTH SCIENCES  ·  INCOIS  ·  SIH 2026';
 
 export default function HeroSection() {
-  const heroRef = useRef(null);
-  const eyebrowRef = useRef(null);
-  const titleRef = useRef(null);
+  const heroRef        = useRef(null);
+  const eyebrowRef     = useRef(null);
+  const titleRef       = useRef(null);
   const descriptionRef = useRef(null);
-  const actionsRef = useRef(null);
-  const metaRef = useRef(null);
-  const imageRef = useRef(null);
+  const actionsRef     = useRef(null);
+  const metaRef        = useRef(null);
+  const videoRef = useRef(null);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Reduced-motion state
+  // ─────────────────────────────────────────────────────────────────────────
+  const [reducedMotion, setReducedMotion] = useState(
+    () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
 
   useEffect(() => {
-    const hero = heroRef.current;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const handler = (e) => setReducedMotion(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
 
-    if (!hero) return;
+  // ─────────────────────────────────────────────────────────────────────────
+  // Video playback management
+  //
+  // Explicitly enforces DOM-level muted + defaultMuted properties required by
+  // Chromium / WebKit autoplay security policies, attaches lifecycle event
+  // triggers for reliable autoplay, and adds user interaction fallbacks.
+  // ─────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (reducedMotion) return;
 
-    const reduceMotion = window.matchMedia(
-      '(prefers-reduced-motion: reduce)'
-    ).matches;
+    const video = videoRef.current;
+    if (!video) return;
 
-    if (reduceMotion) {
-      gsap.set(
-        [
-          eyebrowRef.current,
-          titleRef.current,
-          descriptionRef.current,
-          actionsRef.current,
-          metaRef.current,
-          imageRef.current,
-        ],
-        { opacity: 1, y: 0 }
-      );
-      return;
+    // Enforce DOM properties directly on the element node
+    video.muted = true;
+    video.defaultMuted = true;
+    video.playsInline = true;
+    video.autoplay = true;
+    video.loop = true;
+
+    const playVideo = () => {
+      if (!video) return;
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((e) => {
+          console.warn("Video autoplay deferred until interaction:", e);
+        });
+      }
+    };
+
+    if (video.readyState >= 2) {
+      playVideo();
+    } else {
+      video.addEventListener('loadedmetadata', playVideo, { once: true });
+      video.addEventListener('canplay', playVideo, { once: true });
+      video.addEventListener('loadeddata', playVideo, { once: true });
     }
 
-    const ctx = gsap.context(() => {
-      const tl = gsap.timeline({
-        defaults: {
-          ease: 'power3.out',
-        },
-      });
+    // Safety fallback: if browser held autoplay, trigger on first user scroll / touch
+    const handleFirstGesture = () => {
+      if (video && video.paused) {
+        playVideo();
+      }
+      window.removeEventListener('scroll', handleFirstGesture);
+      window.removeEventListener('click', handleFirstGesture);
+      window.removeEventListener('touchstart', handleFirstGesture);
+    };
 
-      tl.fromTo(
-        imageRef.current,
-        { scale: 1.08 },
-        {
-          scale: 1,
-          duration: 2,
-          ease: 'power2.out',
-        }
-      )
+    window.addEventListener('scroll', handleFirstGesture, { passive: true, once: true });
+    window.addEventListener('click', handleFirstGesture, { once: true });
+    window.addEventListener('touchstart', handleFirstGesture, { passive: true, once: true });
+
+    return () => {
+      if (video) {
+        video.removeEventListener('loadedmetadata', playVideo);
+        video.removeEventListener('canplay', playVideo);
+        video.removeEventListener('loadeddata', playVideo);
+      }
+      window.removeEventListener('scroll', handleFirstGesture);
+      window.removeEventListener('click', handleFirstGesture);
+      window.removeEventListener('touchstart', handleFirstGesture);
+    };
+  }, [reducedMotion]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GSAP entrance animation
+  // ─────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (reducedMotion) return;
+
+    const hero = heroRef.current;
+    if (!hero) return;
+
+    const ctx = gsap.context(() => {
+      const tl = gsap.timeline({ defaults: { ease: 'power3.out' } });
+      const mediaEl = videoRef.current || hero.querySelector('.os-hero-image');
+
+      if (mediaEl) {
+        tl.fromTo(
+          mediaEl,
+          { scale: 1.06 },
+          { scale: 1, duration: 2.4, ease: 'power2.out' }
+        );
+      }
+
+      tl
+        // Eyebrow label
         .fromTo(
           eyebrowRef.current,
-          { opacity: 0, y: 20 },
-          {
-            opacity: 1,
-            y: 0,
-            duration: 0.7,
-          },
-          '-=1.3'
+          { opacity: 0, y: 14 },
+          { opacity: 1, y: 0, duration: 0.65 },
+          mediaEl ? '-=1.5' : 0
         )
+        // Main heading — slightly larger movement for hierarchy
         .fromTo(
           titleRef.current,
-          { opacity: 0, y: 45 },
-          {
-            opacity: 1,
-            y: 0,
-            duration: 1,
-          },
+          { opacity: 0, y: 30 },
+          { opacity: 1, y: 0, duration: 0.9 },
           '-=0.45'
         )
+        // Description paragraph
         .fromTo(
           descriptionRef.current,
-          { opacity: 0, y: 25 },
-          {
-            opacity: 1,
-            y: 0,
-            duration: 0.7,
-          },
-          '-=0.55'
+          { opacity: 0, y: 18 },
+          { opacity: 1, y: 0, duration: 0.65, ease: 'power2.out' },
+          '-=0.52'
         )
+        // CTA row
         .fromTo(
           actionsRef.current,
-          { opacity: 0, y: 20 },
-          {
-            opacity: 1,
-            y: 0,
-            duration: 0.6,
-          },
-          '-=0.4'
+          { opacity: 0, y: 14 },
+          { opacity: 1, y: 0, duration: 0.55, ease: 'power2.out' },
+          '-=0.38'
         )
+        // Right-side editorial meta panel
         .fromTo(
           metaRef.current,
-          { opacity: 0, y: 15 },
-          {
-            opacity: 1,
-            y: 0,
-            duration: 0.5,
-          },
-          '-=0.25'
+          { opacity: 0, y: 10 },
+          { opacity: 1, y: 0, duration: 0.45, ease: 'power2.out' },
+          '-=0.28'
         );
     }, hero);
 
     return () => ctx.revert();
-  }, []);
+  }, [reducedMotion]);
 
   return (
     <section
@@ -115,14 +160,72 @@ export default function HeroSection() {
       className="os-hero"
       aria-label="oceanStream introduction"
     >
-      {/* Full-screen photographic background */}
+      {/* ── Background media layer ────────────────────────────────────────── */}
       <div className="os-hero-media">
-        <img
-          ref={imageRef}
-          src="/prototype/images/ocean-hero.jpg"
-          alt=""
-          className="os-hero-image"
-        />
+        {reducedMotion ? (
+          /*
+           * REDUCED-MOTION PATH
+           * The <video> element is not mounted — static poster image is shown.
+           */
+          <img
+            src="/prototype/images/ocean-hero.jpg"
+            srcSet="/prototype/images/ocean-hero-mobile.jpg 768w, /prototype/images/ocean-hero.jpg 1920w"
+            sizes="100vw"
+            alt=""
+            className="os-hero-image"
+            aria-hidden="true"
+            loading="eager"
+            fetchPriority="high"
+          />
+        ) : (
+          /*
+           * STANDARD AUTOPLAY BACKGROUND VIDEO PATH
+           */
+          <video
+            ref={videoRef}
+            className="os-hero-video"
+            autoPlay
+            muted
+            loop
+            playsInline
+            disablePictureInPicture
+            preload="auto"
+            poster="/prototype/images/ocean-hero.jpg"
+            aria-hidden="true"
+            style={{ pointerEvents: 'none' }}
+          >
+            {/* 1. Mobile MP4 (H.264, 720p, ~1.4MB) */}
+            <source
+              media="(max-width: 768px)"
+              src="/prototype/images/ocean-hero-mobile.mp4"
+              type="video/mp4"
+            />
+            {/* 2. Mobile WebM (VP9, 720p, ~1.5MB) */}
+            <source
+              media="(max-width: 768px)"
+              src="/prototype/images/ocean-hero-mobile.webm"
+              type="video/webm"
+            />
+            {/* 3. Desktop MP4 (H.264, 1080p, ~3.3MB) */}
+            <source
+              src="/prototype/images/ocean-hero.mp4"
+              type="video/mp4"
+            />
+            {/* 4. Desktop WebM (VP9, 1080p, ~3.1MB) */}
+            <source
+              src="/prototype/images/ocean-hero.webm"
+              type="video/webm"
+            />
+            {/* Hard fallback for browsers that do not support <video> */}
+            <img
+              src="/prototype/images/ocean-hero.jpg"
+              srcSet="/prototype/images/ocean-hero-mobile.jpg 768w, /prototype/images/ocean-hero.jpg 1920w"
+              sizes="100vw"
+              alt=""
+              className="os-hero-image"
+            />
+          </video>
+        )}
 
         <div className="os-hero-overlay" />
         <div className="os-hero-vignette" />
@@ -130,11 +233,12 @@ export default function HeroSection() {
 
       {/* Minimal top navigation is supplied by LandingPage */}
 
+      {/* ── Hero content ─────────────────────────────────────────────────── */}
       <div className="os-hero-inner">
         <div className="os-hero-copy">
           <div ref={eyebrowRef} className="os-hero-eyebrow">
             <span className="os-hero-eyebrow-line" />
-            <span>{eyebrow}</span>
+            <span>{EYEBROW}</span>
           </div>
 
           <h1 ref={titleRef} className="os-hero-title">

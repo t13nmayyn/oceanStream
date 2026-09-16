@@ -1,7 +1,7 @@
  import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, Menu, X } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 
 import HeroSection from '../components/landing/HeroSection';
 import SectionChallenge from '../components/landing/SectionChallenge';
@@ -9,22 +9,19 @@ import SectionPipeline from '../components/landing/SectionPipeline';
 import SectionVariables from '../components/landing/SectionVariables';
 import SectionDepth from '../components/landing/SectionDepth';
 import SectionModelObs from '../components/landing/SectionModelObs';
-import SectionDataEngine from '../components/landing/SectionDataEngine';
-import SectionUseCases from '../components/landing/SectionUseCases';
-import SectionAcronyms from '../components/landing/SectionAcronyms';
-import SectionDatasets from '../components/landing/SectionDatasets';
 import SectionCTA from '../components/landing/SectionCTA';
 
 const navLinks = [
   { href: '#challenge', label: 'Platform' },
   { href: '#variables', label: 'Variables' },
   { href: '#depth', label: 'Depth' },
-  { href: '#engine', label: 'Technology' },
+  { href: '#models', label: 'Models' },
 ];
 
 function LandingNav() {
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const shouldReduceMotion = useReducedMotion();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -40,9 +37,9 @@ function LandingNav() {
   return (
     <motion.nav
       className={`os-landing-nav ${scrolled ? 'is-scrolled' : ''}`}
-      initial={{ opacity: 0, y: -20 }}
+      initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.7, delay: 0.1 }}
+      transition={{ duration: 0.4, delay: 0.05, ease: [0.22, 1, 0.36, 1] }}
     >
       <div className="os-nav-inner">
         <Link to="/" className="os-brand" onClick={() => setMobileOpen(false)}>
@@ -112,7 +109,7 @@ function LandingNav() {
 
 function LandingFooter() {
   return (
-    <footer className="os-footer">
+    <footer className="os-footer" style={{ background: '#070f1a', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
       <div className="os-footer-main">
         <div className="os-footer-brand">
           <div className="os-footer-title">
@@ -200,37 +197,39 @@ export default function LandingPage() {
       <LandingNav />
 
       <main>
+        {/* 1. HERO */}
         <HeroSection />
 
+        {/* 2. 4D OCEAN */}
         <div id="challenge">
           <SectionChallenge />
         </div>
 
-        <SectionPipeline />
+        {/* 3. UNIFIED DATA */}
+        <div id="pipeline">
+          <SectionPipeline />
+        </div>
 
+        {/* 4. VARIABLES */}
         <div id="variables">
           <SectionVariables />
         </div>
 
+        {/* 5. DEPTH */}
         <div id="depth">
           <SectionDepth />
         </div>
 
-        <SectionModelObs />
-
-        <div id="engine">
-          <SectionDataEngine />
+        {/* 6. MODELS + OBSERVATIONS */}
+        <div id="models">
+          <SectionModelObs />
         </div>
 
-        <SectionUseCases />
-
-        <SectionAcronyms />
-
-        <SectionDatasets />
-
+        {/* 7. FINAL CTA */}
         <SectionCTA />
       </main>
 
+      {/* 8. FOOTER */}
       <LandingFooter />
     </motion.div>
   );

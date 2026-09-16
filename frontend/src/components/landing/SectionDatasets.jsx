@@ -82,8 +82,29 @@ export default function SectionDatasets() {
   return (
     <section
       className="landing-section"
-      style={{ background: '#f4f6f5' }}
+      style={{
+        background: 'linear-gradient(180deg, #f4f6f5 0%, #edf3f1 100%)',
+        position: 'relative',
+        overflow: 'hidden',
+        padding: '76px 0 84px',
+      }}
     >
+      {/* Seamless top divider bridge */}
+      <div
+        className="absolute top-0 left-0 right-0 h-[1px] pointer-events-none"
+        style={{
+          background: 'linear-gradient(90deg, transparent 5%, rgba(22, 140, 160, 0.12) 50%, transparent 95%)',
+        }}
+      />
+
+      {/* Seamless bottom divider bridge */}
+      <div
+        className="absolute bottom-0 left-0 right-0 h-[1px] pointer-events-none"
+        style={{
+          background: 'linear-gradient(90deg, transparent 5%, rgba(0, 200, 255, 0.28) 50%, transparent 95%)',
+        }}
+      />
+
       <div className="os-container" ref={ref}>
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -114,7 +135,7 @@ export default function SectionDatasets() {
                     <th
                       key={h}
                       className="text-left px-4 py-3.5 whitespace-nowrap"
-                      style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '9px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#7a9094' }}
+                      style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#687e84' }}
                     >
                       {h}
                     </th>
@@ -168,6 +189,14 @@ export default function SectionDatasets() {
           </div>
         </motion.div>
       </div>
+
+      <style>{`
+        @media (max-width: 640px) {
+          .landing-section {
+            padding: 64px 0 76px !important;
+          }
+        }
+      `}</style>
     </section>
   );
 }
