@@ -1,172 +1,415 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Thermometer, Droplets, Wind, Leaf, Activity, Info, Sparkles } from 'lucide-react';
+import {
+  Thermometer,
+  Droplets,
+  Wind,
+  Leaf,
+  Activity,
+  Info,
+  Sparkles,
+  ArrowUpRight,
+} from 'lucide-react';
 
 const STUDENT_VARIABLES = [
   {
     id: 'temperature',
+    short: 'TEMP',
     name: 'Ocean Temperature',
     unit: '°C',
     icon: Thermometer,
-    color: '#f87171',
-    borderColor: 'border-red-500/40',
-    bgGradient: 'from-red-500/10 to-orange-500/10',
+    color: '#fb7185',
     summary: 'How warm or cold seawater is at different depths.',
-    analogy: 'Like a blanket on Earth! Warmer water stays at the surface, while the deep ocean is near freezing.',
-    fact: 'The ocean absorbs more than 90% of excess heat from global warming, shielding our atmosphere.',
+    analogy:
+      'Like a blanket on Earth! Warmer water stays near the surface, while the deep ocean is much colder.',
+    fact: 'The ocean absorbs more than 90% of excess heat from global warming, helping regulate our atmosphere.',
   },
   {
     id: 'salinity',
+    short: 'SALI',
     name: 'Ocean Salinity',
     unit: 'PSU',
     icon: Droplets,
     color: '#38bdf8',
-    borderColor: 'border-sky-500/40',
-    bgGradient: 'from-sky-500/10 to-blue-500/10',
-    summary: 'The amount of dissolved salt in seawater.',
-    analogy: 'Imagine adding 35 grams of table salt (about 2 tablespoons) to 1 liter of drinking water!',
-    fact: 'Saltier water is heavier and sinks, powering the global ocean conveyor belt of currents.',
+    summary: 'The amount of dissolved salt present in seawater.',
+    analogy:
+      'Imagine dissolving salt into water — more dissolved salt makes seawater denser and changes how it moves.',
+    fact: 'Differences in temperature and salinity help drive large-scale ocean circulation.',
   },
   {
     id: 'currents',
+    short: 'CURR',
     name: 'Ocean Currents',
     unit: 'm/s',
     icon: Wind,
     color: '#818cf8',
-    borderColor: 'border-indigo-500/40',
-    bgGradient: 'from-indigo-500/10 to-violet-500/10',
-    summary: 'Massive underwater rivers flowing through the world’s oceans.',
-    analogy: 'Like a global highway system for sea turtles, whales, and heat energy!',
-    fact: 'The Gulf Stream carries nearly 100 times more water flow than all the rivers in the world combined.',
+    summary: 'Large-scale movements of seawater across the ocean.',
+    analogy:
+      'Think of them as invisible highways carrying heat, nutrients and marine life across the planet.',
+    fact: 'Ocean currents redistribute heat around Earth and strongly influence climate and ecosystems.',
   },
   {
     id: 'chlorophyll',
+    short: 'CHL-A',
     name: 'Chlorophyll-a',
     unit: 'mg/m³',
     icon: Leaf,
     color: '#34d399',
-    borderColor: 'border-emerald-500/40',
-    bgGradient: 'from-emerald-500/10 to-teal-500/10',
-    summary: 'The green pigment in microscopic ocean plants (phytoplankton).',
-    analogy: 'The "pastures of the sea" that produce more than half the oxygen we breathe on Earth!',
-    fact: 'High chlorophyll means rich feeding grounds for tuna, dolphins, and blue whales.',
+    summary: 'A key indicator of microscopic marine plant life called phytoplankton.',
+    analogy:
+      'Think of phytoplankton as tiny underwater forests — they use sunlight to create energy.',
+    fact: 'Chlorophyll observations help scientists identify regions of high biological productivity.',
   },
   {
     id: 'oxygen',
+    short: 'O₂',
     name: 'Dissolved Oxygen',
     unit: 'mmol/m³',
     icon: Activity,
     color: '#22d3ee',
-    borderColor: 'border-cyan-500/40',
-    bgGradient: 'from-cyan-500/10 to-sky-500/10',
-    summary: 'Oxygen gas dissolved in water for fish and marine life to breathe.',
-    analogy: 'Just like land animals breathe air through lungs, fish breathe dissolved oxygen using gills.',
-    fact: 'Sunlight and waves add oxygen at the surface, while deep ocean currents keep deep animals alive.',
+    summary: 'Oxygen dissolved in seawater that supports marine life.',
+    analogy:
+      'Fish breathe oxygen from water through their gills, just as humans breathe oxygen from air.',
+    fact: 'Oxygen availability changes with depth, temperature, biology and ocean circulation.',
   },
 ];
 
-export default function VariableEducationCard({ selectedVariable, onSelectVariable }) {
-  const [expandedId, setExpandedId] = useState(selectedVariable || 'temperature');
+export default function VariableEducationCard({
+  selectedVariable,
+  onSelectVariable,
+}) {
+  const [expandedId, setExpandedId] = useState(
+    selectedVariable || 'temperature'
+  );
 
-  const activeVar = STUDENT_VARIABLES.find((v) => v.id === expandedId) || STUDENT_VARIABLES[0];
+  const activeVar =
+    STUDENT_VARIABLES.find((v) => v.id === expandedId) ||
+    STUDENT_VARIABLES[0];
+
+  const ActiveIcon = activeVar.icon;
+
+  const handleSelect = (id) => {
+    setExpandedId(id);
+    onSelectVariable?.(id);
+  };
 
   return (
-    <div className="flex flex-col gap-2.5 w-80 p-4 rounded-2xl bg-slate-900/90 border border-slate-700/70 shadow-2xl backdrop-blur-xl text-slate-100 select-none">
-      
+    <motion.aside
+      initial={{ opacity: 0, x: 18 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.45, ease: 'easeOut' }}
+      className="
+        relative
+        w-[336px]
+        overflow-hidden
+        rounded-[22px]
+        border border-white/[0.10]
+        bg-[#071525]/88
+        text-slate-100
+        shadow-[0_20px_60px_rgba(0,0,0,0.42)]
+        backdrop-blur-2xl
+        select-none
+      "
+      aria-label="Ocean science explorer"
+    >
+      {/* Ambient accent */}
+      <motion.div
+        key={activeVar.id}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.35 }}
+        className="pointer-events-none absolute right-0 top-0 h-32 w-40 blur-3xl"
+        style={{
+          background: `${activeVar.color}18`,
+        }}
+      />
+
       {/* Header */}
-      <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-            <Leaf size={16} />
-          </div>
-          <div>
-            <h3 className="text-sm font-bold text-white tracking-wide">
+      <div className="relative border-b border-white/[0.07] px-4 py-3.5">
+        <div className="flex items-center gap-3">
+          <motion.div
+            animate={{
+              borderColor: `${activeVar.color}45`,
+              backgroundColor: `${activeVar.color}0D`,
+              color: activeVar.color,
+            }}
+            transition={{ duration: 0.25 }}
+            className="
+              flex h-9 w-9 shrink-0 items-center justify-center
+              rounded-xl border
+            "
+          >
+            <Leaf size={17} strokeWidth={1.8} />
+          </motion.div>
+
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold tracking-[-0.01em] text-white">
               Ocean Science Explorer
-            </h3>
-            <span className="text-[11px] text-emerald-300 font-medium">
-              Discover what each variable tells us
-            </span>
+            </p>
+
+            <div className="mt-0.5 flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.6)]" />
+              <span className="text-[9px] font-medium uppercase tracking-[0.12em] text-emerald-200/75">
+                Learn the ocean
+              </span>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Variable Pills */}
-      <div className="grid grid-cols-5 gap-1 p-1 bg-slate-950/60 rounded-xl border border-slate-800">
-        {STUDENT_VARIABLES.map((v) => {
-          const Icon = v.icon;
-          const isSelected = expandedId === v.id;
-          return (
-            <button
-              key={v.id}
-              onClick={() => {
-                setExpandedId(v.id);
-                onSelectVariable?.(v.id);
+      <div className="relative p-3">
+
+        {/* Variable selector */}
+        <div className="rounded-2xl border border-white/[0.07] bg-black/20 p-1">
+          <div className="grid grid-cols-5 gap-0.5">
+            {STUDENT_VARIABLES.map((variable) => {
+              const Icon = variable.icon;
+              const isSelected = expandedId === variable.id;
+
+              return (
+                <button
+                  key={variable.id}
+                  type="button"
+                  onClick={() => handleSelect(variable.id)}
+                  title={variable.name}
+                  aria-label={variable.name}
+                  aria-pressed={isSelected}
+                  className={`
+                    group relative flex min-h-[54px]
+                    flex-col items-center justify-center
+                    rounded-xl
+                    transition-colors duration-200
+                    ${
+                      isSelected
+                        ? 'text-white'
+                        : 'text-slate-500 hover:bg-white/[0.035] hover:text-slate-300'
+                    }
+                  `}
+                >
+                  {isSelected && (
+                    <motion.div
+                      layoutId="student-variable-active"
+                      className="absolute inset-0 rounded-xl"
+                      transition={{
+                        type: 'spring',
+                        stiffness: 420,
+                        damping: 32,
+                      }}
+                      style={{
+                        background: `${variable.color}10`,
+                        border: `1px solid ${variable.color}30`,
+                      }}
+                    />
+                  )}
+
+                  <span
+                    className="
+                      relative z-10
+                      flex h-7 w-7 items-center justify-center
+                      rounded-lg
+                    "
+                    style={{
+                      background: isSelected
+                        ? `${variable.color}12`
+                        : 'transparent',
+                    }}
+                  >
+                    <Icon
+                      size={15}
+                      strokeWidth={1.8}
+                      style={{
+                        color: isSelected
+                          ? variable.color
+                          : undefined,
+                      }}
+                    />
+                  </span>
+
+                  <span
+                    className={`
+                      relative z-10 mt-1
+                      font-mono text-[8px] font-semibold
+                      tracking-[0.04em]
+                      ${
+                        isSelected
+                          ? 'text-slate-200'
+                          : 'text-slate-600 group-hover:text-slate-400'
+                      }
+                    `}
+                  >
+                    {variable.short}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Active variable */}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeVar.id}
+            initial={{
+              opacity: 0,
+              y: 7,
+              filter: 'blur(2px)',
+            }}
+            animate={{
+              opacity: 1,
+              y: 0,
+              filter: 'blur(0px)',
+            }}
+            exit={{
+              opacity: 0,
+              y: -5,
+              filter: 'blur(2px)',
+            }}
+            transition={{
+              duration: 0.24,
+              ease: 'easeOut',
+            }}
+            className="mt-2.5"
+          >
+            {/* Main information */}
+            <div
+              className="
+                relative overflow-hidden
+                rounded-2xl
+                border
+                bg-white/[0.025]
+              "
+              style={{
+                borderColor: `${activeVar.color}32`,
               }}
-              className={`flex flex-col items-center justify-center p-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                isSelected
-                  ? 'bg-slate-800 text-white shadow-md border border-slate-600'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
-              }`}
-              title={v.name}
             >
-              <Icon size={16} style={{ color: isSelected ? v.color : undefined }} />
-              <span className="text-[9px] font-semibold mt-1 truncate max-w-full">
-                {v.id.slice(0, 4)}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Expanded Active Variable Card */}
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={activeVar.id}
-          initial={{ opacity: 0, y: 4 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -4 }}
-          transition={{ duration: 0.2 }}
-          className={`p-3.5 rounded-xl border bg-gradient-to-br ${activeVar.bgGradient} ${activeVar.borderColor} space-y-3`}
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+              {/* Top color accent */}
               <div
-                className="p-2 rounded-lg border shadow-sm"
+                className="absolute left-0 right-0 top-0 h-px"
                 style={{
-                  backgroundColor: `${activeVar.color}20`,
-                  borderColor: `${activeVar.color}40`,
-                  color: activeVar.color,
+                  background: `linear-gradient(90deg, transparent, ${activeVar.color}80, transparent)`,
                 }}
-              >
-                <activeVar.icon size={18} />
-              </div>
-              <div>
-                <div className="text-xs font-bold text-white">{activeVar.name}</div>
-                <div className="text-[10px] text-slate-400 font-mono">Unit: {activeVar.unit}</div>
+              />
+
+              <div className="p-3.5">
+
+                {/* Variable identity */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <div
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border"
+                      style={{
+                        color: activeVar.color,
+                        borderColor: `${activeVar.color}30`,
+                        background: `${activeVar.color}0D`,
+                      }}
+                    >
+                      <ActiveIcon size={19} strokeWidth={1.8} />
+                    </div>
+
+                    <div className="min-w-0">
+                      <h3 className="truncate text-[13px] font-semibold text-white">
+                        {activeVar.name}
+                      </h3>
+
+                      <div className="mt-1 flex items-center gap-2">
+                        <span
+                          className="font-mono text-[9px] font-medium"
+                          style={{
+                            color: `${activeVar.color}CC`,
+                          }}
+                        >
+                          {activeVar.id}
+                        </span>
+
+                        <span className="h-1 w-1 rounded-full bg-slate-700" />
+
+                        <span className="font-mono text-[9px] text-slate-500">
+                          {activeVar.unit}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    className="flex h-6 shrink-0 items-center gap-1 rounded-full border px-2"
+                    style={{
+                      borderColor: `${activeVar.color}25`,
+                      color: activeVar.color,
+                      background: `${activeVar.color}08`,
+                    }}
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                    <span className="font-mono text-[7px] font-semibold uppercase tracking-[0.08em]">
+                      Active
+                    </span>
+                  </div>
+                </div>
+
+                {/* Explanation */}
+                <p className="mt-3 text-[10px] leading-[1.65] text-slate-300">
+                  {activeVar.summary}
+                </p>
+
+                {/* Analogy */}
+                <div className="mt-3 rounded-xl border border-cyan-300/[0.10] bg-cyan-300/[0.025] p-2.5">
+                  <div className="mb-1.5 flex items-center gap-1.5">
+                    <Sparkles
+                      size={11}
+                      className="text-cyan-300"
+                    />
+
+                    <span className="text-[8px] font-semibold uppercase tracking-[0.12em] text-cyan-200">
+                      Easy analogy
+                    </span>
+                  </div>
+
+                  <p className="text-[10px] leading-[1.6] text-slate-400">
+                    “{activeVar.analogy}”
+                  </p>
+                </div>
+
+                {/* Fact */}
+                <div
+                  className="mt-2 flex gap-2 rounded-xl border p-2.5"
+                  style={{
+                    borderColor: 'rgba(251, 191, 36, 0.16)',
+                    background: 'rgba(251, 191, 36, 0.035)',
+                  }}
+                >
+                  <Info
+                    size={12}
+                    className="mt-0.5 shrink-0 text-amber-300"
+                  />
+
+                  <p className="text-[9px] leading-[1.55] text-amber-100/75">
+                    <span className="font-semibold text-amber-200">
+                      Did you know?
+                    </span>{' '}
+                    {activeVar.fact}
+                  </p>
+                </div>
+
+                {/* Learn more affordance */}
+                <div
+                  className="mt-3 flex items-center justify-between border-t border-white/[0.06] pt-2.5"
+                >
+                  <span className="font-mono text-[8px] uppercase tracking-[0.12em] text-slate-600">
+                    Ocean variable
+                  </span>
+
+                  <span
+                    className="flex items-center gap-1 text-[9px] font-medium"
+                    style={{ color: activeVar.color }}
+                  >
+                    Explore on globe
+                    <ArrowUpRight size={11} />
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
-
-          <p className="text-xs text-slate-200 leading-relaxed">
-            {activeVar.summary}
-          </p>
-
-          <div className="p-2.5 rounded-lg bg-slate-950/70 border border-slate-800 text-[11px] space-y-1.5">
-            <div className="font-semibold text-cyan-300 flex items-center gap-1">
-              <Sparkles size={12} />
-              <span>Easy Analogy:</span>
-            </div>
-            <p className="text-slate-300 italic">
-              "{activeVar.analogy}"
-            </p>
-          </div>
-
-          <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[10px] text-amber-200 flex items-start gap-1.5">
-            <Info size={13} className="shrink-0 mt-0.5 text-amber-400" />
-            <span><strong>Did you know?</strong> {activeVar.fact}</span>
-          </div>
-        </motion.div>
-      </AnimatePresence>
-    </div>
+          </motion.div>
+        </AnimatePresence>
+      </div>
+    </motion.aside>
   );
 }

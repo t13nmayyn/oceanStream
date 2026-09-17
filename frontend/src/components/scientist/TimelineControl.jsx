@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
-import { Play, Pause, SkipBack, SkipForward, Calendar, Clock, FastForward } from 'lucide-react';
+import { useEffect, useRef } from 'react';
+import { Play, Pause, SkipBack, SkipForward, Calendar } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { useApp, useAppDispatch } from '../../context/AppContext';
 
 export default function TimelineControl() {
@@ -53,83 +54,107 @@ export default function TimelineControl() {
   };
 
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-slate-900/95 border border-slate-700/80 shadow-2xl backdrop-blur-xl text-slate-100 select-none font-sans">
+    <div className="flex items-center gap-2.5 px-3.5 py-2 rounded-2xl bg-slate-950/95 border border-slate-700/60 shadow-[0_16px_48px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl text-slate-100 select-none font-sans ring-1 ring-white/5">
       
-      {/* Play / Pause */}
-      <button
+      {/* 1. Play / Pause Instrument Button */}
+      <motion.button
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.92 }}
+        type="button"
         onClick={handleTogglePlay}
-        className={`p-2 rounded-xl transition-all shadow-md cursor-pointer ${
+        className={`p-2.5 rounded-xl transition-all duration-200 shadow-md cursor-pointer flex items-center justify-center shrink-0 ${
           isPlayingTime
-            ? 'bg-amber-500 text-slate-950 font-bold'
-            : 'bg-cyan-500 text-slate-950 font-bold hover:bg-cyan-400'
+            ? 'bg-amber-500 text-slate-950 font-bold shadow-[0_0_16px_rgba(245,158,11,0.4)]'
+            : 'bg-cyan-500 text-slate-950 font-bold shadow-[0_0_16px_rgba(6,182,212,0.35)] hover:bg-cyan-400'
         }`}
-        title={isPlayingTime ? 'Pause 4D animation' : 'Play 4D time animation'}
+        title={isPlayingTime ? 'Pause 4D Temporal Loop' : 'Play 4D Temporal Loop'}
       >
-        {isPlayingTime ? <Pause size={16} /> : <Play size={16} />}
-      </button>
+        {isPlayingTime ? <Pause size={15} /> : <Play size={15} className="ml-0.5" />}
+      </motion.button>
 
-      {/* Step Buttons */}
-      <div className="flex items-center gap-1">
-        <button
+      {/* 2. Step Backward / Forward */}
+      <div className="flex items-center gap-1 shrink-0">
+        <motion.button
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.9 }}
+          type="button"
           onClick={() => stepDate(-1)}
-          className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors cursor-pointer"
+          className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-cyan-300 hover:bg-slate-850 hover:border-slate-700 transition-colors cursor-pointer"
           title="Previous day (-1d)"
         >
           <SkipBack size={13} />
-        </button>
-        <button
+        </motion.button>
+        <motion.button
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.9 }}
+          type="button"
           onClick={() => stepDate(1)}
-          className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors cursor-pointer"
+          className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-cyan-300 hover:bg-slate-850 hover:border-slate-700 transition-colors cursor-pointer"
           title="Next day (+1d)"
         >
           <SkipForward size={13} />
-        </button>
+        </motion.button>
       </div>
 
-      {/* Date Input / Display */}
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800">
-        <Calendar size={14} className="text-cyan-400" />
+      {/* 3. Interactive Date Capsule */}
+      <div className="relative flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shadow-inner group hover:border-slate-700 transition-colors">
+        <Calendar size={14} className="text-cyan-400 shrink-0" />
+        <span className="text-xs font-mono font-bold text-white tracking-wide">
+          {selectedDate || 'Select Date'}
+        </span>
+        {/* Invisible full overlay input to invoke date picker on click without ugly double-calendar browser icon */}
         <input
           type="date"
           value={selectedDate || ''}
           onChange={(e) => dispatch({ type: 'SET_DATE', payload: e.target.value })}
-          className="bg-transparent text-xs font-mono font-bold text-white focus:outline-none cursor-pointer"
+          className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+          title="Click to select date"
         />
       </div>
 
-      {/* Quick Presets */}
-      <div className="flex items-center gap-1">
+      {/* 4. Quick Jump Presets */}
+      <div className="flex items-center gap-1 shrink-0">
         {[
           { label: 'Latest', key: 'today' },
           { label: '-7d', key: '7d' },
           { label: '-30d', key: '30d' },
           { label: '-1yr', key: '1y' },
         ].map((p) => (
-          <button
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
             key={p.key}
+            type="button"
             onClick={() => handlePreset(p.key)}
-            className="px-2 py-1 rounded-lg text-[10px] font-mono bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/50 transition-all cursor-pointer"
+            className="px-2.5 py-1 rounded-lg text-[10px] font-mono bg-slate-900/70 text-slate-300 hover:text-cyan-300 hover:bg-slate-850 border border-slate-800/80 hover:border-slate-700 transition-colors cursor-pointer"
           >
             {p.label}
-          </button>
+          </motion.button>
         ))}
       </div>
 
-      {/* Playback Speed */}
-      <div className="flex items-center gap-1 pl-2 border-l border-slate-800">
-        {[1, 2, 5].map((spd) => (
-          <button
-            key={spd}
-            onClick={() => dispatch({ type: 'SET_PLAYBACK_SPEED', payload: spd })}
-            className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-all cursor-pointer ${
-              playbackSpeed === spd
-                ? 'bg-violet-600 text-white font-bold'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            {spd}x
-          </button>
-        ))}
+      {/* 5. Playback Speed Controller */}
+      <div className="flex items-center gap-1 pl-2.5 border-l border-slate-800 shrink-0">
+        <div className="flex items-center gap-0.5 p-0.5 rounded-xl bg-slate-900/90 border border-slate-800">
+          {[1, 2, 5].map((spd) => {
+            const isCurrent = playbackSpeed === spd;
+            return (
+              <button
+                key={spd}
+                type="button"
+                onClick={() => dispatch({ type: 'SET_PLAYBACK_SPEED', payload: spd })}
+                className={`px-2 py-0.5 rounded-lg text-[10px] font-mono transition-all duration-150 cursor-pointer ${
+                  isCurrent
+                    ? 'bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/40 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title={`Playback speed ${spd}x`}
+              >
+                {spd}x
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

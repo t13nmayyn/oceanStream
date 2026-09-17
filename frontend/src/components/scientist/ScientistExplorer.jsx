@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { AnimatePresence } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { Microscope, Activity, Database, Radio, Layers, ShieldCheck } from 'lucide-react';
 import MapView from '../map/MapView';
 import ScientificControls from './ScientificControls';
@@ -83,20 +83,35 @@ export default function ScientistExplorer() {
       </div>
 
       {/* 3. Left Controls: Scientific Variables, Layers & Engine */}
-      <div className="absolute top-20 left-4 z-30 pointer-events-auto">
+      <motion.div
+        initial={{ opacity: 0, x: -20 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ duration: 0.4, type: 'spring', bounce: 0, delay: 0.1 }}
+        className="absolute top-20 left-4 z-30 pointer-events-auto hidden md:block"
+      >
         <ScientificControls />
-      </div>
+      </motion.div>
 
       {/* 4. Right Controls: Depth Slices & Scientific Colorbar */}
-      <div className="absolute top-20 right-4 z-30 flex flex-col gap-3 pointer-events-auto">
+      <motion.div
+        initial={{ opacity: 0, x: 20 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ duration: 0.4, type: 'spring', bounce: 0, delay: 0.15 }}
+        className="absolute top-20 right-4 z-30 flex flex-col gap-3 pointer-events-auto hidden md:flex"
+      >
         <ScientificDepthControl />
         <ScientificColorbar />
-      </div>
+      </motion.div>
 
       {/* 5. Bottom Timeline Animation & Date Scrubber */}
-      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 pointer-events-auto">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, type: 'spring', bounce: 0, delay: 0.2 }}
+        className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 pointer-events-auto hidden sm:block"
+      >
         <TimelineControl />
-      </div>
+      </motion.div>
 
       {/* 6. Point Query Inspector Panel */}
       <AnimatePresence>
@@ -119,6 +134,27 @@ export default function ScientistExplorer() {
           />
         )}
       </AnimatePresence>
+
+      {/* Mobile Drawer Toggle (Visible only on very small screens) */}
+      <div className="absolute bottom-6 left-4 right-4 z-30 flex justify-between gap-2 md:hidden pointer-events-auto">
+        <button className="flex-1 py-2.5 rounded-xl bg-slate-900/90 border border-slate-700/80 shadow-xl backdrop-blur-xl text-xs font-bold text-slate-300 flex items-center justify-center gap-2" onClick={() => document.getElementById('mobile-workbench').classList.toggle('hidden')}>
+          <Layers size={14} className="text-cyan-400" />
+          Workbench
+        </button>
+        <button className="flex-1 py-2.5 rounded-xl bg-slate-900/90 border border-slate-700/80 shadow-xl backdrop-blur-xl text-xs font-bold text-slate-300 flex items-center justify-center gap-2" onClick={() => document.getElementById('mobile-depth').classList.toggle('hidden')}>
+          <Activity size={14} className="text-rose-400" />
+          Depth & Color
+        </button>
+      </div>
+
+      {/* Mobile Wrappers */}
+      <div id="mobile-workbench" className="absolute top-20 left-4 right-4 bottom-20 z-40 hidden md:hidden pointer-events-auto overflow-hidden">
+        <ScientificControls />
+      </div>
+      <div id="mobile-depth" className="absolute top-20 left-4 right-4 bottom-20 z-40 hidden md:hidden pointer-events-auto overflow-hidden flex flex-col gap-3">
+        <ScientificDepthControl />
+        <ScientificColorbar />
+      </div>
 
       {/* 8. Multi-Variable Timeline Series Modal */}
       <AnimatePresence>
