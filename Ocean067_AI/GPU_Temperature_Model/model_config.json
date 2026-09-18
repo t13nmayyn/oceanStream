@@ -1,0 +1,42 @@
+{
+  "task": "ARGO ocean temperature regression",
+  "dataset": "/content/drive/MyDrive/argo_measurements.csv",
+  "framework": "PyTorch",
+  "device": "cuda",
+  "gpu": "Tesla T4",
+  "features": [
+    "latitude",
+    "longitude",
+    "pressure_dbar",
+    "log_depth",
+    "salinity_PSU",
+    "year",
+    "month",
+    "day_of_year",
+    "sin_doy",
+    "cos_doy",
+    "sin_lon",
+    "cos_lon",
+    "sin_lat",
+    "cos_lat"
+  ],
+  "target": "temperature_C",
+  "architecture": [
+    14,
+    256,
+    128,
+    64,
+    32,
+    1
+  ],
+  "optimizer": "AdamW",
+  "loss": "HuberLoss",
+  "batch_size": 4096,
+  "train_split": 0.7,
+  "validation_split": 0.15,
+  "test_split": 0.15,
+  "split_unit": "profile_id",
+  "anomaly_method": "observed_temperature - predicted_temperature",
+  "anomaly_threshold_percentile": 95,
+  "anomaly_threshold_C": 1.7817108631134033
+}

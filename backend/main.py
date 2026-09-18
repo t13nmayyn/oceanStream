@@ -65,6 +65,7 @@ from router import (
     resolve_date_input, resolve_date_range, latest_available_iso,
     PHY_VARIABLES, BGC_VARIABLES, resolve_variables, date_info,
 )
+import ai_inference as _ai
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("main")
@@ -108,6 +109,11 @@ if FRONTEND_DIR.exists():
     @app.get("/index.html", include_in_schema=False)
     def serve_frontend_ui():
         return FileResponse(FRONTEND_DIR / "index.html")
+
+# ==============================================================================
+# AI inference routes (Ocean067 temperature model)
+# ==============================================================================
+_ai.register_ai_routes(app)
 
 # ==============================================================================
 # L1 in-memory cache  (key → {data, ts})

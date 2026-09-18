@@ -10,6 +10,14 @@ backend/output/
 aodn_output/
 ocean_data/
 
+# AI model — exclude large CSVs and training artifacts; keep weights + scalers + config
+Ocean067_AI/GPU_Temperature_Model/test_predictions_anomalies.csv
+Ocean067_AI/GPU_Temperature_Model/validation_predictions.csv
+Ocean067_AI/GPU_Temperature_Model/anomaly_points.csv
+Ocean067_AI/GPU_Temperature_Model/profile_split_manifest.csv
+Ocean067_AI/GPU_Temperature_Model/ocean067_temperature_checkpoint.pt
+Ocean067_AI/GPU_Temperature_Model/training_history.csv
+
 # Environment and credentials
 .env
 *.env
