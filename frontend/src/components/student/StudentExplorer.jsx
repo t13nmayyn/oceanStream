@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   RotateCcw,
@@ -12,16 +12,31 @@ import DepthJourney from './DepthJourney';
 import VariableEducationCard from './VariableEducationCard';
 import OceanFactCard from './OceanFactCard';
 import StudentObservationCard from './StudentObservationCard';
+import { useApp, useAppDispatch } from '../../context/AppContext';
 
 export default function StudentExplorer() {
-  const [currentDepth, setCurrentDepth] = useState(0);
+  const { selectedDepth } = useApp();
+  const dispatch = useAppDispatch();
+  const [currentDepth, setCurrentDepth] = useState(selectedDepth ?? 0);
   const [currentZone, setCurrentZone] = useState('Sunlight Zone');
   const [selectedVariable, setSelectedVariable] = useState('temperature');
   const [selectedMarker, setSelectedMarker] = useState(null);
   const [showGuide, setShowGuide] = useState(false);
 
+  useEffect(() => {
+    if (typeof selectedDepth === 'number' && Number.isFinite(selectedDepth)) {
+      setCurrentDepth(selectedDepth);
+    }
+  }, [selectedDepth]);
+
+  const handleDepthChange = (depth) => {
+    setCurrentDepth(depth);
+    dispatch?.({ type: 'SET_DEPTH', payload: depth });
+  };
+
   const handleResetDive = () => {
     setCurrentDepth(0);
+    dispatch?.({ type: 'SET_DEPTH', payload: 0 });
     setSelectedMarker(null);
   };
 
@@ -187,7 +202,7 @@ export default function StudentExplorer() {
       >
         <DepthJourney
           currentDepth={currentDepth}
-          onDepthChange={setCurrentDepth}
+          onDepthChange={handleDepthChange}
         />
       </motion.section>
 

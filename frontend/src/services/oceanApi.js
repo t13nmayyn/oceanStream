@@ -1,40 +1,41 @@
 /**
  * oceanApi.js — Centralized API service for Copernicus Ocean Physics & BGC data
  */
-import { API_BASE } from '../config/api';
+import { API_BASE, NODE_API_BASE } from '../config/api';
 
 /**
- * Fetch point data (Physics + BGC + Nearest Argo)
+ * Fetch point data (Physics + BGC + Nearest Argo).
+ * Routes through the Node/Express gateway for validation and forwarding.
+ * Does NOT return mock/fallback values — throws on any failure so the
+ * caller (PointQueryPanel) can show a real error state.
+ *
  * @param {number} lat - Latitude (-90 to 90)
  * @param {number} lon - Longitude (-180 to 180)
  * @param {number} depth - Depth in meters (default 0)
- * @param {string} date - ISO Date YYYY-MM-DD
+ * @param {string|null} date - ISO Date YYYY-MM-DD, or null for latest available
+ * @throws {Error} on network failure, gateway error, or non-2xx response
  */
 export async function getOceanPoint(lat, lon, depth = 0, date = null) {
   const params = new URLSearchParams({
-    lat: lat.toFixed(4),
-    lon: lon.toFixed(4),
+    lat: lat.toFixed(6),
+    lon: lon.toFixed(6),
     depth: depth.toString(),
   });
   if (date) params.append('date', date);
 
-  try {
-    const res = await fetch(`${API_BASE}/ocean/point?${params.toString()}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    return await res.json();
-  } catch (err) {
-    console.warn('[oceanApi] getOceanPoint fallback/error:', err.message);
-    return {
-      status: 'error',
-      message: err.message,
-      lat,
-      lon,
-      depth,
-      physics: { temperature_c: 26.5, salinity_psu: 34.8, current_u_ms: 0.12, current_v_ms: -0.05, sea_level_m: 0.42 },
-      bgc: { chlorophyll_mgl: 0.35, oxygen_mmolm3: 210.0, nitrate_mmolm3: 1.2, ph: 8.12, pco2_uatm: 395.0 },
-      dataset_info: { phy_dataset: 'GLOBAL_ANALYSISFORECAST_PHY_001_024', source: 'Copernicus Marine ANFC' },
-    };
+  const res = await fetch(`${NODE_API_BASE}/api/ocean/point?${params.toString()}`);
+
+  if (!res.ok) {
+    // Surface the gateway or upstream error message
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = body.details ?? body.error ?? detail;
+    } catch { /* ignore JSON parse failure */ }
+    throw new Error(`[ocean/point] HTTP ${res.status}: ${detail}`);
   }
+
+  return res.json();
 }
 
 /**

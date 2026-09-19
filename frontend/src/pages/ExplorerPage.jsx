@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useApp } from '../context/AppContext';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -8,9 +8,11 @@ import { useDateControls } from '../hooks/useDateControls';
 import AppNav from '../components/navigation/AppNav';
 import StudentExplorer from '../components/student/StudentExplorer';
 import ScientistExplorer from '../components/scientist/ScientistExplorer';
+import OceanStreamCopilot from '../components/copilot/OceanStreamCopilot';
 
 export default function ExplorerPage() {
   const { userMode } = useApp();
+  const [selectedPoint, setSelectedPoint] = useState(null);
   useWebSocket();
   useApiHealth();
   useDateControls();
@@ -21,6 +23,10 @@ export default function ExplorerPage() {
     return () => {
       document.body.style.overflow = '';
     };
+  }, []);
+
+  const handlePointClick = useCallback((lat, lon) => {
+    setSelectedPoint({ lat, lon });
   }, []);
 
   return (
@@ -56,11 +62,20 @@ export default function ExplorerPage() {
               transition={{ duration: 0.3 }}
               className="w-full h-full absolute inset-0"
             >
-              <ScientistExplorer />
+              <ScientistExplorer
+                selectedPoint={selectedPoint}
+                onPointClick={handlePointClick}
+                onClearPoint={() => setSelectedPoint(null)}
+              />
             </motion.div>
           )}
         </AnimatePresence>
       </div>
+
+      <OceanStreamCopilot
+        selectedPoint={selectedPoint}
+        onSelectPoint={setSelectedPoint}
+      />
     </div>
   );
 }

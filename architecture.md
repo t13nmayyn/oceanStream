@@ -1,6 +1,6 @@
 # System Architecture & Technical Specifications
 ## Project: `oceanStream` — INCOIS 3D/4D Ocean Data Platform
-**Architecture Version:** 3.0.0  
+**Architecture Version:** 3.1.0  
 **Last Updated:** September 2026  
 
 ---
@@ -13,13 +13,19 @@
 ```
                               ┌──────────────────────────────────────────────┐
                               │            Client Browser / Web UI           │
-                              │  Leaflet (2D) + Deck.gl (3D) + Chart.js (TS) │
+                              │  React.js + react-globe.gl + Leaflet + Chart │
+                              └──────────────┬───────────────────────────────┘
+                                             │ HTTP REST / WebSocket JSON
+                                             ▼
+                              ┌──────────────────────────────────────────────┐
+                              │     Node.js/Express API Gateway (Port 3000)  │
+                              │           CORS, Routing, Aggregation         │
                               └──────────────┬───────────────────────────────┘
                                              │ HTTP REST / WebSocket JSON
                                              ▼
                               ┌──────────────────────────────────────────────┐
                               │           FastAPI Gateway (Port 8000)        │
-                              │           CORS, Middleware, Routing          │
+                              │           Middleware, 4D Engine Routing      │
                               └──────┬───────────────────────────────┬───────┘
                                      │                               │
                       Fast Path (<1ms)                               │ Tiered Lookup
@@ -168,14 +174,21 @@ c:/ocean/oceanStream/
 │   ├── data_fetch.py                   # Offline batch ingestion script for Indian coastal baseline
 │   ├── requirements.txt                # Python backend package dependencies
 │   │
+│   ├── server/                         # Node.js/Express API Gateway
+│   │   ├── src/index.ts                # Express entry point
+│   │   ├── src/routes/ocean.ts         # Reverse proxies to Python backend
+│   │   └── package.json                # Node dependencies
+│   │
 │   └── output/                         # Local Zarr Datastores (L2 Disk Cache)
 │       ├── phy_data.zarr/              # Physics data (thetao, so, uo, vo, zos)
 │       ├── bgc_data.zarr/              # Biogeochemical data (chl, no3, o2, ph, etc.)
 │       ├── argo_data.zarr/             # Ingested Argo float trajectory & profile data
 │       └── ocean_data.zarr/            # Legacy backward-compatible thetao store
 │
-├── frontend-test/                      # Test UI & 3D Interactive Client
-│   └── index.html                      # Standalone 2D/3D ocean dashboard (Leaflet + Deck.gl)
+├── frontend/                           # React 3D Interactive Client
+│   ├── src/                            # React source code (components, hooks, pages, services)
+│   ├── index.html                      # Entry HTML
+│   └── vite.config.js                  # Vite bundler config
 │
 ├── aodn_output/                        # High-frequency AODN mooring timeseries & plots
 │   ├── aodn_subset.nc                  # Downloaded IMOS CTD NetCDF file
@@ -197,12 +210,12 @@ c:/ocean/oceanStream/
 | Module / File | Primary Technical Responsibilities |
 |:---|:---|
 | **`backend/main.py`** | FastAPI application lifecycle, L1 RAM cache operations, REST endpoint controllers (`/ocean/point`, `/ocean/snapshot`, `/ocean/timeline`, `/argo/*`), WebSockets (`/ws/*`), and static file serving. |
+| **`backend/server/`** | Node.js Express API Gateway proxying requests between the React frontend and the Python backend. |
 | **`backend/router.py`** | Dataset catalogue mapping (ANFC vs. MY), canonical variable alias resolution, smart lookback date resolution, and date presets (`yesterday`, `7d`, `30d`, `1y`). |
 | **`backend/fetcher.py`** | Origin API integration via `copernicusmarine.subset()`, bounding box clamping, NetCDF to Zarr chunked merging (`_write_to_zarr`), and credentials validation. |
 | **`backend/argo.py`** | Argo float spatial indexing, Haversine nearest-neighbor calculations, live `argopy` fallback querying, AODN CTD NetCDF parsing, and vertical profile compilation. |
 | **`backend/page_table.py`** | 4D bucket coordinates, thread-safe page allocation tracking, range diffing, LRU eviction engine, prefetch lookahead hints, and `/ocean/coverage` telemetry. |
-| **`backend/data_fetch.py`** | Standalone batch ingestion script populating initial Indian coastal baseline data across the 5 reference stations (Chennai, Mumbai, Vizag, Kochi, Bay of Bengal). |
-| **`frontend-test/index.html`** | Single-page testing cockpit containing Leaflet 2D maps, Deck.gl 3D WebGL column rendering, Chart.js time-series and depth curves, 18-test runner, and live WebSocket console. |
+| **`frontend/src/`** | React application featuring `react-globe.gl` 3D engine, Leaflet 2D maps, Chart.js time-series and depth curves, and interactive Scientist/Student explorer modes. |
 
 ---
 

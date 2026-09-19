@@ -10,15 +10,23 @@ import RegionPresets from './RegionPresets';
 import ZoomControls from './ZoomControls';
 import PointInspector from './PointInspector';
 
-export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfile, hideSidebar = false }) {
+export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfile, onPointClick: onExternalPointClick, selectedPoint: externalSelectedPoint, hideSidebar = false }) {
   const { engineMode } = useApp();
   const globeRef = useRef(null);
   const leafletRef = useRef(null);
   const [selectedPoint, setSelectedPoint] = useState(null);
 
+  // Use external point if provided (e.g. from ScientistExplorer), otherwise internal state
+  const activePoint = externalSelectedPoint || selectedPoint;
+
+  // If the parent passes onPointClick, delegate to it; otherwise use internal PointInspector
   const handlePointClick = useCallback((lat, lon) => {
-    setSelectedPoint({ lat, lon });
-  }, []);
+    if (onExternalPointClick) {
+      onExternalPointClick(lat, lon);
+    } else {
+      setSelectedPoint({ lat, lon });
+    }
+  }, [onExternalPointClick]);
 
   const handleFlyTo = useCallback((region) => {
     if (engineMode === '3d') {
@@ -76,6 +84,7 @@ export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfil
             onViewportChange={onTriggerViewportFetch}
             onPointClick={handlePointClick}
             onSelectFloatForProfile={onSelectFloatForProfile}
+            selectedPoint={activePoint}
           />
         </div>
 
@@ -99,8 +108,10 @@ export default function MapView({ onTriggerViewportFetch, onSelectFloatForProfil
 
         {/* Point Inspector */}
         <PointInspector
-          point={selectedPoint}
-          onClose={() => setSelectedPoint(null)}
+          point={activePoint}
+          onClose={() => {
+            if (!onExternalPointClick) setSelectedPoint(null);
+          }}
           onLoadFloatProfile={(id) => onSelectFloatForProfile?.(id)}
         />
       </div>

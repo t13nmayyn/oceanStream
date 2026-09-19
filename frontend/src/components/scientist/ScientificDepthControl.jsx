@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { Layers, ArrowUpDown } from 'lucide-react';
+import { Layers } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useApp, useAppDispatch } from '../../context/AppContext';
 
@@ -19,7 +18,6 @@ const STANDARD_DEPTHS = [
 export default function ScientificDepthControl() {
   const { selectedDepth } = useApp();
   const dispatch = useAppDispatch();
-  const [exaggeration, setExaggeration] = useState(2.5);
 
   const handleDepthChange = (depth) => {
     dispatch({ type: 'SET_DEPTH', payload: Math.max(0, Math.min(5500, depth)) });
@@ -34,20 +32,20 @@ export default function ScientificDepthControl() {
           <div className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 shadow-[0_0_10px_rgba(6,182,212,0.12)] shrink-0">
             <Layers size={14} />
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 pr-2">
             <div className="text-[11px] font-bold text-white uppercase tracking-wider leading-tight truncate">
-              Vertical Depth Slice
+              Depth Level Projection
             </div>
-            <div className="text-[9px] text-cyan-400/80 font-mono tracking-tight mt-0.5">
-              Z-AXIS INGESTION LAYER
+            <div className="text-[9px] text-slate-400 font-sans leading-tight mt-0.5">
+              Subsurface data projected onto the globe surface
             </div>
           </div>
         </div>
 
         {/* Digital Readout Pill */}
-        <div className="flex items-center gap-1 font-mono text-cyan-300 text-xs font-bold bg-slate-900/90 px-2.5 py-1 rounded-lg border border-slate-800 shadow-inner shrink-0">
-          <span>{selectedDepth ?? 0}</span>
-          <span className="text-[10px] text-slate-400 font-sans font-normal">m</span>
+        <div className="flex items-center gap-1 font-mono text-cyan-300 font-bold bg-slate-900/90 px-3 py-1.5 rounded-lg border border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.15)] shrink-0">
+          <span className="text-white text-base leading-none">{selectedDepth ?? 0}</span>
+          <span className="text-[11px] text-cyan-400 font-sans font-medium leading-none mt-0.5">m</span>
         </div>
       </div>
 
@@ -120,32 +118,7 @@ export default function ScientificDepthControl() {
         </div>
       </div>
 
-      {/* 4. Vertical Exaggeration */}
-      <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
-        <div className="flex items-center justify-between text-[10px] text-slate-400">
-          <span className="flex items-center gap-1.5 font-medium">
-            <ArrowUpDown size={12} className="text-cyan-400" />
-            Vertical Exaggeration
-          </span>
-          <span className="px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/20 font-mono font-semibold text-cyan-300 text-[10px]">
-            {exaggeration}x
-          </span>
-        </div>
-        <input
-          type="range"
-          min="1.0"
-          max="10.0"
-          step="0.5"
-          value={exaggeration}
-          onChange={(e) => setExaggeration(Number(e.target.value))}
-          className="w-full h-1.5 rounded-lg bg-slate-800 appearance-none cursor-pointer accent-cyan-400 border border-slate-700/50"
-        />
-        <div className="flex justify-between text-[9px] font-mono text-slate-500">
-          <span>1.0x (True)</span>
-          <span>5.0x</span>
-          <span>10.0x (Max)</span>
-        </div>
-      </div>
+
     </div>
   );
 }

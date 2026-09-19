@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import { useApp, useAppDispatch } from '../../context/AppContext';
 
 export default function TimelineControl() {
-  const { selectedDate, isPlayingTime, playbackSpeed } = useApp();
+  const { selectedDate, isPlayingTime, playbackSpeed, serverDateInfo } = useApp();
   const dispatch = useAppDispatch();
   const intervalRef = useRef(null);
 
@@ -96,19 +96,29 @@ export default function TimelineControl() {
         </motion.button>
       </div>
 
-      {/* 3. Interactive Date Capsule */}
-      <div className="relative flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shadow-inner group hover:border-slate-700 transition-colors">
-        <Calendar size={14} className="text-cyan-400 shrink-0" />
-        <span className="text-xs font-mono font-bold text-white tracking-wide">
+      {/* 3. Interactive Temporal Display & Date Picker */}
+      <div className="relative flex flex-col justify-center px-3 py-1 rounded-xl bg-slate-900/90 border border-cyan-500/20 shadow-[0_0_10px_rgba(6,182,212,0.1)] group hover:border-cyan-500/40 transition-colors min-w-[140px]">
+        <div className="flex items-center justify-between mb-0.5">
+          <span className={`text-[9px] font-bold font-mono tracking-wider uppercase ${isPlayingTime ? 'text-amber-400 animate-pulse' : 'text-cyan-400'}`}>
+            {isPlayingTime ? 'Playback Active' : 'Active Date'}
+          </span>
+          <Calendar size={11} className={isPlayingTime ? 'text-amber-500/80' : 'text-cyan-500/80'} />
+        </div>
+        <div className="text-[13px] font-mono font-bold text-white tracking-wide leading-tight">
           {selectedDate || 'Select Date'}
-        </span>
-        {/* Invisible full overlay input to invoke date picker on click without ugly double-calendar browser icon */}
+        </div>
+        {serverDateInfo?.copernicus_available_date && (
+          <div className="text-[8px] font-mono text-slate-400 mt-0.5 tracking-tight truncate">
+            Latest dataset: {serverDateInfo.copernicus_available_date}
+          </div>
+        )}
+        {/* Invisible full overlay input to invoke date picker on click */}
         <input
           type="date"
           value={selectedDate || ''}
           onChange={(e) => dispatch({ type: 'SET_DATE', payload: e.target.value })}
           className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
-          title="Click to select date"
+          title="Select active temporal state"
         />
       </div>
 

@@ -1,7 +1,7 @@
 # Project Memory & Execution Ledger
 ## Project: `oceanStream` — INCOIS 3D/4D Ocean Data Platform
-**Current Version:** 3.0.0  
-**Status:** Phase 2 Operational Prototype Complete | Phase 3 Planning Active  
+**Current Version:** 3.1.0  
+**Status:** Phase 2 Operational Prototype Complete | Phase 3 Scientist Explorer UI Redesign Active  
 **Last Updated:** September 2026  
 
 ---
@@ -56,15 +56,17 @@
   - Exported tabular CSV summary and metadata JSON.
   - Generated verification figures: Temperature-Depth, Salinity-Depth, and Temperature-Time curves.
 
-### 1.5 Interactive Frontend & 3D Web Engine (`frontend-test/index.html`)
+### 1.5 Interactive Frontend & 3D Web Engine (`frontend/src/`)
+- [x] **Node/Express API Gateway:** Implemented at `backend/server/` to securely proxy requests from the React frontend to the Python backend.
+- [x] **Scientist Explorer Redesign:**
+  - Integrated `GlobeGlViewer` with robust double-click point-query coordinate selection and persistent scientific focus markers.
+  - Upgraded `PointQueryPanel` into a high-density "Location Insight" infographic with a "Query Context" block (Coords, Depth, Date, Dataset).
+  - Implemented 400ms debounce, fetch sequence guarding, and playback suppression in point queries to ensure smooth timeline interactions.
+  - Cleaned up terminology in `ScientificDepthControl` and removed orphaned controls (Vertical Exaggeration).
+  - Upgraded `TimelineControl` to serve as a coherent temporal capsule displaying the active dataset (ANFC vs MY).
 - [x] **Leaflet 2D Basemap:** Integrated CartoDB Dark Matter tiles, responsive viewports, and Indian coastal station pins.
 - [x] **Deck.gl 3D WebGL Engine:** Hardware-accelerated column visualization with interactive pitch/tilt (0–60°), azimuth rotation, and top-down reset.
-- [x] **Depth & Time Controls:** Interactive depth range slider (0–50m in 2m bins) and quick presets (`yesterday`, `7d`, `30d`, `1y`).
-- [x] **OS Demand-Paging Memory Grid:** Live visual HUD rendering resident state across all depth buckets.
-- [x] **Click-to-Query HUD:** Map click inspector testing `/ocean/point` in real time.
 - [x] **Chart.js Visualizations:** Interactive time-series explorer and vertical depth profile plots.
-- [x] **API Test Runner:** Automated 18-endpoint test suite executing live requests and inspecting JSON payloads.
-- [x] **WebSocket Live Console:** Two-way message sender and real-time streaming packet monitor.
 
 ### 1.6 Core Project Documentation
 - [x] `prd.md` — Product Requirement Details (what to build, targeted users, feature matrix).
@@ -79,16 +81,15 @@
 ## 2. Which File Is Currently Being Worked On
 
 ### 2.1 Current Active Tasks & Files
-- **Currently Completed:** Complete foundational documentation suite (`prd.md`, `architecture.md`, `rules.md`, `phases.md`, `design.md`, `memory.md`).
+- **Currently Completed:** Scientist Explorer Interaction Fixes & PointQueryPanel redesign, Argo capability audit.
 - **Primary Working Directory:** `c:/ocean/oceanStream/` and workspace root `c:/ocean/`.
 
 ### 2.2 Next Immediate Target Files (Phase 3 Roadmap)
 | Target File | Planned Enhancements |
 |:---|:---|
-| **`frontend-test/index.html`** | Implement WebGL particle advection flow shaders for surface ocean currents ($u, v$ velocity vectors). |
-| **`backend/fetcher.py`** | Add scheduled background cron ingestion for high-priority Indian coastal bounding boxes. |
-| **`backend/main.py`** | Add Redis distributed cache provider toggle to support horizontal cluster scaling. |
-| **`test_backend.py`** | Add automated pytest assertion suite for CI/CD pipeline integration. |
+| **`frontend/src/components/scientist/ArgoProfilePanel.jsx`** | Implement "Model vs Observation" comparison view using `getArgoProfile` and local model data. |
+| **`frontend/src/pages/ExplorerPage.jsx`** | Redesign Student Explorer information panels into a "Scientific Workstation" aesthetic. |
+| **`frontend/src/components/map/GlobeGlViewer.jsx`** | GPU Particle Advection Flow Shader (future roadmap). |
 
 ---
 

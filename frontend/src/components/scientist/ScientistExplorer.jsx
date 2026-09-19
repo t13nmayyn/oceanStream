@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Microscope, Activity, Database, Radio, Layers, ShieldCheck } from 'lucide-react';
+import { Microscope, Activity, Radio, Layers } from 'lucide-react';
 import MapView from '../map/MapView';
 import ScientificControls from './ScientificControls';
 import ScientificDepthControl from './ScientificDepthControl';
@@ -12,16 +12,11 @@ import ScientificTimelineChart from './ScientificTimelineChart';
 import ModeSwitcher from '../mode/ModeSwitcher';
 import { useApp } from '../../context/AppContext';
 
-export default function ScientistExplorer() {
-  const { selectedVariable, selectedDepth, selectedDate, apiStatus, wsStatus } = useApp();
+export default function ScientistExplorer({ selectedPoint, onPointClick, onClearPoint }) {
+  const { selectedVariable, selectedDepth } = useApp();
 
-  const [selectedPoint, setSelectedPoint] = useState(null);
   const [activePlatformId, setActivePlatformId] = useState(null);
   const [timelinePoint, setTimelinePoint] = useState(null);
-
-  const handlePointClick = useCallback((lat, lon) => {
-    setSelectedPoint({ lat, lon });
-  }, []);
 
   const handleSelectFloat = useCallback((platformId) => {
     setActivePlatformId(platformId);
@@ -33,6 +28,8 @@ export default function ScientistExplorer() {
       {/* 1. Underlying 3D Cesium Ocean Surface Globe & Map View */}
       <MapView
         onSelectFloatForProfile={handleSelectFloat}
+        onPointClick={onPointClick}
+        selectedPoint={selectedPoint}
         hideSidebar={true}
       />
 
@@ -118,7 +115,7 @@ export default function ScientistExplorer() {
         {selectedPoint && (
           <PointQueryPanel
             point={selectedPoint}
-            onClose={() => setSelectedPoint(null)}
+            onClose={onClearPoint}
             onOpenProfile={(id) => setActivePlatformId(id)}
             onOpenTimeline={(pt) => setTimelinePoint(pt)}
           />

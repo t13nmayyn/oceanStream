@@ -48,7 +48,7 @@ const OCEAN_LABELS = [
 ];
 
 const GlobeGlViewer = forwardRef(function GlobeGlViewer(
-  { onPointClick, onSelectFloatForProfile, onViewportChange: _onViewportChange },
+  { onPointClick, onSelectFloatForProfile, onViewportChange: _onViewportChange, selectedPoint: focusPoint },
   ref
 ) {
   const containerRef = useRef(null);
@@ -56,6 +56,7 @@ const GlobeGlViewer = forwardRef(function GlobeGlViewer(
   const thermalTextureRef = useRef(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [clickPulse, setClickPulse] = useState(null);
+  const lastClickRef = useRef({ time: 0, lat: null, lng: null });
 
   const {
     selectedVariable,
@@ -207,18 +208,32 @@ const GlobeGlViewer = forwardRef(function GlobeGlViewer(
     }
   }, [selectedVariable, selectedDepth, colorPalette, heatmapOpacity, showThermalHeatmap, gridData]);
 
-  // Handle globe background click
-  const handleGlobeClick = useCallback(({ lat, lng }) => {
-    onPointClick?.(lat, lng);
+  // Handle globe background clicks (robust double-click detection)
+  const handleGlobeClick = useCallback(({ lat, lng }, event) => {
+    console.log('[Globe] click', { lat, lng }, event);
+    const now = Date.now();
+    const last = lastClickRef.current;
+    
+    // Check either native event.detail or manual timer fallback (<= 400ms interval)
+    console.log('[Globe] detector', { lat, lng, detail: event?.detail, timeDelta: now - last.time, latDelta: Math.abs(lat - last.lat), lngDelta: Math.abs(lng - last.lng) });
+    const isDoubleClick = 
+      (event && event.detail === 2) || 
+      (now - last.time < 400 && Math.abs(lat - last.lat) < 0.5 && Math.abs(lng - last.lng) < 0.5);
 
-    setClickPulse({ lat, lng, time: Date.now() });
-    setTimeout(() => {
-      setClickPulse(null);
-    }, 3000);
+    if (isDoubleClick) {
+      globeRef.current?.pointOfView({ lat, lng, altitude: 1.1 }, 1400);
+      onPointClick?.(lat, lng);
+      lastClickRef.current = { time: 0, lat: null, lng: null };
+    } else {
+      setClickPulse({ lat, lng, time: now });
+      setTimeout(() => setClickPulse(null), 3000);
+      lastClickRef.current = { time: now, lat, lng };
+    }
   }, [onPointClick]);
 
-  // Handle Argo float marker click
+  // Handle Argo float marker click — ignore the focus-point anchor dot
   const handlePointClick = useCallback((point) => {
+    if (point.id === 'focus-point-anchor') return;
     globeRef.current?.pointOfView({ lat: point.lat, lng: point.lng, altitude: 1.2 }, 1200);
     onSelectFloatForProfile?.(point.id);
   }, [onSelectFloatForProfile]);
@@ -234,7 +249,7 @@ const GlobeGlViewer = forwardRef(function GlobeGlViewer(
     });
   }, [showArgoLayer, argoFloats, argoFilter]);
 
-  // Combine float rings and click pulse rings
+  // Combine float rings, click pulse ring, and focus-point ring
   const ringsData = useMemo(() => {
     const rings = [];
     if (showArgoLayer) {
@@ -259,14 +274,40 @@ const GlobeGlViewer = forwardRef(function GlobeGlViewer(
         color: (t) => `rgba(0, 220, 255, ${Math.max(0, 1 - t)})`,
       });
     }
+    // Persistent focus ring — slow, wide, restrained white-cyan; visually distinct from Argo and pulse
+    if (focusPoint) {
+      rings.push({
+        lat: focusPoint.lat,
+        lng: focusPoint.lng,
+        maxR: 3.0,
+        propagationSpeed: 0.9,
+        repeatPeriod: 2400,
+        color: (t) => `rgba(186, 230, 253, ${Math.max(0, 0.85 - t * 0.85)})`,
+      });
+    }
     return rings;
-  }, [showArgoLayer, filteredFloats, clickPulse]);
+  }, [showArgoLayer, filteredFloats, clickPulse, focusPoint]);
 
   // Custom 3D Layer Data for the Thermal / Scalar Field Sphere
   const customLayerData = useMemo(() => {
     if (!showThermalHeatmap) return [];
     return [{ id: 'thermal-sphere-overlay' }];
   }, [showThermalHeatmap]);
+
+  // Anchor dot for the active scientific focus point
+  // Rendered via pointsData using a dedicated slate-white color (#e2e8f0)
+  // so it is visually distinct from Argo cyan markers
+  const focusPointData = useMemo(() => {
+    if (!focusPoint) return [];
+    return [{
+      lat: focusPoint.lat,
+      lng: focusPoint.lng,
+      id: 'focus-point-anchor',
+      color: '#e2e8f0',  // slate-200 — neutral anchor, not a data colour
+      altitude: 0.05,
+      radius: 0.28,
+    }];
+  }, [focusPoint]);
 
   const createThermalMesh = useCallback(() => {
     const radius = globeRef.current?.getGlobeRadius() || 100;
@@ -319,17 +360,24 @@ const GlobeGlViewer = forwardRef(function GlobeGlViewer(
         customLayerData={customLayerData}
         customThreeObject={createThermalMesh}
         customThreeObjectUpdate={updateThermalMesh}
-        // In-Situ Observation Point Markers (Argo / Gliders / Buoys)
-        pointsData={filteredFloats}
+        // In-Situ Observation Point Markers (Argo / Gliders / Buoys) + Focus Anchor
+        // focusPointData items carry their own per-datum radius/altitude/color,
+        // so we switch Globe.gl point accessors to per-datum string keys.
+        pointsData={[
+          ...filteredFloats.map(f => ({ ...f, altitude: 0.03, radius: 0.45 })),
+          ...focusPointData
+        ]}
         pointLat="lat"
         pointLng="lng"
         pointColor="color"
-        pointAltitude={0.03}
-        pointRadius={0.45}
+        pointAltitude="altitude"
+        pointRadius="radius"
         pointResolution={24}
         onPointClick={handlePointClick}
         pointLabel={(d) =>
-          `<div style="background:rgba(13,21,37,0.95);border:1px solid ${d.color};padding:8px 12px;border-radius:10px;font-family:sans-serif;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,0.6);backdrop-filter:blur(8px);">
+          d.id === 'focus-point-anchor'
+            ? `<div style="background:rgba(13,21,37,0.9);border:1px solid #e2e8f0;padding:6px 10px;border-radius:8px;font-family:monospace;color:#e2e8f0;font-size:10px;">&#9679; ${d.lat.toFixed(4)}°, ${d.lng.toFixed(4)}° — Active Inspection</div>`
+            : `<div style="background:rgba(13,21,37,0.95);border:1px solid ${d.color};padding:8px 12px;border-radius:10px;font-family:sans-serif;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,0.6);backdrop-filter:blur(8px);">
             <div style="font-weight:bold;font-size:12px;color:${d.color};display:flex;align-items:center;gap:6px;">
               <span>●</span> ${d.name}
               ${argoIsLive ? '<span style="font-size:8px;color:#10b981;margin-left:4px;">● LIVE</span>' : ''}
