@@ -32,8 +32,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 # Configuration / Bucket Definitions
 # ---------------------------------------------------------------------------
 
-# Depth bucketing: fixed 2-metre bins
-DEPTH_BIN_M: float = 2.0
+# Depth bucketing: 50-metre bins (matches oceanographic layers, scales to 6000m)
+DEPTH_BIN_M: float = 50.0
 
 # Lat / lon bucket sizes match zarr chunk layout from data_fetch.py (50×50 grid pts)
 # At 0.083° resolution, 50 pts ≈ 4.15°

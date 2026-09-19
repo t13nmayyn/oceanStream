@@ -49,9 +49,16 @@ _load_error  : Optional[str] = None
 _device      = None          # torch.device
 
 
+_model_load_attempted: bool = False  # set True after first attempt
+
+
 def _load_model() -> None:
     """Load model artifacts exactly once.  Errors are captured in _load_error."""
-    global _model, _feat_scaler, _tgt_scaler, _model_cfg, _anomaly_thr, _device, _load_error
+    global _model, _feat_scaler, _tgt_scaler, _model_cfg, _anomaly_thr, _device, _load_error, _model_load_attempted
+
+    if _model_load_attempted:
+        return
+    _model_load_attempted = True
 
     try:
         import torch
@@ -124,8 +131,11 @@ def _load_model() -> None:
         logger.error(f"[AI] Model load failed: {exc}")
 
 
-# Run on import (non-fatal — errors surface via /api/ai/health)
-_load_model()
+# Run in a daemon background thread so import does NOT block server startup.
+# The /api/ai/health endpoint reports "loading" until the thread finishes.
+import threading as _threading
+_model_load_thread = _threading.Thread(target=_load_model, daemon=True, name="ai-model-load")
+_model_load_thread.start()
 
 
 # ---------------------------------------------------------------------------
@@ -248,8 +258,15 @@ def register_ai_routes(app) -> None:
     def ai_health():
         """Returns model load status and basic metadata."""
         ready = _model is not None
+        loading = _model_load_thread.is_alive() if hasattr(_model_load_thread, "is_alive") else False
+        if ready:
+            status = "ready"
+        elif loading:
+            status = "loading"
+        else:
+            status = "unavailable"
         return {
-            "status":          "ready" if ready else "unavailable",
+            "status":          status,
             "model_dir":       str(AI_MODEL_DIR),
             "device":          str(_device) if _device else None,
             "anomaly_threshold_C": _anomaly_thr if ready else None,

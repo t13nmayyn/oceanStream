@@ -60,6 +60,8 @@ from page_table import (
 )
 import fetcher as _fetcher
 import argo as _argo
+import glider as _glider
+import observation as _obs
 from router import (
     phy_dataset, bgc_dataset, route_info, today_iso, yesterday_iso,
     resolve_date_input, resolve_date_range, latest_available_iso,
@@ -318,21 +320,46 @@ def _synthesize_bgc_point(temp_c: Optional[float], depth: float) -> Dict[str, Op
 
 
 def _read_phy_point(lat: float, lon: float, depth: float, date_str: str) -> Dict:
-    """Read physics variables from L2 zarr at nearest grid point."""
+    """Read physics variables from L2 zarr at nearest grid point with date verification."""
+    global phy_dataset_xr
+    if phy_dataset_xr is None and PHY_ZARR_PATH.exists():
+        try:
+            phy_dataset_xr = xr.open_zarr(PHY_ZARR_PATH)
+        except Exception:
+            pass
+
     ds = phy_dataset_xr or ocean_dataset_xr
     if ds is None:
         return {}
     try:
+        # Check if dataset contains this date
+        if "time" in ds.coords:
+            times = ds["time"].values
+            if len(times) == 0:
+                return {}
+            t_min = str(times.min())[:10]
+            t_max = str(times.max())[:10]
+            if date_str < t_min or date_str > t_max:
+                return {}
+
         pt = _select_point(ds, lat, lon)
-        # Select nearest depth
+        actual_depth = depth
         if "depth" in pt.dims:
             pt = pt.sel(depth=depth, method="nearest")
-        # Select nearest time
-        if "time" in pt.dims:
-            target = np.datetime64(date_str)
-            pt = pt.sel(time=target, method="nearest")
+            actual_depth = _safe_float(pt["depth"].values) or depth
 
-        result: Dict[str, Any] = {}
+        if "time" in pt.dims:
+            pt = pt.sel(time=np.datetime64(date_str), method="nearest")
+            actual_time = str(pt["time"].values)[:10]
+            if actual_time != date_str:
+                return {}
+
+        result: Dict[str, Any] = {
+            "requested_depth_m": depth,
+            "actual_depth_m": actual_depth,
+            "depth_selection_method": "nearest_source_level",
+            "date": date_str,
+        }
         var_map = {
             "thetao": "temperature_c",
             "so":     "salinity_psu",
@@ -344,6 +371,13 @@ def _read_phy_point(lat: float, lon: float, depth: float, date_str: str) -> Dict
             if src in pt:
                 result[dst] = _safe_float(pt[src].values)
 
+        # Compute speed and heading for current vectors
+        u = result.get("current_u_ms")
+        v = result.get("current_v_ms")
+        if u is not None and v is not None:
+            result["current_speed_ms"] = round(math.sqrt(u * u + v * v), 3)
+            result["current_heading_deg"] = round((math.atan2(v, u) * 180.0 / math.pi) % 360.0, 1)
+
         # Fallback for physics variables if store only contains thetao (legacy)
         if "temperature_c" in result and result["temperature_c"] is not None:
             lat_norm = max(0.0, min(1.0, (lat - 8.0) / 14.0))
@@ -353,6 +387,11 @@ def _read_phy_point(lat: float, lon: float, depth: float, date_str: str) -> Dict
                 result["current_u_ms"] = round(0.14 * math.sin(lat * 0.2 + lon * 0.1), 3)
             if "current_v_ms" not in result or result["current_v_ms"] is None:
                 result["current_v_ms"] = round(0.09 * math.cos(lat * 0.15 - lon * 0.1), 3)
+            if "current_speed_ms" not in result:
+                ru = result["current_u_ms"]
+                rv = result["current_v_ms"]
+                result["current_speed_ms"] = round(math.sqrt(ru * ru + rv * rv), 3)
+                result["current_heading_deg"] = round((math.atan2(rv, ru) * 180.0 / math.pi) % 360.0, 1)
             if "sea_level_m" not in result or result["sea_level_m"] is None:
                 result["sea_level_m"] = round(0.04 + 0.03 * math.sin(lon * 0.3), 3)
 
@@ -364,14 +403,29 @@ def _read_phy_point(lat: float, lon: float, depth: float, date_str: str) -> Dict
 
 def _read_bgc_point(lat: float, lon: float, depth: float, date_str: str) -> Dict:
     """Read BGC variables from L2 zarr at nearest grid point or synthesize from ocean physics."""
+    global bgc_dataset_xr
+    if bgc_dataset_xr is None and BGC_ZARR_PATH.exists():
+        try:
+            bgc_dataset_xr = xr.open_zarr(BGC_ZARR_PATH)
+        except Exception:
+            pass
+
     if bgc_dataset_xr is not None:
         try:
+            if "time" in bgc_dataset_xr.coords:
+                times = bgc_dataset_xr["time"].values
+                if len(times) > 0:
+                    t_min = str(times.min())[:10]
+                    t_max = str(times.max())[:10]
+                    if date_str < t_min or date_str > t_max:
+                        phy = _read_phy_point(lat, lon, depth, date_str)
+                        return _synthesize_bgc_point(phy.get("temperature_c"), depth)
+
             pt = _select_point(bgc_dataset_xr, lat, lon)
             if "depth" in pt.dims:
                 pt = pt.sel(depth=depth, method="nearest")
             if "time" in pt.dims:
-                target = np.datetime64(date_str)
-                pt = pt.sel(time=target, method="nearest")
+                pt = pt.sel(time=np.datetime64(date_str), method="nearest")
 
             result: Dict[str, Any] = {}
             var_map = {
@@ -401,17 +455,37 @@ def _read_phy_grid(
     lon_min: float, lon_max: float,
     depth: float, date_str: str,
 ) -> List[Dict]:
-    """Return a grid of physics values in a bbox using fast vectorized numpy indexing."""
+    """Return a grid of physics values in a bbox with current vector calculation and date verification."""
+    global phy_dataset_xr
+    if phy_dataset_xr is None and PHY_ZARR_PATH.exists():
+        try:
+            phy_dataset_xr = xr.open_zarr(PHY_ZARR_PATH)
+        except Exception:
+            pass
+
     ds = phy_dataset_xr or ocean_dataset_xr
     if ds is None:
         return []
     try:
+        if "time" in ds.coords:
+            times = ds["time"].values
+            if len(times) == 0:
+                return []
+            t_min = str(times.min())[:10]
+            t_max = str(times.max())[:10]
+            if date_str < t_min or date_str > t_max:
+                return []
+
         lc, lnc = _lat_coord(ds), _lon_coord(ds)
         region = ds.sel(
             {lc: slice(lat_min, lat_max), lnc: slice(lon_min, lon_max)}
         )
+        actual_depth = depth
         if "depth" in region.dims:
             region = region.sel(depth=depth, method="nearest")
+            if "depth" in region.coords:
+                actual_depth = _safe_float(region["depth"].values) or depth
+
         if "time" in region.dims:
             region = region.sel(time=np.datetime64(date_str), method="nearest")
 
@@ -434,11 +508,26 @@ def _read_phy_grid(
         for i, la in enumerate(lats):
             lat_val = round(float(la), 4)
             for j, lo in enumerate(lons):
-                row = {"lat": lat_val, "lon": round(float(lo), 4)}
+                row = {
+                    "lat": lat_val,
+                    "lon": round(float(lo), 4),
+                    "depth": actual_depth,
+                    "depth_m": actual_depth,
+                    "requested_depth_m": depth,
+                    "actual_depth_m": actual_depth,
+                    "date": date_str,
+                }
                 for dst, arr in var_data.items():
                     if i < arr.shape[0] and j < arr.shape[1]:
                         row[dst] = _safe_float(arr[i, j])
                 
+                # Compute current speed and heading vectors
+                u = row.get("current_u_ms")
+                v = row.get("current_v_ms")
+                if u is not None and v is not None:
+                    row["current_speed_ms"] = round(math.sqrt(u * u + v * v), 3)
+                    row["current_heading_deg"] = round((math.atan2(v, u) * 180.0 / math.pi) % 360.0, 1)
+
                 # Fill derived physics if only thetao is present
                 if "temperature_c" in row and row["temperature_c"] is not None:
                     if "salinity_psu" not in row or row["salinity_psu"] is None:
@@ -448,6 +537,11 @@ def _read_phy_grid(
                         row["current_u_ms"] = round(0.14 * math.sin(lat_val * 0.2 + lo * 0.1), 3)
                     if "current_v_ms" not in row or row["current_v_ms"] is None:
                         row["current_v_ms"] = round(0.09 * math.cos(lat_val * 0.15 - lo * 0.1), 3)
+                    if "current_speed_ms" not in row:
+                        ru = row["current_u_ms"]
+                        rv = row["current_v_ms"]
+                        row["current_speed_ms"] = round(math.sqrt(ru * ru + rv * rv), 3)
+                        row["current_heading_deg"] = round((math.atan2(rv, ru) * 180.0 / math.pi) % 360.0, 1)
 
                 rows.append(row)
         return rows
@@ -481,14 +575,6 @@ def _read_timeline(
             t0 = np.datetime64(date_start)
             t1 = np.datetime64(date_end)
             if "time" in pt.dims:
-                ds_times = pt["time"].values
-                if len(ds_times) > 0:
-                    ds_t0 = ds_times[0]
-                    ds_t1 = ds_times[-1]
-                    # If requested date window is out-of-bounds (e.g. store has 2024 but 2026 requested), clamp to store
-                    if t0 > ds_t1 or t1 < ds_t0:
-                        t0 = ds_t0
-                        t1 = ds_t1
                 pt = pt.sel(time=slice(t0, t1))
             times = pt["time"].values if "time" in pt.coords else []
             for i, t in enumerate(times):
@@ -515,13 +601,6 @@ def _read_timeline(
             t0 = np.datetime64(date_start)
             t1 = np.datetime64(date_end)
             if "time" in pt.dims:
-                ds_times = pt["time"].values
-                if len(ds_times) > 0:
-                    ds_t0 = ds_times[0]
-                    ds_t1 = ds_times[-1]
-                    if t0 > ds_t1 or t1 < ds_t0:
-                        t0 = ds_t0
-                        t1 = ds_t1
                 pt = pt.sel(time=slice(t0, t1))
             times = pt["time"].values if "time" in pt.coords else []
             for i, t in enumerate(times):
@@ -972,6 +1051,26 @@ async def ocean_point(
     }
 
 
+def _validate_spatial_bounds(
+    lat_min: float, lat_max: float, lon_min: float, lon_max: float,
+    max_lat_span: float = 45.0, max_lon_span: float = 60.0,
+):
+    """Validate spatial coordinates to protect from oversized queries and crashes (Requirement 22)."""
+    if not (-90.0 <= lat_min <= 90.0 and -90.0 <= lat_max <= 90.0):
+        raise HTTPException(400, "Latitude must be within [-90.0, 90.0] degrees")
+    if not (-180.0 <= lon_min <= 180.0 and -180.0 <= lon_max <= 180.0):
+        raise HTTPException(400, "Longitude must be within [-180.0, 180.0] degrees")
+    if lat_min > lat_max:
+        raise HTTPException(400, f"lat_min ({lat_min}) cannot be greater than lat_max ({lat_max})")
+    if lon_min > lon_max:
+        raise HTTPException(400, f"lon_min ({lon_min}) cannot be greater than lon_max ({lon_max})")
+    if (lat_max - lat_min) > max_lat_span or (lon_max - lon_min) > max_lon_span:
+        raise HTTPException(
+            400,
+            f"Bounding box exceeds maximum allowed dimensions ({max_lat_span}° lat, {max_lon_span}° lon). Please zoom in or subdivide query."
+        )
+
+
 # ==============================================================================
 # /ocean/snapshot  — spatial grid for map / 3D rendering
 # ==============================================================================
@@ -989,9 +1088,10 @@ async def ocean_snapshot(
     Return a grid of physics + BGC values covering the bounding box at the
     given depth and date. Suitable for map overlays and 3D surface rendering.
     """
+    _validate_spatial_bounds(lat_min, lat_max, lon_min, lon_max)
     t0 = time.perf_counter()
     date_str = resolve_date_input(date)
-    snap_key = f"snap:{lat_min:.2f}:{lat_max:.2f}:{lon_min:.2f}:{lon_max:.2f}:{depth:.0f}:{date_str}"
+    snap_key = f"snap:{lat_min:.2f}:{lat_max:.2f}:{lon_min:.2f}:{lon_max:.2f}:{depth:.2f}:{date_str}"
 
     cached = l1_get(snap_key)
     if cached:
@@ -1053,13 +1153,18 @@ async def ocean_snapshot(
         bgc_coverage = len(grid)
         n = max(1, len(grid))
 
+    actual_depth = grid[0].get("actual_depth_m", depth) if grid else depth
+
     result = {
-        "status":      "ok",
-        "placeholder": is_placeholder,
-        "source":      "synthetic_placeholder" if is_placeholder else "zarr_real",
-        "bbox":   {"lat_min": lat_min, "lat_max": lat_max,
-                   "lon_min": lon_min, "lon_max": lon_max},
-        "depth": depth, "date": date_str,
+        "status":            "ok",
+        "placeholder":       is_placeholder,
+        "source":            "synthetic_placeholder" if is_placeholder else "zarr_real",
+        "bbox":              {"lat_min": lat_min, "lat_max": lat_max,
+                              "lon_min": lon_min, "lon_max": lon_max},
+        "requested_depth_m": depth,
+        "actual_depth_m":    actual_depth,
+        "depth":             actual_depth,
+        "date":              date_str,
         "grid":  grid,
         "coverage": {
             "total_points":         n,
@@ -1158,6 +1263,330 @@ async def ocean_timeline(
 
 
 # ==============================================================================
+# /ocean/depth-profile — full water column depth profile at (lat, lon)
+# ==============================================================================
+
+@app.get("/ocean/depth-profile")
+async def ocean_depth_profile(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    date: Optional[str] = Query(None, description="ISO date YYYY-MM-DD"),
+    variables: str = Query("temperature,salinity,current_u,current_v,sea_level,chlorophyll,oxygen", description="Comma-separated variable list"),
+):
+    """
+    Return vertical depth profile at (lat, lon) for all available depths.
+    Preserves actual source depths, requested depths, physics variables,
+    current vectors (u, v, speed, heading), and BGC variables.
+    Powers 3D vertical water-column visualization and charts.
+    """
+    t0 = time.perf_counter()
+    date_str = resolve_date_input(date)
+    cache_key = f"ocean_depth_profile:{lat:.3f}:{lon:.3f}:{date_str}:{variables}"
+    cached = l1_get(cache_key)
+    if cached:
+        return {**cached, "cache": "L1_RAM", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+    global phy_dataset_xr, bgc_dataset_xr
+    if phy_dataset_xr is None and PHY_ZARR_PATH.exists():
+        try:
+            phy_dataset_xr = xr.open_zarr(PHY_ZARR_PATH)
+        except Exception:
+            pass
+
+    ds = phy_dataset_xr or ocean_dataset_xr
+    levels = []
+    source = "synthetic_model"
+    is_placeholder = True
+
+    if ds is not None and "depth" in ds.coords:
+        try:
+            pt = _select_point(ds, lat, lon)
+            if "time" in pt.dims:
+                pt = pt.sel(time=np.datetime64(date_str), method="nearest")
+                actual_time = str(pt["time"].values)[:10]
+            else:
+                actual_time = date_str
+
+            if actual_time == date_str or not ("time" in ds.coords and len(ds["time"]) > 0 and (date_str < str(ds["time"].min())[:10] or date_str > str(ds["time"].max())[:10])):
+                source_depths = [float(d) for d in pt["depth"].values]
+                for d_val in source_depths:
+                    sub = pt.sel(depth=d_val, method="nearest")
+                    row = {
+                        "depth_m": round(d_val, 2),
+                        "requested_depth_m": round(d_val, 2),
+                        "actual_depth_m": round(d_val, 2),
+                    }
+                    var_map = {
+                        "thetao": "temperature_c",
+                        "so":     "salinity_psu",
+                        "uo":     "current_u_ms",
+                        "vo":     "current_v_ms",
+                        "zos":    "sea_level_m",
+                    }
+                    for src, dst in var_map.items():
+                        if src in sub:
+                            row[dst] = _safe_float(sub[src].values)
+
+                    u = row.get("current_u_ms")
+                    v = row.get("current_v_ms")
+                    if u is not None and v is not None:
+                        row["current_speed_ms"] = round(math.sqrt(u * u + v * v), 3)
+                        row["current_heading_deg"] = round((math.atan2(v, u) * 180.0 / math.pi) % 360.0, 1)
+
+                    bgc = _synthesize_bgc_point(row.get("temperature_c"), d_val)
+                    row.update(bgc)
+                    levels.append(row)
+
+                if levels and any(r.get("temperature_c") is not None for r in levels):
+                    source = "copernicus_zarr"
+                    is_placeholder = False
+        except Exception as e:
+            logger.debug(f"[ocean_depth_profile] zarr read: {e}")
+
+    if not levels or is_placeholder:
+        standard_depths = [0.0, 5.0, 10.0, 20.0, 30.0, 50.0, 75.0, 100.0, 150.0, 200.0, 300.0, 500.0, 750.0, 1000.0]
+        levels = []
+        for d in standard_depths:
+            phy = _synthesize_phy_point(lat, lon, d)
+            bgc = _synthesize_bgc_point(phy.get("temperature_c"), d)
+            u = phy.get("current_u_ms")
+            v = phy.get("current_v_ms")
+            spd = round(math.sqrt(u*u + v*v), 3) if (u is not None and v is not None) else None
+            hdg = round((math.atan2(v, u) * 180.0 / math.pi) % 360.0, 1) if (u is not None and v is not None) else None
+            levels.append({
+                "depth_m": d,
+                "requested_depth_m": d,
+                "actual_depth_m": d,
+                **phy,
+                "current_speed_ms": spd,
+                "current_heading_deg": hdg,
+                **bgc,
+                "placeholder": True,
+            })
+        source = "synthetic_model"
+        is_placeholder = True
+
+    result = {
+        "status": "ok",
+        "lat": lat, "lon": lon, "date": date_str,
+        "source": source,
+        "placeholder": is_placeholder,
+        "n_levels": len(levels),
+        "profile": levels,
+        "dataset_info": route_info(date_str),
+    }
+    l1_set(cache_key, result)
+    return {**result, "cache": "L2_ZARR" if not is_placeholder else "SYNTHETIC", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+
+# ==============================================================================
+# Haversine distance helper
+# ==============================================================================
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Return the great-circle distance in km between two (lat, lon) points."""
+    R = 6371.0  # Earth radius in kilometres
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+# ==============================================================================
+# /ocean/section — vertical cross-section / transect for 3D slicing
+# ==============================================================================
+
+@app.get("/ocean/section")
+async def ocean_section(
+    lat1: float = Query(..., ge=-90, le=90, description="Start latitude"),
+    lon1: float = Query(..., ge=-180, le=180, description="Start longitude"),
+    lat2: float = Query(..., ge=-90, le=90, description="End latitude"),
+    lon2: float = Query(..., ge=-180, le=180, description="End longitude"),
+    samples: int = Query(20, ge=2, le=100, description="Horizontal sample points along transect"),
+    date: Optional[str] = Query(None, description="ISO date YYYY-MM-DD"),
+    variable: str = Query("temperature", description="Variable name"),
+):
+    """
+    Generate vertical cross-section along the transect from (lat1, lon1) to (lat2, lon2).
+    Returns 2D matrix of values indexed by depth and distance.
+    Powers vertical curtain slices in 3D viewers.
+    """
+    t0 = time.perf_counter()
+    date_str = resolve_date_input(date)
+    cache_key = f"section:{lat1:.2f}:{lon1:.2f}:{lat2:.2f}:{lon2:.2f}:{samples}:{date_str}:{variable}"
+    cached = l1_get(cache_key)
+    if cached:
+        return {**cached, "cache": "L1_RAM", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+    # Standard depths for section
+    depths = [0.0, 5.0, 10.0, 20.0, 30.0, 50.0, 75.0, 100.0, 150.0, 200.0, 300.0, 500.0, 750.0, 1000.0]
+    total_dist = _haversine_km(lat1, lon1, lat2, lon2)
+
+    stations = []
+    matrix = []  # shape: (n_depths, n_stations)
+    for d in depths:
+        matrix.append([])
+
+    for i in range(samples):
+        frac = i / max(1, samples - 1)
+        cur_lat = round(lat1 + frac * (lat2 - lat1), 4)
+        cur_lon = round(lon1 + frac * (lon2 - lon1), 4)
+        cur_dist = round(frac * total_dist, 2)
+        stations.append({
+            "station_index": i,
+            "lat": cur_lat,
+            "lon": cur_lon,
+            "distance_km": cur_dist,
+        })
+
+        # Query all depths for this station at once if in zarr
+        station_phy = {}
+        for d in depths:
+            p = _read_phy_point(cur_lat, cur_lon, d, date_str)
+            if p and p.get("temperature_c") is not None:
+                station_phy[d] = p
+
+        for d_idx, d in enumerate(depths):
+            phy = station_phy.get(d)
+            if not phy:
+                phy = _synthesize_phy_point(cur_lat, cur_lon, d)
+                bgc = _synthesize_bgc_point(phy.get("temperature_c"), d)
+            else:
+                bgc = _read_bgc_point(cur_lat, cur_lon, d, date_str)
+
+            val = None
+            if variable in ("temperature", "temperature_c", "thetao", "temp"):
+                val = phy.get("temperature_c")
+            elif variable in ("salinity", "salinity_psu", "so", "sal"):
+                val = phy.get("salinity_psu")
+            elif variable in ("current_u", "u_current", "uo"):
+                val = phy.get("current_u_ms")
+            elif variable in ("current_v", "v_current", "vo"):
+                val = phy.get("current_v_ms")
+            elif variable in ("current_speed", "speed"):
+                val = phy.get("current_speed_ms")
+            elif variable in ("chlorophyll", "chlorophyll_mgl", "chl"):
+                val = bgc.get("chlorophyll_mgl")
+            elif variable in ("oxygen", "dissolved_oxygen", "o2"):
+                val = bgc.get("oxygen_mmolm3")
+            elif variable in ("nitrate", "no3"):
+                val = bgc.get("nitrate_mmolm3")
+            elif variable in ("ph",):
+                val = bgc.get("ph")
+            else:
+                val = phy.get("temperature_c")
+
+            matrix[d_idx].append(val)
+
+    result = {
+        "status": "ok",
+        "date": date_str,
+        "variable": variable,
+        "transect": {
+            "start": {"lat": lat1, "lon": lon1},
+            "end":   {"lat": lat2, "lon": lon2},
+            "total_distance_km": round(total_dist, 2),
+            "n_stations": samples,
+        },
+        "depths_m": depths,
+        "stations": stations,
+        "matrix": matrix,
+        "dataset_info": route_info(date_str),
+    }
+    l1_set(cache_key, result)
+    return {**result, "cache": "COMPUTED", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+
+# ==============================================================================
+# /ocean/volume — multi-depth slices for 3D isosurface rendering
+# ==============================================================================
+
+@app.get("/ocean/volume")
+async def ocean_volume(
+    lat_min: float = Query(...),
+    lat_max: float = Query(...),
+    lon_min: float = Query(...),
+    lon_max: float = Query(...),
+    depths: str = Query("0,10,50,100,200,500,1000", description="Comma-separated depths in metres"),
+    date: Optional[str] = Query(None, description="ISO date YYYY-MM-DD"),
+    variable: str = Query("temperature", description="Primary scalar for volume"),
+):
+    """
+    Lightweight 3D volume grid slices across multiple depths.
+    Returns array of depth slices: each slice contains regular grid points with (lat, lon, value).
+    Powers 3D isosurface and volumetric rendering in Three.js/Cesium.
+    """
+    _validate_spatial_bounds(lat_min, lat_max, lon_min, lon_max)
+    t0 = time.perf_counter()
+    date_str = resolve_date_input(date)
+
+    depth_list = []
+    for d_s in depths.split(","):
+        try:
+            val = float(d_s.strip())
+            if 0.0 <= val <= 6000.0:
+                depth_list.append(val)
+        except ValueError:
+            continue
+    if not depth_list:
+        depth_list = [0.0, 10.0, 50.0, 100.0, 200.0]
+
+    cache_key = f"vol:{lat_min:.2f}:{lat_max:.2f}:{lon_min:.2f}:{lon_max:.2f}:{','.join(str(d) for d in depth_list)}:{date_str}:{variable}"
+    cached = l1_get(cache_key)
+    if cached:
+        return {**cached, "cache": "L1_RAM", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+    slices = []
+    for d in depth_list:
+        grid = _read_phy_grid(lat_min, lat_max, lon_min, lon_max, d, date_str)
+        if not grid:
+            grid = _get_placeholder_grid(lat_min, lat_max, lon_min, lon_max, d, date_str, step=1.0)
+
+        pts = []
+        for r in grid:
+            val = None
+            if variable in ("temperature", "temperature_c", "thetao", "temp"):
+                val = r.get("temperature_c")
+            elif variable in ("salinity", "salinity_psu", "so", "sal"):
+                val = r.get("salinity_psu")
+            elif variable in ("current_speed", "speed"):
+                val = r.get("current_speed_ms")
+            elif variable in ("chlorophyll", "chl"):
+                val = r.get("chlorophyll_mgl")
+            else:
+                val = r.get("temperature_c")
+
+            pts.append({
+                "lat": r["lat"],
+                "lon": r["lon"],
+                "value": val,
+                "current_u_ms": r.get("current_u_ms"),
+                "current_v_ms": r.get("current_v_ms"),
+            })
+
+        slices.append({
+            "depth_m": d,
+            "requested_depth_m": d,
+            "actual_depth_m": grid[0].get("actual_depth_m", d) if grid else d,
+            "n_points": len(pts),
+            "points": pts,
+        })
+
+    result = {
+        "status": "ok",
+        "bbox": {"lat_min": lat_min, "lat_max": lat_max, "lon_min": lon_min, "lon_max": lon_max},
+        "date": date_str,
+        "variable": variable,
+        "n_depth_slices": len(slices),
+        "depth_slices": slices,
+        "dataset_info": route_info(date_str),
+    }
+    l1_set(cache_key, result)
+    return {**result, "cache": "COMPUTED", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+
+# ==============================================================================
 # /argo/nearest
 # ==============================================================================
 
@@ -1228,6 +1657,201 @@ async def argo_profile(
     if result.get("status") == "success":
         l1_set(profile_key, result)
     return {**result, "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+
+# ==============================================================================
+# /argo/floats/active — active float discovery by bounding box
+# ==============================================================================
+
+@app.get("/argo/floats/active")
+async def argo_floats_active(
+    lat_min: float = Query(8.0, ge=-90, le=90),
+    lat_max: float = Query(22.0, ge=-90, le=90),
+    lon_min: float = Query(68.0, ge=-180, le=180),
+    lon_max: float = Query(92.0, ge=-180, le=180),
+    days: int = Query(45, ge=1, le=180),
+    type: str = Query("both", enum=["core", "bgc", "both"]),
+):
+    """
+    Query active Argo floats within bounding box.
+    Returns lightweight float markers: platform ID, lat, lon, last_date, type, available variables.
+    """
+    t0 = time.perf_counter()
+    res = await _argo.fetch_active_floats(lat_min, lat_max, lon_min, lon_max, days=days, float_type=type)
+    return {**res, "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+
+# ==============================================================================
+# /argo/trajectory — historical float surfacing track
+# ==============================================================================
+
+@app.get("/argo/trajectory")
+async def argo_trajectory(
+    platform_number: str = Query(..., description="Argo platform number (e.g. 2902088)"),
+):
+    """
+    Fetch trajectory (history of positions and surfacing dates) for an Argo platform.
+    """
+    t0 = time.perf_counter()
+    traj_key = f"argo_traj:{platform_number.strip()}"
+    cached = l1_get(traj_key)
+    if cached:
+        return {**cached, "cache": "L1_RAM", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+    res = await _argo.fetch_argo_trajectory(platform_number.strip())
+    if res.get("status") == "success":
+        l1_set(traj_key, res)
+    return {**res, "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+
+# ==============================================================================
+# /glider/nearest — underwater glider discovery
+# ==============================================================================
+
+@app.get("/glider/nearest")
+async def glider_nearest(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    radius_km: float = Query(500.0, ge=10, le=3000),
+    date_start: Optional[str] = Query(None),
+    date_end: Optional[str] = Query(None),
+):
+    """
+    Discover active/archived underwater gliders near (lat, lon) from IOOS Glider DAC and AODN ERDDAP.
+    """
+    t0 = time.perf_counter()
+    gliders = await _glider.search_glider_nearest(lat, lon, radius_km=radius_km, date_start=date_start, date_end=date_end)
+    return {
+        "status": "ok",
+        "query": {"lat": lat, "lon": lon, "radius_km": radius_km},
+        "n_gliders": len(gliders),
+        "gliders": gliders,
+        "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+    }
+
+
+# ==============================================================================
+# /glider/profile — glider depth profile
+# ==============================================================================
+
+@app.get("/glider/profile")
+async def glider_profile(
+    dataset_id: str = Query(..., description="Glider dataset ID (e.g. ioos_glider_unit_345)"),
+    server: Optional[str] = Query(None, description="ERDDAP server name or URL ('ioos', 'aodn', or full URL)"),
+):
+    """
+    Fetch depth profile for a glider mission including physical and BGC variables.
+    """
+    t0 = time.perf_counter()
+    prof_key = f"glider_prof:{dataset_id}:{server or 'default'}"
+    cached = l1_get(prof_key)
+    if cached:
+        return {**cached, "cache": "L1_RAM", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+    res = await _glider.fetch_glider_profile(dataset_id=dataset_id, server=server)
+    if res.get("status") == "success":
+        l1_set(prof_key, res)
+    return {**res, "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+
+# ==============================================================================
+# /glider/trajectory — glider mission trajectory
+# ==============================================================================
+
+@app.get("/glider/trajectory")
+async def glider_trajectory(
+    dataset_id: str = Query(..., description="Glider dataset ID"),
+    server: Optional[str] = Query(None),
+):
+    """
+    Fetch spatial-temporal trajectory of an underwater glider mission.
+    """
+    t0 = time.perf_counter()
+    traj_key = f"glider_traj:{dataset_id}:{server or 'default'}"
+    cached = l1_get(traj_key)
+    if cached:
+        return {**cached, "cache": "L1_RAM", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+    res = await _glider.fetch_glider_trajectory(dataset_id=dataset_id, server=server)
+    if res.get("status") == "success":
+        l1_set(traj_key, res)
+    return {**res, "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
+
+
+# ==============================================================================
+# /ctd/moorings — AODN/IMOS CTD mooring stations
+# ==============================================================================
+
+@app.get("/ctd/moorings")
+def ctd_moorings():
+    """
+    List available AODN/IMOS CTD mooring stations with geographical positions and variable metadata.
+    """
+    stations = _glider.scan_mooring_stations(AODN_DIR)
+    return {
+        "status": "ok",
+        "n_stations": len(stations),
+        "stations": stations,
+    }
+
+
+# ==============================================================================
+# /ctd/timeseries — CTD mooring time-series
+# ==============================================================================
+
+@app.get("/ctd/timeseries")
+def ctd_timeseries(
+    station_id: str = Query(..., description="Station identifier (e.g. NRSROT)"),
+    date_start: Optional[str] = Query(None),
+    date_end: Optional[str] = Query(None),
+    limit: int = Query(500, ge=10, le=2000),
+):
+    """
+    Fetch CTD mooring time-series at standard depths from local AODN records.
+    """
+    return _glider.get_mooring_timeseries(
+        station_id=station_id,
+        date_start=date_start,
+        date_end=date_end,
+        aodn_dir=AODN_DIR,
+        max_points=limit,
+    )
+
+
+# ==============================================================================
+# /observation/active — Common Observation Model unified marker query
+# ==============================================================================
+
+@app.get("/observation/active")
+async def observation_active(
+    lat_min: float = Query(8.0, ge=-90, le=90),
+    lat_max: float = Query(22.0, ge=-90, le=90),
+    lon_min: float = Query(68.0, ge=-180, le=180),
+    lon_max: float = Query(92.0, ge=-180, le=180),
+    date_start: Optional[str] = Query(None),
+    date_end: Optional[str] = Query(None),
+    sources: Optional[str] = Query("argo,glider,ctd", description="Comma-separated sources: argo, glider, ctd"),
+    max_results: int = Query(150, ge=1, le=500),
+):
+    """
+    Unified Common Observation Model query: returns standardized observation markers
+    for all platforms (Core Argo, BGC-Argo, Gliders, CTD Moorings) in the requested area.
+    """
+    t0 = time.perf_counter()
+    src_list = [s.strip() for s in sources.split(",") if s.strip()] if sources else None
+    markers = await _obs.query_active_observations(
+        lat_min=lat_min, lat_max=lat_max,
+        lon_min=lon_min, lon_max=lon_max,
+        date_start=date_start, date_end=date_end,
+        sources=src_list, max_results=max_results,
+    )
+    return {
+        "status": "ok",
+        "bbox": {"lat_min": lat_min, "lat_max": lat_max, "lon_min": lon_min, "lon_max": lon_max},
+        "count": len(markers),
+        "observations": markers,
+        "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+    }
 
 
 # ==============================================================================
@@ -1337,27 +1961,26 @@ def api_metadata():
 
 
 @app.get("/api/coastal-temps")
-def api_coastal_temps(variable: str = "thetao"):
+def api_coastal_temps(variable: str = "thetao", date: Optional[str] = Query(None)):
     t0 = time.perf_counter()
-    ds = ocean_dataset_xr or phy_dataset_xr
+    date_str = resolve_date_input(date)
+    ds = phy_dataset_xr or ocean_dataset_xr
 
     if ds is None:
         # Synthesize time-series for known stations from the analytical model
         results, details = {}, {}
-        today = yesterday_iso()
         for loc_key, loc in LOCATIONS.items():
             series = []
             for d in range(7):  # 7-day synthetic series
-                from datetime import date as _d2, timedelta as _td2
                 import datetime as _dtt
-                day_str = (_dtt.date.today() - _dtt.timedelta(days=7-d)).isoformat()
+                day_str = (_dtt.date.fromisoformat(date_str) - _dtt.timedelta(days=7-d)).isoformat()
                 phy = _synthesize_phy_point(loc["lat"], loc["lon"], depth=0.0)
                 series.append({"date": day_str, "value": phy.get("temperature_c")})
             results[loc_key] = series
             details[loc_key] = {"location": loc["name"], "lat": loc["lat"],
                                  "lon": loc["lon"], "cache_layer": "synthetic"}
         return {
-            "status": "success", "variable": variable, "unit": "°C",
+            "status": "success", "variable": variable, "unit": "°C", "date": date_str,
             "total_elapsed_ms": round((time.perf_counter() - t0) * 1000, 3),
             "source": "synthetic_no_zarr",
             "note": "No zarr store loaded; values from analytical ocean model.",
@@ -1366,7 +1989,7 @@ def api_coastal_temps(variable: str = "thetao"):
 
     results, details = {}, {}
     for loc_key, loc in LOCATIONS.items():
-        key = f"series:{loc_key}:{variable}"
+        key = f"series:{loc_key}:{variable}:{date_str}"
         cached = l1_get(key)
         if cached:
             series = cached
@@ -1390,48 +2013,89 @@ def api_coastal_temps(variable: str = "thetao"):
                              "lon": loc["lon"], "cache_layer": layer}
 
     return {
-        "status": "success", "variable": variable, "unit": "°C",
+        "status": "success", "variable": variable, "unit": "°C", "date": date_str,
         "total_elapsed_ms": round((time.perf_counter() - t0) * 1000, 3),
         "stations": details, "data": results,
     }
 
 
 @app.get("/api/depth-profile")
-def api_depth_profile(location: str = "chennai", variable: str = "thetao"):
-    ds = ocean_dataset_xr or phy_dataset_xr
+def api_depth_profile(
+    location: Optional[str] = "chennai",
+    variable: str = "thetao",
+    lat: Optional[float] = Query(None, ge=-90, le=90),
+    lon: Optional[float] = Query(None, ge=-180, le=180),
+    date: Optional[str] = Query(None),
+):
+    ds = phy_dataset_xr or ocean_dataset_xr
+    date_str = resolve_date_input(date)
 
-    if location not in LOCATIONS:
-        return {"status": "not_found", "message": f"Location {location!r} not in known stations", "profile": []}
+    if lat is not None and lon is not None:
+        loc_name = f"Point ({lat:.2f}, {lon:.2f})"
+        loc_lat, loc_lon = lat, lon
+        loc_id = f"{lat:.2f}_{lon:.2f}"
+    elif location and location.lower() in LOCATIONS:
+        loc = LOCATIONS[location.lower()]
+        loc_name = loc["name"]
+        loc_lat, loc_lon = loc["lat"], loc["lon"]
+        loc_id = location.lower()
+    else:
+        return {"status": "not_found", "message": f"Location {location!r} not in known stations and no lat/lon given", "profile": []}
 
-    loc = LOCATIONS[location]
+    key = f"depth:{loc_id}:{variable}:{date_str}"
+    cached = l1_get(key)
+    if cached:
+        return {"location": loc_name, "cache": "L1_RAM", "date": date_str, "profile": cached}
 
-    if ds is None:
+    if ds is None or "depth" not in ds.coords:
         # Synthesize a depth profile from the analytical model
         profile = []
-        for d in [0, 5, 10, 20, 30, 50, 75, 100, 150, 200]:
-            phy = _synthesize_phy_point(loc["lat"], loc["lon"], depth=float(d))
-            profile.append({"depth_m": float(d), "value": phy.get("temperature_c"), **phy})
+        for d in [0, 5, 10, 20, 30, 50, 75, 100, 150, 200, 500, 1000]:
+            phy = _synthesize_phy_point(loc_lat, loc_lon, depth=float(d))
+            profile.append({
+                "depth_m": float(d),
+                "requested_depth_m": float(d),
+                "actual_depth_m": float(d),
+                "value": phy.get("temperature_c"),
+                **phy,
+            })
+        l1_set(key, profile)
         return {
-            "location": loc["name"], "cache": "synthetic",
+            "location": loc_name, "cache": "synthetic", "date": date_str,
             "source": "synthetic_no_zarr",
-            "note": "No zarr store loaded; values from analytical ocean model.",
+            "note": "Values from analytical ocean model.",
             "profile": profile,
         }
 
-    key = f"depth:{location}:{variable}"
-    cached = l1_get(key)
-    if cached:
-        return {"location": loc["name"], "cache": "L1_RAM", "profile": cached}
     try:
-        pt = _select_point(ds, loc["lat"], loc["lon"])
+        pt = _select_point(ds, loc_lat, loc_lon)
+        if "time" in pt.dims:
+            pt = pt.sel(time=np.datetime64(date_str), method="nearest")
+
         depths = pt["depth"].values
-        vals   = pt[variable].isel(time=-1).values
-        profile = [{"depth_m": round(float(d), 2), "value": _safe_float(v)}
-                   for d, v in zip(depths, vals)]
+        v_target = variable
+        if v_target not in pt:
+            alias_map = {"temperature": "thetao", "temp": "thetao", "salinity": "so", "u": "uo", "v": "vo"}
+            v_target = alias_map.get(v_target, list(pt.data_vars)[0] if pt.data_vars else "thetao")
+
+        if v_target in pt:
+            vals = pt[v_target].values
+            profile = []
+            for i, d in enumerate(depths):
+                v_val = vals[i] if hasattr(vals, '__len__') and i < len(vals) else vals
+                d_f = round(float(d), 2)
+                profile.append({
+                    "depth_m": d_f,
+                    "requested_depth_m": d_f,
+                    "actual_depth_m": d_f,
+                    "value": _safe_float(v_val),
+                })
+        else:
+            profile = []
         l1_set(key, profile)
-        return {"location": loc["name"], "cache": "L2_ZARR", "profile": profile}
+        return {"location": loc_name, "cache": "L2_ZARR", "date": date_str, "profile": profile}
     except Exception as e:
-        return {"location": loc["name"], "cache": "error", "error": str(e), "profile": []}
+        return {"location": loc_name, "cache": "error", "error": str(e), "profile": []}
 
 
 @app.get("/api/argo-floats")
