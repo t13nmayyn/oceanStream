@@ -1,4 +1,4 @@
-import { Content, GenerateContentResponse, GoogleGenAI, Type } from '@google/genai';
+import { Content, GenerateContentResponse, Type } from '@google/genai';
 import {
   AiChatMessage,
   AiMode,
@@ -12,6 +12,9 @@ import {
   executeScientificTool,
   ToolExecutionResult,
 } from './scientificTools.service';
+import { executeWithFailover, GeminiConfigurationError, GeminiServiceError } from './geminiKeyPool.service';
+
+export { GeminiConfigurationError, GeminiServiceError };
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 
@@ -164,20 +167,6 @@ const SCIENTIFIC_TOOLS: any = [
   },
 ];
 
-export class GeminiConfigurationError extends Error {
-  constructor() {
-    super('Gemini is not configured: GEMINI_API_KEY is missing');
-    this.name = 'GeminiConfigurationError';
-  }
-}
-
-export class GeminiServiceError extends Error {
-  constructor(message = 'Gemini could not generate a response') {
-    super(message);
-    this.name = 'GeminiServiceError';
-  }
-}
-
 export interface GeneratedAnswerResult {
   answer: string;
   tool_actions: ToolActionRecord[];
@@ -217,12 +206,6 @@ export async function generateOceanStreamAnswer(
   scientificContext: ScientificContext,
   history: AiChatMessage[] = [],
 ): Promise<GeneratedAnswerResult> {
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey) {
-    throw new GeminiConfigurationError();
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
   const configuredModel = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
   let activeModel = configuredModel;
 
@@ -275,16 +258,18 @@ export async function generateOceanStreamAnswer(
     for (const mod of candidateModels) {
       try {
         activeModel = mod;
-        return await callWithRetry(() =>
-          ai.models.generateContent({
-            model: mod,
-            contents: reqContents,
-            config: {
-              systemInstruction: SYSTEM_INSTRUCTIONS,
-              tools: SCIENTIFIC_TOOLS,
-            },
-          })
-        );
+        return await executeWithFailover(async (ai, keyIndex) => {
+          return await callWithRetry(() =>
+            ai.models.generateContent({
+              model: mod,
+              contents: reqContents,
+              config: {
+                systemInstruction: SYSTEM_INSTRUCTIONS,
+                tools: SCIENTIFIC_TOOLS,
+              },
+            })
+          );
+        });
       } catch (err: any) {
         lastError = err;
         console.warn(`[gemini.service] Model '${mod}' request failed, trying next candidate model...`);
@@ -373,15 +358,17 @@ export async function generateOceanStreamAnswer(
 
     // If turns exhausted, force final synthesis without tools
     console.log('[gemini.service] Max turns reached, synthesizing final response from accumulated tool results...');
-    const finalSynth = await callWithRetry(() =>
-      ai.models.generateContent({
-        model: activeModel,
-        contents,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTIONS,
-        },
-      })
-    );
+    const finalSynth = await executeWithFailover(async (ai) => {
+      return await callWithRetry(() =>
+        ai.models.generateContent({
+          model: activeModel,
+          contents,
+          config: {
+            systemInstruction: SYSTEM_INSTRUCTIONS,
+          },
+        })
+      );
+    });
 
     const finalText = finalSynth.text?.trim() || 'Scientific analysis completed based on available ocean data.';
     return {

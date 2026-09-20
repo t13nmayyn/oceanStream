@@ -187,7 +187,7 @@ export async function postAiChat(req: Request, res: Response): Promise<void> {
     }
 
     res.json(response);
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof GeminiConfigurationError) {
       res.status(503).json({ error: 'AI service is not configured', details: 'Set GEMINI_API_KEY on the Node server' });
       return;

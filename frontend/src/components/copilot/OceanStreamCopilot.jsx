@@ -64,9 +64,7 @@ function ScientificDataSnapshot({ data }) {
   const argo = data.nearest_argo_float;
 
   const formatVal = (val, decimals = 2) => {
-    if (val === null || val === undefined || !Number.isFinite(Number(val))) {
-      return null;
-    }
+    if (val === null || val === undefined || !Number.isFinite(Number(val))) return null;
     return Number(val).toFixed(decimals);
   };
 
@@ -74,118 +72,43 @@ function ScientificDataSnapshot({ data }) {
   const psal = formatVal(phy.salinity_psu, 2);
   const u = phy.current_u_ms;
   const v = phy.current_v_ms;
-  const currentSpd =
-    u !== null && u !== undefined && v !== null && v !== undefined && Number.isFinite(Number(u)) && Number.isFinite(Number(v))
-      ? Math.sqrt(Number(u) ** 2 + Number(v) ** 2).toFixed(2)
-      : null;
+  const currentSpd = (u !== null && u !== undefined && v !== null && v !== undefined && Number.isFinite(Number(u)) && Number.isFinite(Number(v)))
+    ? Math.sqrt(Number(u) ** 2 + Number(v) ** 2).toFixed(2)
+    : null;
   const zos = formatVal(phy.sea_level_m, 3);
-
   const o2 = formatVal(bgc.oxygen_mmolm3, 1);
   const chl = formatVal(bgc.chlorophyll_mgl, 3);
   const ph = formatVal(bgc.ph, 2);
   const pco2 = formatVal(bgc.pco2_uatm, 1);
   const no3 = formatVal(bgc.nitrate_mmolm3, 2);
 
-  const hasMetrics = [temp, psal, currentSpd, zos, o2, chl, ph, pco2, no3].some(Boolean);
+  const metrics = [];
+  if (temp !== null) metrics.push(`Temperature ${temp} °C`);
+  if (psal !== null) metrics.push(`Salinity ${psal} PSU`);
+  if (o2 !== null) metrics.push(`O₂ ${o2} mmol/m³`);
+  if (chl !== null) metrics.push(`Chl-a ${chl} mg/m³`);
+  if (ph !== null) metrics.push(`pH ${ph}`);
+  if (currentSpd !== null) metrics.push(`Current Vel ${currentSpd} m/s`);
+  else if (zos !== null) metrics.push(`Sea Level ${zos} m`);
+  if (no3 !== null) metrics.push(`NO₃ ${no3} mmol/m³`);
+  if (pco2 !== null) metrics.push(`pCO₂ ${pco2} μatm`);
+
+  const hasMetrics = metrics.length > 0;
   if (!hasMetrics && !argo) return null;
 
   return (
-    <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 text-[11px] font-mono">
-      {/* Header */}
-      <div className="mb-2 flex items-center justify-between border-b border-white/[0.06] pb-1.5 text-[10px] text-slate-400">
-        <span className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-cyan-400">
-          <Database size={11} />
-          <span>Point Hydrography & Biogeochemistry</span>
-        </span>
-        <span className="text-[9px] text-slate-500">Copernicus ANFC</span>
+    <div className="mt-2 mb-2 text-[13px] text-slate-300">
+      <div className="mb-1 text-[11px] font-bold tracking-widest text-slate-500 uppercase flex items-center gap-1.5">
+        <Database size={11} className="text-slate-400" />
+        OCEAN DATA
       </div>
-
-      {/* Grid of Measurements */}
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
-        {/* Temperature */}
-        <div className="flex items-center justify-between border-b border-white/[0.03] py-0.5">
-          <span className="text-slate-400">Temperature</span>
-          <span className="font-semibold text-slate-100">
-            {temp !== null ? `${temp} °C` : <span className="text-slate-500 font-normal">—</span>}
-          </span>
-        </div>
-
-        {/* Salinity */}
-        <div className="flex items-center justify-between border-b border-white/[0.03] py-0.5">
-          <span className="text-slate-400">Salinity</span>
-          <span className="font-semibold text-slate-100">
-            {psal !== null ? `${psal} PSU` : <span className="text-slate-500 font-normal">—</span>}
-          </span>
-        </div>
-
-        {/* Dissolved Oxygen */}
-        <div className="flex items-center justify-between border-b border-white/[0.03] py-0.5">
-          <span className="text-slate-400">Dissolved O₂</span>
-          <span className="font-semibold text-teal-300">
-            {o2 !== null ? `${o2} mmol/m³` : <span className="text-slate-500 font-normal">—</span>}
-          </span>
-        </div>
-
-        {/* Chlorophyll-a */}
-        <div className="flex items-center justify-between border-b border-white/[0.03] py-0.5">
-          <span className="text-slate-400">Chlorophyll-a</span>
-          <span className="font-semibold text-emerald-300">
-            {chl !== null ? `${chl} mg/m³` : <span className="text-slate-500 font-normal">—</span>}
-          </span>
-        </div>
-
-        {/* Ocean pH */}
-        <div className="flex items-center justify-between border-b border-white/[0.03] py-0.5">
-          <span className="text-slate-400">Ocean pH</span>
-          <span className="font-semibold text-slate-100">
-            {ph !== null ? ph : <span className="text-slate-500 font-normal">—</span>}
-          </span>
-        </div>
-
-        {/* Current Speed / Sea Level */}
-        <div className="flex items-center justify-between border-b border-white/[0.03] py-0.5">
-          <span className="text-slate-400">{currentSpd !== null ? 'Current Speed' : 'Sea Level'}</span>
-          <span className="font-semibold text-slate-100">
-            {currentSpd !== null ? (
-              `${currentSpd} m/s`
-            ) : zos !== null ? (
-              `${zos} m`
-            ) : (
-              <span className="text-slate-500 font-normal">—</span>
-            )}
-          </span>
-        </div>
-
-        {/* Nitrate (if present) */}
-        {no3 !== null && (
-          <div className="flex items-center justify-between border-b border-white/[0.03] py-0.5">
-            <span className="text-slate-400">Nitrate (NO₃)</span>
-            <span className="font-semibold text-amber-300">{no3} mmol/m³</span>
-          </div>
-        )}
-
-        {/* pCO2 (if present) */}
-        {pco2 !== null && (
-          <div className="flex items-center justify-between border-b border-white/[0.03] py-0.5">
-            <span className="text-slate-400">pCO₂</span>
-            <span className="font-semibold text-rose-300">{pco2} μatm</span>
-          </div>
-        )}
+      <div className="leading-relaxed font-mono text-[12px] text-slate-200 break-words">
+        {metrics.join(' · ')}
       </div>
-
-      {/* Nearest Argo Float */}
       {argo && argo.platform_number && (
-        <div className="mt-2.5 flex items-center justify-between rounded-lg bg-emerald-950/30 border border-emerald-500/20 px-2.5 py-1.5 text-[10.5px]">
-          <div className="flex items-center gap-1.5 text-emerald-300">
-            <Radio size={12} className="text-emerald-400 shrink-0" />
-            <span className="font-semibold">Argo Float #{argo.platform_number}</span>
-            {argo.type && <span className="text-slate-400 font-normal">({argo.type})</span>}
-          </div>
-          {argo.distance_km != null && (
-            <span className="font-semibold text-emerald-400">
-              {Number(argo.distance_km).toFixed(1)} km away
-            </span>
-          )}
+        <div className="mt-1 flex items-center gap-1.5 text-[11px] text-emerald-400 font-mono">
+          <Radio size={11} className="shrink-0" />
+          <span>Argo #{argo.platform_number} {argo.distance_km != null ? `(${Number(argo.distance_km).toFixed(1)} km away)` : ''}</span>
         </div>
       )}
     </div>
@@ -199,47 +122,34 @@ function DepthComparisonView({ data }) {
   const { depths, rows } = data;
 
   return (
-    <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 text-[11px] font-mono">
-      <div className="mb-2 flex items-center justify-between border-b border-white/[0.06] pb-1.5 text-[10px]">
-        <div className="flex items-center gap-1.5 font-semibold uppercase tracking-wider text-cyan-400">
-          <Layers size={11} />
-          <span>Vertical Water Column Comparison</span>
-        </div>
-        <span className="text-[9px] text-slate-500">
-          {depths.map((d) => `${d}m`).join(' ↔ ')}
-        </span>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-[11px]">
-          <thead>
-            <tr className="border-b border-white/[0.06] text-slate-400 text-[9.5px] uppercase">
-              <th className="py-1 text-left font-normal">Variable</th>
-              {depths.map((d) => (
-                <th key={d} className="py-1 text-right font-semibold text-cyan-300">
-                  {d} m
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/[0.03]">
-            {rows.map((row) => (
-              <tr key={row.variable} className="hover:bg-white/[0.015]">
-                <td className="py-1.5 text-slate-300 font-sans text-[11px]">
-                  {row.label} <span className="text-[9px] text-slate-500 font-mono">({row.unit})</span>
-                </td>
-                {depths.map((d) => {
-                  const v = row.values[d];
-                  return (
-                    <td key={d} className="py-1.5 text-right font-semibold text-slate-100">
-                      {v !== null && v !== undefined ? v : <span className="text-slate-600 font-normal">—</span>}
-                    </td>
-                  );
-                })}
-              </tr>
+    <div className="mt-3 mb-2 overflow-x-auto pb-1">
+      <table className="text-left text-[13px] text-slate-200 w-full min-w-[250px]">
+        <thead>
+          <tr className="border-b border-white/10 text-slate-400 text-[11px] uppercase">
+            <th className="py-1 font-medium w-[40%]">Variable</th>
+            {depths.map((d) => (
+              <th key={d} className="py-1 font-medium text-right font-mono">{d} m</th>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/5">
+          {rows.map((row) => (
+            <tr key={row.variable}>
+              <td className="py-1.5 font-sans">
+                {row.label} <span className="text-[10px] text-slate-500 font-mono">({row.unit})</span>
+              </td>
+              {depths.map((d) => {
+                const v = row.values[d];
+                return (
+                  <td key={d} className="py-1.5 text-right font-mono text-slate-300">
+                    {v !== null && v !== undefined ? v : <span className="text-slate-600">—</span>}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -247,19 +157,19 @@ function DepthComparisonView({ data }) {
 // ─── UNIFIED INVESTIGATION STATUS & TRACE ───────────────────────────────────
 
 function InvestigationTrace({ toolActions, visualizationActions }) {
-  const steps = [];
+  const traces = [];
 
   if (visualizationActions && visualizationActions.length > 0) {
     for (const v of visualizationActions) {
-      if (v.summary) {
-        steps.push(v.summary);
-      } else if (v.payload) {
-        if (typeof v.payload.depth === 'number') {
-          steps.push(v.payload.depth === 0 ? 'Returned to ocean surface (0 m)' : `Explorer Depth → ${v.payload.depth} m`);
-        }
+      if (v.payload && (typeof v.payload.depth === 'number' || typeof v.payload.lat === 'number')) {
+        let details = [];
+        if (typeof v.payload.depth === 'number') details.push(`${v.payload.depth} m`);
         if (typeof v.payload.lat === 'number' && typeof v.payload.lon === 'number') {
-          steps.push(`Explorer Coordinates → ${v.payload.lat.toFixed(2)}°, ${v.payload.lon.toFixed(2)}°`);
+           details.push(`${formatCoordinate(v.payload.lat, 'N', 'S', 3)} · ${formatCoordinate(v.payload.lon, 'E', 'W', 3)}`);
         }
+        traces.push(`Explorer updated · ${details.join(' · ')}`);
+      } else if (v.summary) {
+        traces.push(v.summary);
       }
     }
   }
@@ -267,32 +177,29 @@ function InvestigationTrace({ toolActions, visualizationActions }) {
   if (toolActions && toolActions.length > 0) {
     for (const t of toolActions) {
       if (t.tool !== 'set_visualization_state') {
-        steps.push(
+        traces.push(
           t.summary ||
             (t.tool === 'query_ocean_point'
-              ? 'Retrieved operational ocean state'
+              ? 'Querying OceanStream data'
               : t.tool === 'compare_ocean_points'
-              ? 'Compared vertical depth levels'
+              ? 'Comparing depth levels'
               : t.tool === 'find_nearest_argo'
-              ? 'Searched in-situ Argo profiling floats'
-              : 'Retrieved Argo float vertical observations')
+              ? 'Searching Argo floats'
+              : 'Retrieving Argo profile')
         );
       }
     }
   }
 
-  if (steps.length === 0) return null;
+  if (traces.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 py-0.5 text-[10.5px] font-mono">
-      {steps.map((step, idx) => (
-        <span
-          key={idx}
-          className="inline-flex items-center gap-1 rounded-md bg-cyan-950/30 border border-cyan-500/20 px-2 py-0.5 text-cyan-200"
-        >
-          <span className="text-emerald-400 text-[10px]">✓</span>
-          <span>{step}</span>
-        </span>
+    <div className="mb-2 flex flex-col gap-1 text-[11.5px] text-slate-400 font-mono">
+      {traces.map((trace, idx) => (
+        <div key={idx} className="flex items-center gap-1.5">
+          <span className="text-slate-500">↳</span>
+          <span>{trace}</span>
+        </div>
       ))}
     </div>
   );
@@ -300,39 +207,23 @@ function InvestigationTrace({ toolActions, visualizationActions }) {
 
 // ─── FOLLOW-UP INVESTIGATIONS COMPONENT ──────────────────────────────────────
 
-function FollowUpInvestigations({ followUps, onSelect, isScientist }) {
+function FollowUpInvestigations({ followUps, onSelect }) {
   if (!followUps || followUps.length === 0) return null;
 
   return (
-    <div className="pt-2 border-t border-white/[0.06] space-y-1.5">
-      <div className="flex items-center gap-1.5 text-[10px] font-mono font-medium uppercase tracking-wider text-cyan-400">
-        <Compass size={11} className="text-cyan-400" />
-        <span>{isScientist ? 'Next Analytical Pathways' : 'Want to explore further?'}</span>
-      </div>
-      <div className="grid grid-cols-1 gap-1">
-        {followUps.map((item, idx) => (
-          <motion.button
-            key={idx}
-            type="button"
-            whileHover={{ scale: 1.005, backgroundColor: 'rgba(6,182,212,0.06)' }}
-            whileTap={{ scale: 0.99 }}
-            onClick={() => onSelect(item.prompt)}
-            className="flex items-center justify-between gap-2 rounded-lg border border-white/[0.06] bg-white/[0.015] px-2.5 py-1.5 text-left text-[11.5px] transition-all hover:border-cyan-400/30 group cursor-pointer"
-          >
-            <div className="min-w-0 flex-1">
-              <span className="font-medium text-slate-200 group-hover:text-cyan-200 transition-colors">
-                {item.title}
-              </span>
-              {item.desc && (
-                <span className="block text-[10px] text-slate-400 truncate mt-0.5 font-sans">
-                  {item.desc}
-                </span>
-              )}
-            </div>
-            <ArrowRight size={12} className="text-slate-500 group-hover:text-cyan-300 shrink-0 transition-colors" />
-          </motion.button>
-        ))}
-      </div>
+    <div className="mt-4 flex flex-wrap gap-2">
+      {followUps.map((item, idx) => (
+        <motion.button
+          key={idx}
+          type="button"
+          whileHover={{ scale: 1.02, backgroundColor: 'rgba(255,255,255,0.08)' }}
+          whileTap={{ scale: 0.98 }}
+          onClick={() => onSelect(item.prompt)}
+          className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[12px] font-medium text-cyan-100 transition-colors cursor-pointer"
+        >
+          {item.title}
+        </motion.button>
+      ))}
     </div>
   );
 }
@@ -370,12 +261,12 @@ function getFollowUpInvestigations({ lastMessage, context, mode, isLatest }) {
       }
     } else {
       followUps.push({
-        title: 'Why is deep water colder & darker?',
+        title: 'Why is deep water colder?',
         desc: 'Discover sunlight penetration and ocean layers',
         prompt: 'Why does the ocean change so much in temperature and light between the surface and deep water?',
       });
       followUps.push({
-        title: 'Explore deeper to 1000 m',
+        title: 'Explore 1000 m',
         desc: 'Dive down to the midnight ocean zone',
         prompt: 'Take me to 1000 m depth and tell me what creatures live there.',
       });
@@ -452,7 +343,7 @@ function getFollowUpInvestigations({ lastMessage, context, mode, isLatest }) {
         });
       } else {
         followUps.push({
-          title: `Learn about nearby Argo robot #${nearestArgo.platform_number}`,
+          title: `Learn about nearby Argo robot`,
           desc: `Autonomous scientific float floating ${Number(nearestArgo.distance_km || 0).toFixed(0)} km away`,
           prompt: `Tell me about the nearby Argo float #${nearestArgo.platform_number} and what it is measuring in this area.`,
         });
@@ -466,7 +357,7 @@ function getFollowUpInvestigations({ lastMessage, context, mode, isLatest }) {
         });
       } else {
         followUps.push({
-          title: 'Find nearby ocean robot floats',
+          title: 'Find nearby ocean robots',
           desc: 'Check if real autonomous Argo floats are nearby',
           prompt: 'Are there any autonomous Argo robot floats near this location?',
         });
@@ -478,13 +369,13 @@ function getFollowUpInvestigations({ lastMessage, context, mode, isLatest }) {
     if (bgc && typeof bgc.oxygen_mmolm3 === 'number') {
       if (isScientist) {
         followUps.push({
-          title: 'Analyze Dissolved O₂ & Biogeochemistry',
+          title: 'Analyze Dissolved O₂',
           desc: 'Interpret hypoxia, ventilation & carbon chemistry',
           prompt: 'Analyze the dissolved oxygen concentration and biogeochemical balance at this depth.',
         });
       } else {
         followUps.push({
-          title: 'Why do ocean creatures need oxygen here?',
+          title: 'Why do creatures need oxygen here?',
           desc: 'Learn how fish and marine life breathe at this depth',
           prompt: 'Explain the dissolved oxygen level here and how marine life survives.',
         });
@@ -494,12 +385,12 @@ function getFollowUpInvestigations({ lastMessage, context, mode, isLatest }) {
     // No location selected
     if (isScientist) {
       followUps.push({
-        title: 'Move to Arabian Sea Oxygen Minimum Zone',
+        title: 'Examine OMZ',
         desc: 'Examine 15.0°N, 65.0°E at 200m depth',
         prompt: 'Move to 15N 65E at 200 m and analyze the intense oxygen minimum zone.',
       });
       followUps.push({
-        title: 'Examine Bay of Bengal Stratification',
+        title: 'Examine Stratification',
         desc: 'Freshwater-driven low salinity barrier layer (12.0°N, 85.0°E)',
         prompt: 'Move to 12N 85E and compare salinity and temperature at 0m and 100m.',
       });
@@ -529,7 +420,7 @@ function InlineText({ text }) {
       return (
         <code
           key={index}
-          className="rounded border border-cyan-500/20 bg-cyan-950/40 px-1 py-0.5 font-mono text-[11px] font-medium text-cyan-200"
+          className="rounded border border-cyan-500/20 bg-cyan-950/40 px-1 py-0.5 font-mono text-[12px] font-medium text-cyan-200"
         >
           {part.slice(1, -1)}
         </code>
@@ -553,12 +444,33 @@ function InlineText({ text }) {
   });
 }
 
+function normalizeLatex(text) {
+  if (!text) return text;
+  let normalized = text;
+  // Standardize simple LaTeX scientific responses
+  normalized = normalized.replace(/\$([0-9.]+)\\text{−}([0-9.]+)\\text{ m}\$/g, '$1–$2 m');
+  normalized = normalized.replace(/\\text{mmol\/m}\^3/g, 'mmol/m³');
+  normalized = normalized.replace(/\\text{mg\/m}\^3/g, 'mg/m³');
+  normalized = normalized.replace(/\\text{pCO}_2/g, 'pCO₂');
+  normalized = normalized.replace(/\$\\approx\s*([0-9.]+)\$/g, '≈ $1');
+  normalized = normalized.replace(/\\text{−}/g, '–');
+  normalized = normalized.replace(/\\text{m}/g, 'm');
+  
+  // Strip any remaining generic $ wraps that just hold text/numbers
+  normalized = normalized.replace(/\$([^$\n]+)\$/g, (match, p1) => {
+    if (/^[a-zA-Z0-9\s.,–-]+$/.test(p1)) return p1;
+    return match;
+  });
+  return normalized;
+}
+
 function MessageText({ text }) {
   if (!text) return null;
-  const lines = text.split('\n');
+  const normalizedText = normalizeLatex(text);
+  const lines = normalizedText.split('\n');
 
   return (
-    <div className="space-y-2 text-[13px] leading-relaxed text-slate-200">
+    <div className="space-y-3 text-[14px] leading-[1.6] text-slate-200">
       {lines.map((line, index) => {
         const trimmed = line.trim();
         if (!trimmed) {
@@ -572,8 +484,7 @@ function MessageText({ text }) {
         if (isHeading) {
           const headingText = trimmed.replace(/^#{1,4}\s+/, '');
           return (
-            <div key={index} className="mt-2.5 mb-1 text-[13px] font-semibold text-slate-100 flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
+            <div key={index} className="mt-4 mb-2 text-[12px] font-bold tracking-wide text-slate-100 uppercase">
               <InlineText text={headingText} />
             </div>
           );
@@ -584,7 +495,7 @@ function MessageText({ text }) {
           return (
             <div key={index} className="my-0.5 flex items-start gap-2 pl-0.5">
               <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400" />
-              <div className="flex-1 leading-relaxed">
+              <div className="flex-1 leading-[1.6]">
                 <InlineText text={content} />
               </div>
             </div>
@@ -597,8 +508,8 @@ function MessageText({ text }) {
           const content = trimmed.replace(/^\d+\.\s+/, '');
           return (
             <div key={index} className="my-0.5 flex items-start gap-2 pl-0.5">
-              <span className="mt-0.5 shrink-0 font-mono text-[11px] font-bold text-cyan-400">{num}.</span>
-              <div className="flex-1 leading-relaxed">
+              <span className="mt-0.5 shrink-0 font-mono text-[12px] font-bold text-cyan-400">{num}.</span>
+              <div className="flex-1 leading-[1.6]">
                 <InlineText text={content} />
               </div>
             </div>
@@ -606,7 +517,7 @@ function MessageText({ text }) {
         }
 
         return (
-          <div key={index} className="leading-relaxed">
+          <div key={index} className="leading-[1.6]">
             <InlineText text={line} />
           </div>
         );
@@ -715,7 +626,8 @@ export default function OceanStreamCopilot({ selectedPoint, onSelectPoint }) {
         role: m.role,
         content: m.content,
       }));
-      const result = await sendCopilotMessage({ message, mode: userMode, context, history });
+      const apiMode = userMode === 'analyze' ? 'scientist' : 'student';
+      const result = await sendCopilotMessage({ message, mode: apiMode, context, history });
 
       // Execute Explorer visualization actions via existing application mechanisms
       if (Array.isArray(result.visualizationActions) && result.visualizationActions.length > 0) {
@@ -772,7 +684,7 @@ export default function OceanStreamCopilot({ selectedPoint, onSelectPoint }) {
   }
 
   return (
-    <div className="pointer-events-none fixed inset-x-3 bottom-3 z-[70] flex justify-end sm:inset-x-auto sm:bottom-6 sm:right-6">
+    <div className="pointer-events-none fixed top-[64px] bottom-4 right-4 z-[70] flex justify-end">
       <AnimatePresence mode="wait">
         {!isOpen ? (
           /* =========================================================
@@ -781,166 +693,125 @@ export default function OceanStreamCopilot({ selectedPoint, onSelectPoint }) {
           <motion.button
             key="launcher"
             type="button"
-            initial={reducedMotion ? false : { opacity: 0, y: 14, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={reducedMotion ? undefined : { opacity: 0, scale: 0.95 }}
-            whileHover={reducedMotion ? undefined : { y: -2, scale: 1.01 }}
+            initial={reducedMotion ? false : { opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={reducedMotion ? undefined : { opacity: 0, x: 20 }}
+            whileHover={reducedMotion ? undefined : { scale: 1.02 }}
             whileTap={reducedMotion ? undefined : { scale: 0.98 }}
             onClick={openCopilot}
-            className="group pointer-events-auto relative flex h-[52px] items-center gap-3 rounded-full border border-white/10 bg-[#070b12]/95 px-4 py-2 text-left text-slate-100 shadow-[0_15px_40px_rgba(0,0,0,0.7),0_0_20px_rgba(6,182,212,0.1)] backdrop-blur-2xl transition-all duration-300 hover:border-cyan-400/40 cursor-pointer overflow-hidden"
+            className="pointer-events-auto absolute bottom-0 right-0 flex h-[48px] items-center gap-3 rounded-full border border-white/10 bg-[#070b12]/95 px-4 py-2 text-left text-slate-100 shadow-[0_8px_32px_rgba(0,0,0,0.6)] backdrop-blur-md transition-all duration-300 hover:border-cyan-400/40 cursor-pointer overflow-hidden"
             aria-label="Open OceanStream Copilot"
           >
-            {/* Spark Avatar */}
-            <div className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-tr from-cyan-400 to-indigo-500 p-[1.5px]">
+            <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-tr from-cyan-400 to-indigo-500 p-[1px]">
               <div className="flex h-full w-full items-center justify-center rounded-full bg-[#070b12]">
-                <Sparkles size={14} className="text-cyan-300" />
+                <Sparkles size={12} className="text-cyan-300" />
               </div>
             </div>
-
-            {/* Title & Status */}
             <div className="relative min-w-0 pr-1">
               <div className="flex items-center gap-2">
                 <span className="text-[13px] font-semibold tracking-tight text-white font-sans">
                   OceanStream Copilot
                 </span>
-                <span className="rounded bg-cyan-500/10 border border-cyan-500/20 px-1.5 py-0.2 text-[8.5px] font-mono font-semibold text-cyan-300 uppercase">
+                <span className="text-[11px] font-medium text-slate-400">
                   {modeBadge}
                 </span>
               </div>
-              <div className="truncate text-[11px] text-slate-400 font-sans">
-                {hasPoint ? `${latStr}, ${lonStr} · ${depthValue}` : 'Copernicus & Argo Intelligence'}
-              </div>
-            </div>
-
-            {/* Arrow */}
-            <div className="relative ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-slate-400 group-hover:text-cyan-200 transition-colors">
-              <ChevronUp size={14} />
             </div>
           </motion.button>
         ) : (
           /* =========================================================
-             PROFESSIONAL RESEARCH CONSOLE PANEL
+             PREMIUM AI ASSISTANT PANEL
              ========================================================= */
           <motion.section
             key="chat-panel"
-            initial={reducedMotion ? false : { opacity: 0, y: 16, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={reducedMotion ? undefined : { opacity: 0, y: 14, scale: 0.97 }}
-            transition={{ type: 'spring', stiffness: 380, damping: 32 }}
-            className="pointer-events-auto relative flex h-[min(700px,calc(100vh-4.5rem))] w-full sm:w-[450px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-2xl border border-white/[0.12] bg-[#070b12]/95 text-slate-100 shadow-[0_25px_70px_rgba(0,0,0,0.85),0_0_30px_rgba(6,182,212,0.08)] backdrop-blur-2xl ring-1 ring-black/50 select-none font-sans"
+            initial={reducedMotion ? false : { opacity: 0, x: 40 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={reducedMotion ? undefined : { opacity: 0, x: 40 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+            className="pointer-events-auto relative flex h-full w-[390px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#070b14]/95 text-slate-100 shadow-[0_8px_32px_rgba(0,0,0,0.8)] backdrop-blur-3xl select-none font-sans"
             aria-label="OceanStream Copilot"
           >
-            {/* ── TOP CONSOLE HEADER ───────────────────────────────── */}
-            <header className="shrink-0 relative z-10 border-b border-white/[0.08] bg-[#0c121e]/90 px-4 py-3 backdrop-blur-xl">
-              <div className="flex items-center justify-between">
-                {/* Left: Branding */}
-                <div className="flex items-center gap-2.5">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-tr from-cyan-400 to-indigo-500 p-[1.5px] shadow-sm">
-                    <div className="flex h-full w-full items-center justify-center rounded-md bg-[#070b12]">
-                      <Sparkles size={13} className="text-cyan-300" />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-[13.5px] font-semibold text-white tracking-tight leading-none">
-                        OceanStream Copilot
-                      </h3>
-                      <span className="rounded bg-cyan-500/10 border border-cyan-500/20 px-1.5 py-0.5 text-[8.5px] font-mono font-semibold text-cyan-300 uppercase">
-                        {modeBadge}
-                      </span>
-                    </div>
-                  </div>
+            {/* ── TOP MINIMAL HEADER ───────────────────────────────── */}
+            <header className="shrink-0 relative z-10 pt-4 pb-2 px-4 bg-gradient-to-b from-black/40 to-transparent">
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={16} className="text-cyan-400" />
+                  <h3 className="text-[16px] font-medium text-white tracking-tight leading-none">
+                    OceanStream Copilot
+                  </h3>
+                  <span className="text-[12px] font-medium text-slate-400 ml-1">
+                    {modeBadge}
+                  </span>
                 </div>
-
-                {/* Right: Actions */}
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1 text-slate-400">
                   <button
                     type="button"
                     onClick={clearConversation}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+                    className="p-1.5 rounded-md hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
                     title="New conversation"
                     aria-label="New conversation"
                   >
-                    <RotateCcw size={13} />
+                    <RotateCcw size={14} />
                   </button>
                   <button
                     type="button"
                     onClick={() => setIsOpen(false)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+                    className="p-1.5 rounded-md hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
                     title="Minimize"
                     aria-label="Minimize"
                   >
-                    <ChevronDown size={15} />
+                    <ChevronDown size={18} />
                   </button>
                 </div>
               </div>
-
-              {/* Telemetry Status Bar */}
-              <div className="mt-2.5 flex items-center justify-between border-t border-white/[0.05] pt-2 text-[10.5px] font-mono text-slate-400">
-                <div className="flex items-center gap-2 truncate">
-                  <span className="flex items-center gap-1 text-cyan-300">
-                    <Compass size={11} className="text-cyan-400 shrink-0" />
-                    <span>{hasPoint ? `${latStr}, ${lonStr}` : 'Global Ocean'}</span>
+              
+              {/* Subtle Context Line */}
+              <div className="flex items-center text-[11.5px] text-slate-500 font-mono tracking-wide pl-6 mt-1">
+                {hasPoint ? (
+                  <span>
+                    {latStr} · {lonStr} · {depthValue} · {formattedDate ? formattedDate : 'Current'}
                   </span>
-                  <span className="text-slate-600">·</span>
-                  <span className="text-slate-300">{depthValue}</span>
-                  {formattedDate && (
-                    <>
-                      <span className="text-slate-600">·</span>
-                      <span className="text-slate-300">{formattedDate}</span>
-                    </>
-                  )}
-                </div>
-                <span className="text-[9.5px] text-slate-500 shrink-0 pl-1">
-                  Copernicus · Argo
-                </span>
+                ) : (
+                  <span>No location selected</span>
+                )}
               </div>
             </header>
 
             {/* ── CONVERSATION STREAM ──────────────────────────────── */}
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3.5 space-y-3.5 scrollbar-thin scrollbar-thumb-slate-800/60">
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 space-y-6 scrollbar-thin scrollbar-thumb-slate-700/50 pb-6">
               {/* Empty State / Suggestions */}
               {messages.length === 0 && (
-                <div className="space-y-4 pt-2">
-                  <div className="text-center space-y-1.5 py-4">
-                    <div className="inline-flex p-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 mb-1">
-                      <Bot size={22} />
+                <div className="flex flex-col items-center justify-center min-h-[70%] space-y-8 pb-10">
+                  <div className="text-center space-y-3">
+                    <div className="inline-flex text-cyan-400 opacity-90 mb-1">
+                      <Sparkles size={28} />
                     </div>
-                    <h4 className="text-[14px] font-semibold text-white tracking-tight">
-                      Oceanographic Investigation Assistant
+                    <h4 className="text-[18px] font-medium text-white tracking-tight">
+                      OceanStream Copilot
                     </h4>
-                    <p className="text-[12px] text-slate-400 max-w-[300px] mx-auto leading-relaxed">
-                      Ask any question about physical hydrography, biogeochemistry, depth stratification, or autonomous Argo floats.
+                    <p className="text-[13px] text-slate-400 max-w-[260px] mx-auto leading-relaxed">
+                      Your AI assistant for exploring oceanographic data.
                     </p>
                   </div>
 
-                  {/* Suggestion Prompts */}
-                  <div className="space-y-1.5">
-                    <div className="text-[10.5px] font-mono font-medium uppercase tracking-wider text-slate-400 px-1">
-                      Suggested Inquiries
+                  <div className="flex flex-col w-full gap-2 px-2 max-w-[300px]">
+                    <div className="text-[11px] font-medium text-slate-500 uppercase tracking-widest text-center mb-2">
+                      Try asking:
                     </div>
-                    <div className="grid grid-cols-1 gap-1.5">
-                      {suggestions.map((item, idx) => (
-                        <motion.button
-                          key={idx}
-                          type="button"
-                          whileHover={{ scale: 1.005, backgroundColor: 'rgba(255,255,255,0.04)' }}
-                          whileTap={{ scale: 0.99 }}
-                          onClick={() => submitMessage(undefined, item.prompt)}
-                          className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.06] text-left transition-all cursor-pointer group hover:border-cyan-400/30"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="text-[12.5px] font-medium text-slate-200 group-hover:text-cyan-200 transition-colors">
-                              {item.title}
-                            </div>
-                            <div className="text-[11px] text-slate-400 leading-snug mt-0.5 font-sans">
-                              {item.desc}
-                            </div>
-                          </div>
-                          <ArrowRight size={13} className="text-slate-500 group-hover:text-cyan-300 shrink-0 transition-colors" />
-                        </motion.button>
-                      ))}
-                    </div>
+                    {suggestions.map((item, idx) => (
+                      <motion.button
+                        key={idx}
+                        type="button"
+                        whileHover={{ backgroundColor: 'rgba(255,255,255,0.06)' }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={() => submitMessage(undefined, item.prompt)}
+                        className="flex items-center p-3 rounded-xl border border-white/5 bg-white/[0.02] text-left transition-all cursor-pointer group"
+                      >
+                        <span className="text-[13px] font-medium text-slate-300 group-hover:text-cyan-300 transition-colors">
+                          {item.prompt}
+                        </span>
+                      </motion.button>
+                    ))}
                   </div>
                 </div>
               )}
@@ -952,8 +823,8 @@ export default function OceanStreamCopilot({ selectedPoint, onSelectPoint }) {
                 if (isUser) {
                   return (
                     <div key={message.id} className="flex justify-end">
-                      <div className="max-w-[85%] rounded-2xl rounded-tr-xs bg-cyan-500/15 border border-cyan-400/25 px-3.5 py-2 text-slate-100 shadow-sm">
-                        <div className="whitespace-pre-wrap break-words text-[13px] leading-relaxed">
+                      <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-[#121c2c] px-4 py-2.5 text-[14px] text-cyan-50 shadow-sm leading-relaxed">
+                        <div className="whitespace-pre-wrap break-words">
                           {message.content}
                         </div>
                       </div>
@@ -961,7 +832,7 @@ export default function OceanStreamCopilot({ selectedPoint, onSelectPoint }) {
                   );
                 }
 
-                // Assistant Message (Clean Research Block)
+                // Assistant Message
                 const isDataGrounded =
                   Boolean(message.dataSource) ||
                   Boolean(message.queryContext) ||
@@ -969,66 +840,65 @@ export default function OceanStreamCopilot({ selectedPoint, onSelectPoint }) {
                   message.scientificDataStatus === 'available';
 
                 return (
-                  <div key={message.id} className="flex justify-start">
-                    <div className="w-full rounded-2xl rounded-tl-xs bg-white/[0.025] border border-white/[0.07] p-3.5 shadow-sm backdrop-blur-sm space-y-2.5">
-                      {/* Message Top Line: Copilot Tag + Actions */}
-                      <div className="flex items-center justify-between border-b border-white/[0.05] pb-1.5 text-[11px]">
-                        <div className="flex items-center gap-1.5 text-cyan-300 font-semibold font-mono">
-                          <Sparkles size={11} className="text-cyan-400" />
-                          <span>Copilot Analysis</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {isDataGrounded && (
-                            <span className="flex items-center gap-1 font-mono text-[9px] text-cyan-400">
-                              <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
-                              Grounded
-                            </span>
-                          )}
-                          <CopyButton text={message.content} />
-                        </div>
+                  <div key={message.id} className="flex justify-start w-full">
+                    <div className="flex w-full flex-col gap-2">
+                      {/* Name/Avatar Row */}
+                      <div className="flex items-center gap-2 text-[14px] font-semibold text-white tracking-tight">
+                        <Sparkles size={14} className="text-cyan-400" />
+                        <span>Copilot</span>
                       </div>
 
-                      {/* Investigation Status & Trace */}
-                      {(message.toolActions?.length > 0 || message.visualizationActions?.length > 0) && (
-                        <InvestigationTrace
-                          toolActions={message.toolActions}
-                          visualizationActions={message.visualizationActions}
-                        />
-                      )}
+                      {/* Message Body */}
+                      <div className="flex flex-col space-y-3 pl-[22px]">
+                        {/* Investigation Status & Trace */}
+                        {(message.toolActions?.length > 0 || message.visualizationActions?.length > 0) && (
+                          <InvestigationTrace
+                            toolActions={message.toolActions}
+                            visualizationActions={message.visualizationActions}
+                          />
+                        )}
 
-                      {/* Content */}
-                      <MessageText text={message.content} />
+                        {/* Content */}
+                        <MessageText text={message.content} />
 
-                      {/* Depth Comparison Matrix (if comparison executed) */}
-                      {message.comparisonData && (
-                        <DepthComparisonView data={message.comparisonData} />
-                      )}
+                        {/* Depth Comparison Matrix */}
+                        {message.comparisonData && (
+                          <DepthComparisonView data={message.comparisonData} />
+                        )}
 
-                      {/* Scientific Data Snapshot (Single Point Values) */}
-                      {message.scientificData && !message.comparisonData && (
-                        <ScientificDataSnapshot data={message.scientificData} />
-                      )}
+                        {/* Scientific Data Snapshot */}
+                        {message.scientificData && !message.comparisonData && (
+                          <ScientificDataSnapshot data={message.scientificData} />
+                        )}
 
-                      {/* Grounding Source Info (Minimal) */}
-                      {isDataGrounded && (
-                        <div className="flex items-center justify-between text-[9.5px] font-mono text-slate-500 pt-1 border-t border-white/[0.04]">
-                          <span>Provenance: {message.dataSource?.dataset || 'Copernicus ANFC · In-situ Argo GDAC'}</span>
-                        </div>
-                      )}
+                        {/* Follow-up Contextual Investigations */}
+                        {!isSending && messageIndex === messages.length - 1 && (
+                          <FollowUpInvestigations
+                            followUps={getFollowUpInvestigations({
+                              lastMessage: message,
+                              context,
+                              mode: userMode,
+                              isLatest: true,
+                            })}
+                            onSelect={(prompt) => submitMessage(undefined, prompt)}
+                          />
+                        )}
 
-                      {/* Follow-up Contextual Investigations (for latest response) */}
-                      {!isSending && messageIndex === messages.length - 1 && (
-                        <FollowUpInvestigations
-                          followUps={getFollowUpInvestigations({
-                            lastMessage: message,
-                            context,
-                            mode: userMode,
-                            isLatest: true,
-                          })}
-                          onSelect={(prompt) => submitMessage(undefined, prompt)}
-                          isScientist={isScientist}
-                        />
-                      )}
+                        {/* Metadata Footer (Provenance) */}
+                        {isDataGrounded && (
+                          <div className="flex items-center justify-between text-[11px] text-slate-500 pt-3">
+                            <span>
+                              Source · {message.dataSource?.dataset || 'Copernicus ANFC'} · {formattedDate ? formattedDate : 'Current'}
+                            </span>
+                            <CopyButton text={message.content} />
+                          </div>
+                        )}
+                        {!isDataGrounded && (
+                          <div className="flex items-center justify-end pt-1">
+                            <CopyButton text={message.content} />
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -1036,94 +906,83 @@ export default function OceanStreamCopilot({ selectedPoint, onSelectPoint }) {
 
               {/* Shimmer Processing State */}
               {isSending && (
-                <div className="flex justify-start">
-                  <div className="w-full rounded-2xl rounded-tl-xs bg-white/[0.025] border border-cyan-500/20 p-3.5 shadow-sm space-y-2">
-                    <div className="flex items-center gap-2 text-[11.5px] font-semibold text-cyan-300 font-mono">
-                      <Sparkles size={12} className="text-cyan-300 animate-spin" style={{ animationDuration: '2.5s' }} />
-                      <span>Synthesizing ocean state...</span>
+                <div className="flex justify-start w-full">
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2 text-[14px] font-semibold text-white tracking-tight">
+                      <Sparkles size={14} className="text-cyan-400 animate-pulse" />
+                      <span>Copilot</span>
                     </div>
-                    <div className="h-1 w-full overflow-hidden rounded-full bg-slate-800/80">
-                      <div className="h-full w-full animate-[shimmer_1.8s_infinite] rounded-full bg-gradient-to-r from-cyan-500 via-indigo-500 to-cyan-500 bg-[length:200%_auto]" />
+                    <div className="pl-[22px] text-[13.5px] text-slate-400 flex items-center gap-2 mt-1">
+                      <div className="h-4 w-4 rounded-full border-2 border-slate-600 border-t-cyan-400 animate-spin" />
+                      <span>Analyzing...</span>
                     </div>
                   </div>
                 </div>
               )}
 
-              <div ref={endRef} />
+              <div ref={endRef} className="h-4" />
             </div>
 
             {/* ── ERROR NOTIFICATION ───────────────────────────────── */}
             {error && (
-              <div className="mx-3.5 mb-2 rounded-xl border border-rose-500/30 bg-rose-950/60 p-2.5 text-rose-200 backdrop-blur-md">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle size={15} className="mt-0.5 shrink-0 text-rose-400" />
-                    <div>
-                      <div className="text-[11.5px] font-semibold text-rose-300">
-                        Query Error
-                      </div>
-                      <p className="text-[11px] text-slate-300 leading-snug">
-                        {error}
-                      </p>
-                      {lastFailedMessage && (
-                        <button
-                          type="button"
-                          onClick={() => submitMessage(undefined, lastFailedMessage)}
-                          className="mt-1.5 inline-flex cursor-pointer items-center gap-1 rounded bg-rose-500/20 px-2 py-0.5 text-[10.5px] font-medium text-rose-200 hover:bg-rose-500/30 transition-colors"
-                        >
-                          <RotateCcw size={10} />
-                          <span>Retry</span>
-                        </button>
-                      )}
-                    </div>
+              <div className="mx-4 mb-2 rounded border border-rose-500/20 bg-rose-500/5 p-2 text-rose-200">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-[12px]">
+                    <AlertCircle size={14} className="text-rose-400" />
+                    <span>Copilot connection issue.</span>
+                    {lastFailedMessage && (
+                      <button
+                        type="button"
+                        onClick={() => submitMessage(undefined, lastFailedMessage)}
+                        className="underline text-rose-300 hover:text-rose-100 cursor-pointer"
+                      >
+                        Retry
+                      </button>
+                    )}
                   </div>
                   <button
                     type="button"
                     onClick={() => setError(null)}
-                    className="p-0.5 text-slate-400 hover:text-white transition-colors cursor-pointer"
-                    aria-label="Dismiss error"
+                    className="text-slate-500 hover:text-slate-300 cursor-pointer"
                   >
-                    <X size={13} />
+                    <X size={14} />
                   </button>
                 </div>
               </div>
             )}
 
             {/* ── DOCKED CONSOLE COMPOSER ──────────────────────────── */}
-            <div className="shrink-0 border-t border-white/[0.08] bg-[#0c121e]/90 p-3 backdrop-blur-xl">
+            <div className="shrink-0 p-4 pt-0">
               <form onSubmit={submitMessage} className="relative">
-                <div className="flex items-end gap-2 rounded-xl border border-white/10 bg-black/40 p-2 transition-all focus-within:border-cyan-400/40 focus-within:bg-black/60 shadow-inner">
+                <div className="flex items-end gap-2 rounded-[20px] border border-white/10 bg-[#151b28] p-1.5 shadow-sm focus-within:border-white/20 transition-colors">
                   <textarea
                     ref={textareaRef}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="Ask about this ocean point, depth, or parameters..."
+                    placeholder="Ask about this ocean state..."
                     rows={1}
                     maxLength={2000}
                     disabled={isSending}
-                    className="max-h-24 min-h-[26px] flex-1 resize-none bg-transparent px-2 py-0.5 text-[12.5px] text-white outline-none placeholder:text-slate-500 disabled:opacity-50 font-sans"
+                    className="max-h-32 min-h-[36px] flex-1 resize-none bg-transparent px-3 py-2 text-[14px] text-white outline-none placeholder:text-slate-500 disabled:opacity-50 font-sans scrollbar-thin"
                     aria-label="Ask OceanStream Copilot"
                   />
-
                   <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     type="submit"
                     disabled={!draft.trim() || isSending}
-                    className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold shadow-sm transition-all disabled:opacity-20 disabled:cursor-not-allowed"
+                    className="flex h-9 w-9 mb-0.5 shrink-0 cursor-pointer items-center justify-center rounded-full text-slate-400 hover:text-white hover:bg-white/5 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
                     aria-label="Send query"
-                    title="Send query"
                   >
-                    <ArrowUp size={15} strokeWidth={2.5} />
+                    <ArrowUp size={18} strokeWidth={2.5} />
                   </motion.button>
                 </div>
               </form>
 
               {/* Bottom Hint */}
-              <div className="mt-1 flex items-center justify-between px-1 text-[9.5px] font-mono text-slate-500">
-                <span>Press Enter ↵ to query</span>
-                <span>{draft.length}/2000</span>
+              <div className="mt-2 text-center text-[11px] text-slate-500">
+                Enter to send · Shift+Enter for newline
               </div>
             </div>
           </motion.section>
