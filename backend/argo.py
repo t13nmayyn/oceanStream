@@ -979,7 +979,7 @@ async def fetch_argo_trajectory(platform_number: str) -> Dict[str, Any]:
             pts = []
             for i in idx:
                 pts.append({
-                    "date": str(times[i])[:19] if i < len(times) else "2024-07-01T00:00:00",
+                    "date": str(times[i])[:19] if i < len(times) else datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "lat": round(float(lats[i]), 4) if i < len(lats) else 13.0,
                     "lon": round(float(lons[i]), 4) if i < len(lons) else 80.0,
                     "depth": _safe_float(pres[i]) if i < len(pres) else 0.0,
@@ -1139,7 +1139,7 @@ async def fetch_active_floats(
             lo = float(lons[i])
             if lat_min <= la <= lat_max and lon_min <= lo <= lon_max:
                 pn = str(plats[i]).strip()
-                t_str = str(times[i])[:19] if i < len(times) else "2024-07-01T00:00:00"
+                t_str = str(times[i])[:19] if i < len(times) else datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
                 if pn not in seen or t_str > seen[pn]["last_date"]:
                     is_bgc = (int(pn[-1]) % 2 == 1) if pn.isdigit() else (i % 2 == 1)
                     ftype = "BGC" if is_bgc else "Core"

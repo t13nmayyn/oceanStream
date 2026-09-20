@@ -33,7 +33,10 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import xarray as xr
 
-from router import phy_dataset, bgc_dataset, PHY_VARIABLES, BGC_VARIABLES
+from router import (
+    phy_dataset, bgc_dataset, PHY_VARIABLES, BGC_VARIABLES,
+    group_variables_by_dataset, dataset_for_variable,
+)
 
 logger = logging.getLogger("fetcher")
 
@@ -50,8 +53,8 @@ BGC_ZARR_PATH    = _OUTPUT_DIR / "bgc_data.zarr"
 OCEAN_ZARR_PATH  = _OUTPUT_DIR / "ocean_data.zarr"
 ARGO_ZARR_PATH   = _OUTPUT_DIR / "argo_data.zarr"
 
-# Safety cap: max depth span per single fetch request
-MAX_FETCH_DEPTH_SPAN = 100.0
+# Safety cap: max depth span per single fetch request — full ocean water column
+MAX_FETCH_DEPTH_SPAN = 6000.0
 
 # ---------------------------------------------------------------------------
 # Credentials
@@ -81,22 +84,40 @@ def _write_to_zarr(ds_new: xr.Dataset, zarr_path: Path) -> int:
     Merge ds_new into an existing zarr store at zarr_path, or create it fresh.
     Returns the total zarr dir size in bytes after writing.
     """
-    ds_chunked = ds_new.chunk({"time": 1, "latitude": 50, "longitude": 50})
+    chunks = {"time": 1}
+    if "depth" in ds_new.dims:
+        chunks["depth"] = min(10, ds_new.sizes["depth"])
+    for lat_col in ("latitude", "lat"):
+        if lat_col in ds_new.dims:
+            chunks[lat_col] = min(50, ds_new.sizes[lat_col])
+    for lon_col in ("longitude", "lon"):
+        if lon_col in ds_new.dims:
+            chunks[lon_col] = min(50, ds_new.sizes[lon_col])
+
+    ds_chunked = ds_new.chunk(chunks)
 
     if zarr_path.exists():
-        ds_existing = xr.open_zarr(zarr_path)
         try:
+            ds_existing = xr.open_zarr(zarr_path)
             ds_combined = xr.combine_by_coords(
                 [ds_existing, ds_chunked],
                 combine_attrs="override",
                 join="outer",
             )
-            ds_combined = ds_combined.chunk({"time": 1, "latitude": 50, "longitude": 50})
-        except Exception as e:
-            logger.warning(f"[Zarr merge] combine_by_coords failed ({e}), falling back to override write")
-            ds_combined = ds_chunked
-        finally:
+            for dim in ("time", "depth", "latitude", "longitude", "lat", "lon"):
+                if dim in ds_combined.dims:
+                    _, idx = np.unique(ds_combined[dim].values, return_index=True)
+                    ds_combined = ds_combined.isel({dim: np.sort(idx)})
+            ds_combined = ds_combined.chunk(chunks)
             ds_existing.close()
+        except Exception as e:
+            logger.warning(f"[Zarr merge] combine_by_coords failed ({e}), attempting xr.merge fallback")
+            try:
+                ds_existing = xr.open_zarr(zarr_path)
+                ds_combined = xr.merge([ds_existing, ds_chunked], compat="override").chunk(chunks)
+                ds_existing.close()
+            except Exception:
+                ds_combined = ds_chunked
 
         tmp_zarr = zarr_path.parent / f"_{zarr_path.name}_tmp"
         if tmp_zarr.exists():
@@ -126,7 +147,7 @@ async def fetch_phy_range(
     missing_pages=None,
 ) -> Dict[str, Any]:
     """
-    Fetch physics variables from the date-appropriate Copernicus dataset
+    Fetch physics variables from the date-appropriate Copernicus dataset(s)
     and merge into phy_data.zarr. Also writes thetao to ocean_data.zarr
     for backward compatibility with old endpoints.
     """
@@ -141,51 +162,77 @@ async def fetch_phy_range(
         depth_max = depth_min + MAX_FETCH_DEPTH_SPAN
         logger.warning(f"[PHY] Depth span clamped to {MAX_FETCH_DEPTH_SPAN}m")
 
-    dataset_id = phy_dataset(date_str)
     fetch_vars = variables or PHY_VARIABLES
+    groups = group_variables_by_dataset(fetch_vars, date_str)
     start_dt = f"{date_str}T00:00:00"
     end_dt   = f"{date_str}T23:59:59"
 
     logger.info(
-        f"[PHY] dataset={dataset_id} lat=[{lat_min},{lat_max}] lon=[{lon_min},{lon_max}] "
-        f"depth=[{depth_min},{depth_max}] date={date_str} vars={fetch_vars}"
+        f"[PHY] date={date_str} groups={list(groups.keys())} lat=[{lat_min},{lat_max}] lon=[{lon_min},{lon_max}] "
+        f"depth=[{depth_min},{depth_max}] vars={fetch_vars}"
     )
     t0 = time.perf_counter()
 
+    ds_parts = []
     with tempfile.TemporaryDirectory(prefix="ocean_phy_") as tmpdir:
-        tmp_nc = Path(tmpdir) / "phy.nc"
-        try:
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: copernicusmarine.subset(
-                    dataset_id=dataset_id,
-                    variables=fetch_vars,
-                    minimum_longitude=lon_min,
-                    maximum_longitude=lon_max,
-                    minimum_latitude=lat_min,
-                    maximum_latitude=lat_max,
-                    start_datetime=start_dt,
-                    end_datetime=end_dt,
-                    minimum_depth=max(0.49, depth_min),
-                    maximum_depth=depth_max,
-                    output_filename=tmp_nc.name,
-                    output_directory=tmpdir,
-                    overwrite=True,
-                ),
-            )
-        except Exception as e:
-            logger.error(f"[PHY FETCH ERROR] {e}")
+        async def _download_phy_group(part_idx: int, did: str, vl: List[str]) -> Optional[xr.Dataset]:
+            tmp_nc = Path(tmpdir) / f"phy_part_{part_idx}.nc"
+            has_depth = any(v not in ("zos", "mlotst") for v in vl)
+            eff_min = max(0.0, float(depth_min)) if has_depth else None
+            eff_max = max(eff_min, float(depth_max)) if (has_depth and eff_min is not None) else None
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: copernicusmarine.subset(
+                        dataset_id=did,
+                        variables=vl,
+                        minimum_longitude=lon_min,
+                        maximum_longitude=lon_max,
+                        minimum_latitude=lat_min,
+                        maximum_latitude=lat_max,
+                        start_datetime=start_dt,
+                        end_datetime=end_dt,
+                        minimum_depth=eff_min,
+                        maximum_depth=eff_max,
+                        output_filename=tmp_nc.name,
+                        output_directory=tmpdir,
+                        overwrite=True,
+                    ),
+                )
+                if tmp_nc.exists():
+                    return xr.open_dataset(str(tmp_nc)).load()
+            except Exception as e:
+                logger.error(f"[PHY FETCH ERROR for {did}] {e}")
+            return None
+
+        tasks = [
+            _download_phy_group(i + 1, ds_id, v_list)
+            for i, (ds_id, v_list) in enumerate(groups.items())
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+        ds_parts = [r for r in results if r is not None]
+
+        if not ds_parts:
             if page_table and missing_pages:
                 from page_table import PageState
                 for p in missing_pages:
                     if p.state.value == "FETCHING":
                         p.state = PageState.NOT_FETCHED
-            return {"status": "error", "error": str(e), "dataset": dataset_id}
+            return {"status": "error", "error": "All physics dataset fetches failed", "date": date_str}
 
         fetch_ms = round((time.perf_counter() - t0) * 1000, 1)
-        logger.info(f"[PHY] Download done in {fetch_ms}ms — merging into zarr...")
+        logger.info(f"[PHY] Download done in {fetch_ms}ms ({len(ds_parts)} parts) — merging into zarr...")
 
-        ds_new = xr.open_dataset(str(tmp_nc))
+        if len(ds_parts) == 1:
+            ds_new = ds_parts[0]
+        else:
+            try:
+                ds_new = xr.merge(ds_parts, compat="override")
+            except Exception as m_err:
+                logger.warning(f"[PHY merge parts failed: {m_err}], using primary part")
+                ds_new = ds_parts[0]
+
         zarr_size = _write_to_zarr(ds_new, PHY_ZARR_PATH)
 
         # Backward-compat: write thetao to ocean_data.zarr
@@ -195,7 +242,8 @@ async def fetch_phy_range(
             except Exception as bc_err:
                 logger.debug(f"[PHY] compat ocean_data.zarr write failed: {bc_err}")
 
-        ds_new.close()
+        for p_ds in ds_parts:
+            p_ds.close()
         merge_ms = round((time.perf_counter() - t0) * 1000 - fetch_ms, 1)
 
     if page_table and missing_pages:
@@ -210,7 +258,7 @@ async def fetch_phy_range(
     logger.info(f"[PHY] Complete: fetch={fetch_ms}ms merge={merge_ms}ms total={total_ms}ms")
     return {
         "status": "success",
-        "dataset": dataset_id,
+        "date": date_str,
         "fetch_ms": fetch_ms,
         "merge_ms": merge_ms,
         "total_ms": total_ms,
@@ -233,7 +281,7 @@ async def fetch_bgc_range(
     missing_pages=None,
 ) -> Dict[str, Any]:
     """
-    Fetch BGC variables from the date-appropriate Copernicus BGC dataset
+    Fetch BGC variables from the date-appropriate Copernicus BGC dataset(s)
     and merge into bgc_data.zarr.
     """
     import copernicusmarine
@@ -241,53 +289,80 @@ async def fetch_bgc_range(
     if not credentials_present():
         return {"status": "skipped", "reason": "no_credentials"}
 
-    dataset_id = bgc_dataset(date_str)
     fetch_vars = variables or BGC_VARIABLES
+    groups = group_variables_by_dataset(fetch_vars, date_str)
     start_dt   = f"{date_str}T00:00:00"
     end_dt     = f"{date_str}T23:59:59"
 
     logger.info(
-        f"[BGC] dataset={dataset_id} lat=[{lat_min},{lat_max}] lon=[{lon_min},{lon_max}] "
-        f"depth=[{depth_min},{depth_max}] date={date_str} vars={fetch_vars}"
+        f"[BGC] date={date_str} groups={list(groups.keys())} lat=[{lat_min},{lat_max}] lon=[{lon_min},{lon_max}] "
+        f"depth=[{depth_min},{depth_max}] vars={fetch_vars}"
     )
     t0 = time.perf_counter()
 
+    ds_parts = []
     with tempfile.TemporaryDirectory(prefix="ocean_bgc_") as tmpdir:
-        tmp_nc = Path(tmpdir) / "bgc.nc"
-        try:
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: copernicusmarine.subset(
-                    dataset_id=dataset_id,
-                    variables=fetch_vars,
-                    minimum_longitude=lon_min,
-                    maximum_longitude=lon_max,
-                    minimum_latitude=lat_min,
-                    maximum_latitude=lat_max,
-                    start_datetime=start_dt,
-                    end_datetime=end_dt,
-                    minimum_depth=max(0.49, depth_min),
-                    maximum_depth=depth_max,
-                    output_filename=tmp_nc.name,
-                    output_directory=tmpdir,
-                    overwrite=True,
-                ),
-            )
-        except Exception as e:
-            logger.error(f"[BGC FETCH ERROR] {e}")
+        eff_min = max(0.0, float(depth_min))
+        eff_max = max(eff_min, float(depth_max))
+
+        async def _download_bgc_group(part_idx: int, did: str, vl: List[str]) -> Optional[xr.Dataset]:
+            tmp_nc = Path(tmpdir) / f"bgc_part_{part_idx}.nc"
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: copernicusmarine.subset(
+                        dataset_id=did,
+                        variables=vl,
+                        minimum_longitude=lon_min,
+                        maximum_longitude=lon_max,
+                        minimum_latitude=lat_min,
+                        maximum_latitude=lat_max,
+                        start_datetime=start_dt,
+                        end_datetime=end_dt,
+                        minimum_depth=eff_min,
+                        maximum_depth=eff_max,
+                        output_filename=tmp_nc.name,
+                        output_directory=tmpdir,
+                        overwrite=True,
+                    ),
+                )
+                if tmp_nc.exists():
+                    return xr.open_dataset(str(tmp_nc)).load()
+            except Exception as e:
+                logger.error(f"[BGC FETCH ERROR for {did}] {e}")
+            return None
+
+        tasks = [
+            _download_bgc_group(i + 1, ds_id, v_list)
+            for i, (ds_id, v_list) in enumerate(groups.items())
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+        ds_parts = [r for r in results if r is not None]
+
+        if not ds_parts:
             if page_table and missing_pages:
                 from page_table import PageState
                 for p in missing_pages:
                     if p.state.value == "FETCHING":
                         p.state = PageState.NOT_FETCHED
-            return {"status": "error", "error": str(e), "dataset": dataset_id}
+            return {"status": "error", "error": "All BGC dataset fetches failed", "date": date_str}
 
         fetch_ms = round((time.perf_counter() - t0) * 1000, 1)
-        logger.info(f"[BGC] Download done in {fetch_ms}ms — merging...")
+        logger.info(f"[BGC] Download done in {fetch_ms}ms ({len(ds_parts)} parts) — merging...")
 
-        ds_new = xr.open_dataset(str(tmp_nc))
+        if len(ds_parts) == 1:
+            ds_new = ds_parts[0]
+        else:
+            try:
+                ds_new = xr.merge(ds_parts, compat="override")
+            except Exception as m_err:
+                logger.warning(f"[BGC merge parts failed: {m_err}], using primary part")
+                ds_new = ds_parts[0]
+
         zarr_size = _write_to_zarr(ds_new, BGC_ZARR_PATH)
-        ds_new.close()
+        for p_ds in ds_parts:
+            p_ds.close()
         merge_ms = round((time.perf_counter() - t0) * 1000 - fetch_ms, 1)
 
     if page_table and missing_pages:
@@ -301,7 +376,7 @@ async def fetch_bgc_range(
     total_ms = round((time.perf_counter() - t0) * 1000, 1)
     return {
         "status": "success",
-        "dataset": dataset_id,
+        "date": date_str,
         "fetch_ms": fetch_ms,
         "merge_ms": merge_ms,
         "total_ms": total_ms,

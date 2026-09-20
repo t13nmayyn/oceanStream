@@ -24,10 +24,11 @@ already know the exact date (e.g. a frontend date-picker) bypass this by
 passing an explicit ISO string.
 """
 
-from __future__ import annotations
-
+import logging
 from datetime import date, datetime, timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
+
+logger = logging.getLogger("router")
 
 # ---------------------------------------------------------------------------
 # Tuneable lag — GLORYS12 is typically 12-18 months behind real-time
@@ -40,13 +41,53 @@ MULTIYEAR_LAG_DAYS: int = 400
 MAX_LOOKBACK_DAYS: int = 5   # safety cap; normally 1-2 days is enough
 
 # ---------------------------------------------------------------------------
-# Dataset IDs (Copernicus Marine catalogue)
+# Authoritative Copernicus Marine Products
 # ---------------------------------------------------------------------------
-PHY_ANFC_DATASET = "cmems_mod_glo_phy_anfc_0.083deg_P1D-m"   # analysis/forecast
-PHY_MY_DATASET   = "cmems_mod_glo_phy_my_0.083deg_P1D-m"      # multiyear reanalysis
+PHY_ANFC_PRODUCT = "GLOBAL_ANALYSISFORECAST_PHY_001_024"
+BGC_ANFC_PRODUCT = "GLOBAL_ANALYSISFORECAST_BGC_001_028"
+PHY_MY_PRODUCT   = "GLOBAL_MULTIYEAR_PHY_001_030"
+BGC_MY_PRODUCT   = "GLOBAL_MULTIYEAR_BGC_001_029"
 
-BGC_ANFC_DATASET = "cmems_mod_glo_bgc_anfc_0.25deg_P1D-m"
-BGC_MY_DATASET   = "cmems_mod_glo_bgc_my_0.25deg_P1D-m"
+# ---------------------------------------------------------------------------
+# Specific Copernicus Dataset IDs
+# ---------------------------------------------------------------------------
+# Near-Real-Time / Analysis & Forecast (ANFC) per-variable datasets:
+ANFC_DATASET_THETAO = "cmems_mod_glo_phy-thetao_anfc_0.083deg_P1D-m"
+ANFC_DATASET_SO     = "cmems_mod_glo_phy-so_anfc_0.083deg_P1D-m"
+ANFC_DATASET_CUR    = "cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m"
+ANFC_DATASET_SSH    = "cmems_mod_glo_phy_anfc_0.083deg_P1D-m"
+
+# ANFC BGC datasets:
+ANFC_DATASET_CHL    = "cmems_mod_glo_bgc-pft_anfc_0.25deg_P1D-m"
+ANFC_DATASET_O2     = "cmems_mod_glo_bgc-bio_anfc_0.25deg_P1D-m"
+ANFC_DATASET_NUT    = "cmems_mod_glo_bgc-nut_anfc_0.25deg_P1D-m"
+ANFC_DATASET_CAR    = "cmems_mod_glo_bgc-car_anfc_0.25deg_P1D-m"
+ANFC_DATASET_CO2    = "cmems_mod_glo_bgc-co2_anfc_0.25deg_P1D-m"
+
+# Multi-Year Reanalysis (MY) monolithic datasets:
+PHY_MY_DATASET      = "cmems_mod_glo_phy_my_0.083deg_P1D-m"
+BGC_MY_DATASET      = "cmems_mod_glo_bgc_my_0.25deg_P1D-m"
+
+# Primary default dataset handles (for backwards compatibility)
+PHY_ANFC_DATASET = ANFC_DATASET_THETAO
+BGC_ANFC_DATASET = ANFC_DATASET_CHL
+
+# Mapping of variable -> specific ANFC dataset
+ANFC_VARIABLE_MAP: Dict[str, str] = {
+    "thetao": ANFC_DATASET_THETAO,
+    "so":     ANFC_DATASET_SO,
+    "uo":     ANFC_DATASET_CUR,
+    "vo":     ANFC_DATASET_CUR,
+    "zos":    ANFC_DATASET_SSH,
+    "mlotst": ANFC_DATASET_SSH,
+    "chl":    ANFC_DATASET_CHL,
+    "o2":     ANFC_DATASET_O2,
+    "no3":    ANFC_DATASET_NUT,
+    "po4":    ANFC_DATASET_NUT,
+    "si":     ANFC_DATASET_NUT,
+    "ph":     ANFC_DATASET_CAR,
+    "spco2":  ANFC_DATASET_CO2,
+}
 
 # ---------------------------------------------------------------------------
 # Variable lists
@@ -120,11 +161,32 @@ def resolve_variables(var_list: List[str]) -> dict:
     return {"phy": list(dict.fromkeys(phy)), "bgc": list(dict.fromkeys(bgc))}
 
 
+def dataset_for_variable(var_name: str, date_str: str) -> str:
+    """Return the authoritative Copernicus dataset ID for a single variable on date_str."""
+    canon = PHY_ALIAS.get(var_name, BGC_ALIAS.get(var_name, var_name))
+    if is_recent(date_str):
+        return ANFC_VARIABLE_MAP.get(canon, ANFC_DATASET_THETAO)
+    else:
+        return BGC_MY_DATASET if canon in BGC_VARIABLES else PHY_MY_DATASET
+
+
+def group_variables_by_dataset(variables: List[str], date_str: str) -> Dict[str, List[str]]:
+    """Group a list of variable names by their Copernicus dataset ID for batch fetching."""
+    groups: Dict[str, List[str]] = {}
+    for v in variables:
+        canon = PHY_ALIAS.get(v, BGC_ALIAS.get(v, v))
+        ds_id = dataset_for_variable(canon, date_str)
+        groups.setdefault(ds_id, []).append(canon)
+    return groups
+
+
 def route_info(date_str: str) -> dict:
     recent = is_recent(date_str)
     return {
         "date":         date_str,
         "is_recent":    recent,
+        "phy_product":  PHY_ANFC_PRODUCT if recent else PHY_MY_PRODUCT,
+        "bgc_product":  BGC_ANFC_PRODUCT if recent else BGC_MY_PRODUCT,
         "phy_dataset":  phy_dataset(date_str),
         "bgc_dataset":  bgc_dataset(date_str),
         "product_type": "analysisforecast" if recent else "multiyear",
@@ -185,7 +247,9 @@ def latest_available_iso() -> str:
         safe_offset = 2   # day-before-yesterday
 
     offset = min(safe_offset, MAX_LOOKBACK_DAYS)
-    return (today - timedelta(days=offset)).isoformat()
+    res = (today - timedelta(days=offset)).isoformat()
+    logger.info(f"Resolved latest available date: {res}")
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -235,14 +299,17 @@ def resolve_date_input(date_str: Optional[str] = None) -> str:
     Returns an ISO-8601 date string (YYYY-MM-DD).
     """
     if not date_str or not str(date_str).strip():
-        return latest_available_iso()
+        res = latest_available_iso()
+        return res
 
     d_clean = str(date_str).lower().strip()
 
     # Keyword shortcuts
     fn = _KEYWORD_MAP.get(d_clean)
     if fn:
-        return fn()
+        res = fn()
+        logger.info(f"Resolved latest available date: {res}")
+        return res
 
     # Explicit date
     try:
@@ -252,12 +319,16 @@ def resolve_date_input(date_str: Optional[str] = None) -> str:
         # Copernicus data for today is almost never published yet (24-36 h lag),
         # so we treat today the same as a future date.
         if parsed >= today:
-            return latest_available_iso()
+            res = latest_available_iso()
+            return res
         # Past date is always valid (could be multiyear reanalysis)
-        return parsed.isoformat()
+        res = parsed.isoformat()
+        logger.info(f"Resolved latest available date: {res}")
+        return res
     except Exception:
         # Unparseable → safe fallback
-        return latest_available_iso()
+        res = latest_available_iso()
+        return res
 
 
 def date_info() -> dict:
