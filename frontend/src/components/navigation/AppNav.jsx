@@ -1,15 +1,15 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Waves, BarChart3, Eye, Settings, ChevronDown, Activity, Database, Zap } from 'lucide-react';
+import { Waves, BarChart3, Eye, Settings, ChevronDown, Activity, Database, Zap, BookOpen } from 'lucide-react';
 import { useApp, useAppDispatch } from '../../context/AppContext';
 import { API_BASE } from '../../config/api';
 import ModeSwitcher from '../mode/ModeSwitcher';
 
 const navLinks = [
   { to: '/explorer',      label: 'Explore',       icon: Waves },
-  { to: '/analytics',     label: 'Analytics',     icon: BarChart3 },
-  { to: '/observations',  label: 'Observations',  icon: Eye },
+  { to: '/explorer?mode=analyze', label: 'Analyze', icon: BarChart3 },
+  { to: '/about',         label: 'About',         icon: BookOpen },
 ];
 
 export default function AppNav() {

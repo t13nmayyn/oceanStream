@@ -7,6 +7,7 @@ import ExplorerPage from './pages/ExplorerPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import ObservationsPage from './pages/ObservationsPage';
 import DiagnosticsPage from './pages/DiagnosticsPage';
+import AboutPage from './pages/AboutPage';
 
 import Toast from './components/ui/Toast';
 
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="/explorer" element={<ExplorerPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/observations" element={<ObservationsPage />} />
+          <Route path="/about" element={<AboutPage />} />
           <Route path="/system" element={<DiagnosticsPage />} />
           {/* Fallback to landing */}
           <Route path="*" element={<LandingPage />} />

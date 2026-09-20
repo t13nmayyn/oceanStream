@@ -22,7 +22,7 @@ ChartJS.register(
   Filler
 );
 
-export default function ProfileChart({ depths = [], temps = [] }) {
+export default function ProfileChart({ depths = [], temps = [], source = 'unknown' }) {
   const data = {
     labels: depths,
     datasets: [
@@ -72,7 +72,8 @@ export default function ProfileChart({ depths = [], temps = [] }) {
   };
 
   return (
-    <div className="w-full h-full min-h-[400px]">
+    <div className="w-full h-full min-h-[400px] relative">
+      <div className="absolute right-2 top-1 z-10 text-[10px] text-muted">Source: {source}</div>
       <Line data={data} options={options} />
     </div>
   );

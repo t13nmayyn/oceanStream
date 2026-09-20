@@ -29,28 +29,6 @@ ChartJS.register(
   Filler
 );
 
-// Fallback profile generator when float data has missing fields
-function generateFallbackProfile(platformNumber) {
-  const depths = [5, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 1500, 2000];
-  const isBgc = String(platformNumber).endsWith('1') || String(platformNumber).includes('BGC');
-  return depths.map((d) => {
-    const temp = d < 50 ? 28.5 - (d / 50) * 1.5 : 27.0 * Math.exp(-d / 450) + 2.5;
-    const sal = 34.0 + 1.2 * (1 - Math.exp(-d / 200));
-    const oxy = d < 100 ? 210 : 80 + 120 * Math.exp(-(d - 100) / 400);
-    const chl = d < 120 ? 0.8 * Math.exp(-Math.pow(d - 40, 2) / 800) : 0.02;
-
-    return {
-      depth_m: d,
-      temperature_c: +temp.toFixed(2),
-      salinity_psu: +sal.toFixed(2),
-      oxygen_mmolm3: +oxy.toFixed(1),
-      chlorophyll_mgl: isBgc ? +chl.toFixed(3) : null,
-      nitrate_mmolm3: isBgc ? +(d * 0.02 + 0.5).toFixed(2) : null,
-      ph: isBgc ? +(8.15 - (d / 2000) * 0.4).toFixed(2) : null,
-    };
-  });
-}
-
 export default function ArgoProfilePanel({ platformNumber, onClose }) {
   const [profileData, setProfileData] = useState(null);
   const [selectedVar, setSelectedVar] = useState('temperature_c');
@@ -68,23 +46,13 @@ export default function ArgoProfilePanel({ platformNumber, onClose }) {
         if (res && res.profile && res.profile.length > 0) {
           setProfileData(res);
         } else {
-          setProfileData({
-            status: 'synthetic',
-            platform_number: platformNumber,
-            metadata: { type: 'BGC', cycle_number: 142, institution: 'INCOIS / Argo' },
-            profile: generateFallbackProfile(platformNumber),
-          });
+          setProfileData({ status: res?.status || 'unavailable', platform_number: platformNumber, metadata: res?.metadata || {}, profile: [], message: res?.message });
         }
         setLoading(false);
       })
       .catch(() => {
         if (!isMounted) return;
-        setProfileData({
-          status: 'synthetic',
-          platform_number: platformNumber,
-          metadata: { type: 'BGC', cycle_number: 142, institution: 'INCOIS / Argo' },
-          profile: generateFallbackProfile(platformNumber),
-        });
+        setProfileData({ status: 'unavailable', platform_number: platformNumber, metadata: {}, profile: [], message: 'Profile request unavailable' });
         setLoading(false);
       });
 
@@ -97,10 +65,7 @@ export default function ArgoProfilePanel({ platformNumber, onClose }) {
   const meta = profileData?.metadata || {};
 
   // Extract variables with alias resolution
-  const profile = useMemo(() => {
-    if (rawProfile.length > 0) return rawProfile;
-    return generateFallbackProfile(platformNumber);
-  }, [rawProfile, platformNumber]);
+  const profile = useMemo(() => rawProfile, [rawProfile]);
 
   const getVal = (p, vKey) => {
     if (!p) return null;
@@ -118,10 +83,7 @@ export default function ArgoProfilePanel({ platformNumber, onClose }) {
 
   // If all values for selectedVar are null (e.g. Core float clicked for BGC tab), generate realistic values
   const hasValidValues = values.some((v) => v !== null && v !== undefined && !isNaN(v));
-  if (!hasValidValues) {
-    const synth = generateFallbackProfile(platformNumber);
-    values = synth.map((p) => getVal(p, selectedVar));
-  }
+  const hasProfileValues = hasValidValues;
 
   const varConfig = {
     temperature_c: { label: 'Temperature (°C)', color: '#f87171', bg: 'rgba(248, 113, 113, 0.2)' },
@@ -133,11 +95,11 @@ export default function ArgoProfilePanel({ platformNumber, onClose }) {
   }[selectedVar] || { label: 'Value', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.2)' };
 
   const chartData = {
-    labels: depths.map((d) => `${d}m`),
+    labels: depths,
     datasets: [
       {
         label: varConfig.label,
-        data: values,
+        data: values.map((value, index) => ({ x: value, y: depths[index] })).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)),
         borderColor: varConfig.color,
         backgroundColor: varConfig.bg,
         borderWidth: 2.5,
@@ -173,14 +135,17 @@ export default function ArgoProfilePanel({ platformNumber, onClose }) {
     },
     scales: {
       x: {
+        type: 'linear',
         grid: { color: 'rgba(255, 255, 255, 0.06)' },
-        ticks: { color: '#94a3b8', font: { size: 10, family: 'monospace' } },
-        title: { display: true, text: 'Depth (m)', color: '#64748b', font: { size: 10 } },
+        ticks: { color: '#475467', font: { size: 10, family: 'system-ui' } },
+        title: { display: true, text: varConfig.label, color: '#64748b', font: { size: 10 } },
       },
       y: {
+        type: 'linear',
+        reverse: true,
         grid: { color: 'rgba(255, 255, 255, 0.06)' },
-        ticks: { color: '#94a3b8', font: { size: 10, family: 'monospace' } },
-        title: { display: true, text: varConfig.label, color: '#64748b', font: { size: 10 } },
+        ticks: { color: '#475467', font: { size: 10, family: 'system-ui' } },
+        title: { display: true, text: 'Depth (m)', color: '#64748b', font: { size: 10 } },
       },
     },
   };
@@ -215,7 +180,7 @@ export default function ArgoProfilePanel({ platformNumber, onClose }) {
                 </span>
               </div>
               <div className="text-xs text-slate-400 font-mono mt-0.5">
-                Cycle #{meta.cycle_number || '142'} · {meta.timestamp ? new Date(meta.timestamp).toUTCString() : 'Active Profile'}
+                Cycle #{meta.cycle_number || '—'} · {meta.timestamp ? new Date(meta.timestamp).toUTCString() : 'Profile response'} · Source: {profileData?.source || profileData?.status || 'unknown'}
               </div>
             </div>
           </div>
@@ -264,9 +229,9 @@ export default function ArgoProfilePanel({ platformNumber, onClose }) {
               <div className="w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
               <span>Fetching Float Vertical CTD Profile…</span>
             </div>
-          ) : (
+          ) : hasProfileValues ? (
             <Line data={chartData} options={chartOptions} />
-          )}
+          ) : <div className="flex h-full items-center justify-center text-xs text-slate-500">Profile data unavailable from the backend.</div>}
         </div>
 
         {/* Float Metadata Summary */}

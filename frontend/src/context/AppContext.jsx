@@ -6,14 +6,14 @@ const d = getCalculatedDates();
 const getInitialMode = () => {
   try {
     const saved = localStorage.getItem('oceanstream_mode');
-    return saved === 'scientist' ? 'scientist' : 'student';
+    return saved === 'analyze' ? 'analyze' : 'explore';
   } catch {
-    return 'student';
+    return 'explore';
   }
 };
 
 const initialState = {
-  // Mode: 'student' (immersive 3D deep sea / educational) | 'scientist' (advanced research workbench)
+  // Explore keeps the scene simple; Analyze progressively reveals scientific controls.
   userMode: getInitialMode(),
 
   activeTab: 'map',
@@ -131,7 +131,8 @@ function appReducer(state, action) {
     case 'SET_SERVER_DATE_INFO':
       return { ...state, serverDateInfo: action.payload };
     case 'ADD_TOAST': {
-      const toasts = [...state.toasts, { id: Date.now(), ...action.payload }];
+      const nextId = Math.max(0, ...state.toasts.map((toast) => Number(toast.id) || 0)) + 1;
+      const toasts = [...state.toasts, { id: nextId, ...action.payload }];
       return { ...state, toasts };
     }
     case 'REMOVE_TOAST':

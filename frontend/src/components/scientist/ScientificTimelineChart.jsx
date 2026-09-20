@@ -35,9 +35,10 @@ export default function ScientificTimelineChart({ point, onClose }) {
 
   if (!point) return null;
 
-  const labels = timelineData?.timeline?.labels || ['Day 1', 'Day 2', 'Day 3', 'Day 4', 'Day 5', 'Day 6', 'Day 7'];
-  const temps = timelineData?.timeline?.temperature || [26.2, 26.5, 26.8, 27.1, 26.9, 27.3, 27.0];
-  const sals = timelineData?.timeline?.salinity || [34.5, 34.6, 34.4, 34.8, 34.7, 34.6, 34.5];
+  const series = timelineData?.series || [];
+  const labels = timelineData?.timeline?.labels || series.map((row) => row.date || row.time || '');
+  const temps = timelineData?.timeline?.temperature || series.map((row) => row.temperature_c ?? row.temperature ?? null);
+  const sals = timelineData?.timeline?.salinity || series.map((row) => row.salinity_psu ?? row.salinity ?? null);
 
   const chartData = {
     labels,
@@ -174,9 +175,9 @@ export default function ScientificTimelineChart({ point, onClose }) {
               <div className="w-6 h-6 border-2 border-violet-400 border-t-transparent rounded-full animate-spin" />
               <span>Querying Multidimensional Time-Series Grid…</span>
             </div>
-          ) : (
+          ) : labels.length ? (
             <Line data={chartData} options={chartOptions} />
-          )}
+          ) : <div className="flex h-full items-center justify-center text-xs text-slate-500">No timeline data is available from the backend.</div>}
         </div>
       </div>
     </motion.div>

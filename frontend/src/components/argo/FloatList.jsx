@@ -30,13 +30,13 @@ export default function FloatList({ floats = [], selectedId, onSelectFloat, load
             }`}
           >
             <div className="flex justify-between items-center mb-1">
-              <strong className="text-white font-mono">Platform #{id}</strong>
+              <strong className="text-white font-mono">{f.source_label === 'gridded_model' ? 'Model fallback' : `Platform #${id}`}</strong>
               <Badge className="bg-accent-2/20 text-accent-2 border-accent-2/30">
                 {f.type || 'Core'}
               </Badge>
             </div>
             <div className="text-[0.68rem] text-muted font-mono flex justify-between">
-              <span>Distance: <strong className="text-text">{f.distance_km} km</strong></span>
+              <span>Source: <strong className="text-text">{f.source_label || f.source || 'backend response'}</strong></span>
               <span>({f.lat?.toFixed(2)}°, {f.lon?.toFixed(2)}°)</span>
             </div>
           </div>

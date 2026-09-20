@@ -62,6 +62,18 @@ export async function getOceanSnapshot(bounds, depth = 0, date = null) {
   }
 }
 
+export async function getOceanCoverage(bounds) {
+  const params = new URLSearchParams({
+    lat_min: bounds.south.toFixed(2),
+    lat_max: bounds.north.toFixed(2),
+    lon_min: bounds.west.toFixed(2),
+    lon_max: bounds.east.toFixed(2),
+  });
+  const res = await fetch(`${API_BASE}/ocean/coverage?${params.toString()}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 /**
  * Fetch time series timeline for a coordinate point
  */
@@ -81,27 +93,7 @@ export async function getOceanTimeline(lat, lon, depth = 0, preset = '7d', varia
     return await res.json();
   } catch (err) {
     console.warn('[oceanApi] getOceanTimeline error:', err.message);
-    // Generate simulated timeline curve if offline
-    const days = preset === '30d' ? 30 : preset === '1y' ? 12 : 7;
-    const labels = [];
-    const temps = [];
-    const sals = [];
-    const chls = [];
-    const now = new Date();
-
-    for (let i = days - 1; i >= 0; i--) {
-      const d = new Date(now - i * 86400000);
-      labels.push(d.toISOString().slice(5, 10));
-      temps.push(+(26.0 + Math.sin(i * 0.4) * 1.5 + Math.random() * 0.3).toFixed(2));
-      sals.push(+(34.5 + Math.cos(i * 0.3) * 0.4).toFixed(2));
-      chls.push(+(0.28 + Math.sin(i * 0.6) * 0.15).toFixed(3));
-    }
-
-    return {
-      status: 'simulated',
-      coordinates: { lat, lon, depth },
-      timeline: { labels, temperature: temps, salinity: sals, chlorophyll: chls },
-    };
+    return { status: 'unavailable', coordinates: { lat, lon, depth }, timeline: null };
   }
 }
 

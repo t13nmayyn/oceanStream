@@ -10,7 +10,7 @@ export default function ArgoView({ initialPlatform }) {
   const dispatch = useAppDispatch();
   const [floats, setFloats] = useState([]);
   const [selectedPlatform, setSelectedPlatform] = useState(initialPlatform || '2902765');
-  const [profileData, setProfileData] = useState({ depths: [], temps: [] });
+  const [profileData, setProfileData] = useState({ depths: [], temps: [], source: null });
   const [searchLoading, setSearchLoading] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
 
@@ -53,7 +53,7 @@ export default function ArgoView({ initialPlatform }) {
       const depths = prof.map((p) => p.depth_m !== undefined ? p.depth_m : p.depth);
       const temps = prof.map((p) => p.temperature_c !== undefined ? p.temperature_c : p.temperature);
 
-      setProfileData({ depths, temps });
+      setProfileData({ depths, temps, source: data.source || data.status || 'unknown' });
       dispatch({
         type: 'ADD_TOAST',
         payload: { message: `Loaded vertical profile for #${platformId} (${prof.length} levels)`, type: 'success' }
@@ -109,7 +109,7 @@ export default function ArgoView({ initialPlatform }) {
               Loading profile data…
             </div>
           ) : (
-            <ProfileChart depths={profileData.depths} temps={profileData.temps} />
+            <ProfileChart depths={profileData.depths} temps={profileData.temps} source={profileData.source} />
           )}
         </div>
       </Panel>

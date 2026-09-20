@@ -49,7 +49,7 @@ function AnalyticsInner() {
       const temps = series.map((i) => i.temperature_c ?? i.temperature);
       const salinities = series.map((i) => i.salinity_psu ?? i.salinity);
       setChartData({ labels, temps, salinities });
-      setMeta({ count: series.length, source: data.source || 'CMEMS', dateStart, dateEnd, depth });
+      setMeta({ count: series.length, source: series[0]?.source || data.source || 'backend response', dateStart, dateEnd, depth });
       dispatch({ type: 'ADD_TOAST', payload: { message: `Loaded ${series.length} timeline points`, type: 'success' } });
     } catch (err) {
       dispatch({ type: 'ADD_TOAST', payload: { message: `Timeline error: ${err.message}`, type: 'error' } });
@@ -277,6 +277,7 @@ function AnalyticsInner() {
               { label: 'Depth', value: `${meta.depth} m` },
               { label: 'Range', value: `${meta.dateStart} → ${meta.dateEnd}` },
               { label: 'Points', value: meta.count },
+              { label: 'Source', value: meta.source },
               { label: 'Endpoint', value: '/ocean/timeline' },
             ].map((m) => (
               <div key={m.label} className="flex items-center gap-1.5">

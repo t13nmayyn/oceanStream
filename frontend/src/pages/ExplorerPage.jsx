@@ -1,21 +1,38 @@
 import { useCallback, useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { useApp } from '../context/AppContext';
+import { useSearchParams } from 'react-router-dom';
+import { useApp, useAppDispatch } from '../context/AppContext';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useApiHealth } from '../hooks/useApiHealth';
 import { useDateControls } from '../hooks/useDateControls';
 
 import AppNav from '../components/navigation/AppNav';
-import StudentExplorer from '../components/student/StudentExplorer';
-import ScientistExplorer from '../components/scientist/ScientistExplorer';
+import OceanWorkspace from '../components/ocean/OceanWorkspace';
 import OceanStreamCopilot from '../components/copilot/OceanStreamCopilot';
 
 export default function ExplorerPage() {
-  const { userMode } = useApp();
   const [selectedPoint, setSelectedPoint] = useState(null);
+  const [developerOpen, setDeveloperOpen] = useState(false);
+  const [searchParams] = useSearchParams();
+  const dispatch = useAppDispatch();
+  const { apiStatus, wsStatus, logs } = useApp();
   useWebSocket();
   useApiHealth();
   useDateControls();
+
+  useEffect(() => {
+    dispatch({ type: 'SET_USER_MODE', payload: searchParams.get('mode') === 'analyze' ? 'analyze' : 'explore' });
+  }, [dispatch, searchParams]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        setDeveloperOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   // Lock body scroll in explorer
   useEffect(() => {
@@ -41,36 +58,10 @@ export default function ExplorerPage() {
         className="flex-1 relative overflow-hidden"
         style={{ paddingTop: '56px' }}
       >
-        <AnimatePresence mode="wait">
-          {userMode === 'student' ? (
-            <motion.div
-              key="student-mode"
-              initial={{ opacity: 0, scale: 0.98 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.98 }}
-              transition={{ duration: 0.3 }}
-              className="w-full h-full absolute inset-0"
-            >
-              <StudentExplorer />
-            </motion.div>
-          ) : (
-            <motion.div
-              key="scientist-mode"
-              initial={{ opacity: 0, scale: 0.98 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.98 }}
-              transition={{ duration: 0.3 }}
-              className="w-full h-full absolute inset-0"
-            >
-              <ScientistExplorer
-                selectedPoint={selectedPoint}
-                onPointClick={handlePointClick}
-                onClearPoint={() => setSelectedPoint(null)}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <OceanWorkspace selectedPoint={selectedPoint} onPointClick={handlePointClick} />
       </div>
+
+      {developerOpen && <aside className="developer-panel" aria-label="Developer diagnostics"><button type="button" onClick={() => setDeveloperOpen(false)}>Close</button><h2>Developer diagnostics</h2><p>API: {apiStatus}</p><p>WebSocket: {wsStatus}</p><p>Recent events: {logs.length}</p><pre>{JSON.stringify(logs.slice(0, 12), null, 2)}</pre></aside>}
 
       <OceanStreamCopilot
         selectedPoint={selectedPoint}
