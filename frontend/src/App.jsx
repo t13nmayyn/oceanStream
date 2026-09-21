@@ -4,6 +4,7 @@ import { AppProvider } from './context/AppContext';
 
 import LandingPage from './pages/LandingPage';
 import ExplorerPage from './pages/ExplorerPage';
+import OceanDetailPage from './pages/OceanDetailPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import ObservationsPage from './pages/ObservationsPage';
 import DiagnosticsPage from './pages/DiagnosticsPage';
@@ -23,6 +24,7 @@ export default function App() {
         <Routes location={location} key={location.pathname}>
           <Route path="/" element={<LandingPage />} />
           <Route path="/explorer" element={<ExplorerPage />} />
+          <Route path="/ocean-detail" element={<OceanDetailPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/observations" element={<ObservationsPage />} />
           <Route path="/about" element={<AboutPage />} />

@@ -700,7 +700,7 @@ export default function OceanStreamCopilot({ selectedPoint, onSelectPoint }) {
             whileTap={reducedMotion ? undefined : { scale: 0.98 }}
             onClick={openCopilot}
             className="pointer-events-auto absolute bottom-0 right-0 flex h-[48px] items-center gap-3 rounded-full border border-white/10 bg-[#070b12]/95 px-4 py-2 text-left text-slate-100 shadow-[0_8px_32px_rgba(0,0,0,0.6)] backdrop-blur-md transition-all duration-300 hover:border-cyan-400/40 cursor-pointer overflow-hidden"
-            aria-label="Open OceanStream Copilot"
+            aria-label="Ask about this ocean"
           >
             <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-tr from-cyan-400 to-indigo-500 p-[1px]">
               <div className="flex h-full w-full items-center justify-center rounded-full bg-[#070b12]">
@@ -709,10 +709,10 @@ export default function OceanStreamCopilot({ selectedPoint, onSelectPoint }) {
             </div>
             <div className="relative min-w-0 pr-1">
               <div className="flex items-center gap-2">
-                <span className="text-[13px] font-semibold tracking-tight text-white font-sans">
-                  OceanStream Copilot
+                <span className="text-[13px] font-semibold tracking-tight text-white font-sans whitespace-nowrap">
+                  Ask about this ocean
                 </span>
-                <span className="text-[11px] font-medium text-slate-400">
+                <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap shrink-0">
                   {modeBadge}
                 </span>
               </div>

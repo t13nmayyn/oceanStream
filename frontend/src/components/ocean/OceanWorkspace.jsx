@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, Info, SlidersHorizontal } from 'lucide-react';
+import { ChevronDown, ChevronUp, Info, SlidersHorizontal, FlaskConical } from 'lucide-react';
 import MapView from '../map/MapView';
 import OceanSlab, { DEPTH_BINS } from './OceanSlab';
 import TimelineControl from '../scientist/TimelineControl';
@@ -29,7 +29,7 @@ function Coverage({ coverage }) {
   return <div className="ocean-coverage"><span>Data Coverage</span>{DEPTH_BINS.map((depth) => <span className="coverage-item" key={depth}><i className={`coverage-dot ${String(coverage?.[depth] || 'NOT_FETCHED').toLowerCase().replace('_', '-')}`} />{depth}m</span>)}</div>;
 }
 
-export default function OceanWorkspace({ selectedPoint, onPointClick }) {
+export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = true }) {
   const { userMode, selectedVariable, selectedDepth, selectedDate, heatmapOpacity } = useApp();
   const dispatch = useAppDispatch();
   const { gridData, snapshotData } = useOceanSnapshot('indianOcean');
@@ -42,6 +42,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick }) {
   const [hint, setHint] = useState(null);
   const [verticalExaggeration, setVerticalExaggeration] = useState(1);
   const [threshold, setThreshold] = useState({ enabled: false, operator: '>', value: 28, tolerance: 0.05 });
+  const [anomalyOn, setAnomalyOn] = useState(false);
   const viewport = useMemo(() => snapshotData?.bbox ? {
     south: snapshotData.bbox.lat_min,
     north: snapshotData.bbox.lat_max,
@@ -86,15 +87,66 @@ export default function OceanWorkspace({ selectedPoint, onPointClick }) {
   const valueMin = loadedValues.length ? Math.min(...loadedValues) : null;
   const valueMax = loadedValues.length ? Math.max(...loadedValues) : null;
 
-  return <main className="ocean-workspace">
-    <section className="ocean-globe-pane"><MapView onPointClick={onPointClick} onSelectFloatForProfile={(id) => setProfile(id)} selectedPoint={selectedPoint} hideSidebar /></section>
-    <section className="ocean-data-pane">
-      <div className="workspace-heading"><div><p className="eyebrow">{userMode === 'analyze' ? 'Scientific workspace' : 'Public exploration'}</p><h1>{userMode === 'analyze' ? 'Analyze ocean conditions' : 'Explore the ocean'}</h1><p>Choose a region on the globe, then inspect the water column in three dimensions.</p></div><div className="source-note">{snapshotData?.source || 'Model and observation data'}</div></div>
-      <div className="variable-pills" role="tablist" aria-label="Ocean variable"><span className="control-label">Variable</span>{VARIABLES.map(([id, label]) => <button key={id} className={selectedVariable === id ? 'active' : ''} onClick={() => selectVariable(id)}>{userMode === 'analyze' ? label : label.replace('Ocean ', '')}</button>)}</div>
-      <div className="slab-layout"><label className="depth-control"><span>Explore Depth</span><input type="range" min="0" max="1000" step="10" value={selectedDepth} onChange={(event) => setDepth(event.target.value)} /><strong>{selectedDepth} m</strong></label><div className="slab-frame"><OceanSlab grid={gridData} floats={floats} variable={selectedVariable} depth={selectedDepth} dataDepth={snapshotData?.depth ?? selectedDepth} bounds={viewport} opacity={heatmapOpacity} verticalExaggeration={verticalExaggeration} threshold={threshold} onSelectMarker={handleMarkerSelect} /><div className="colorbar"><span>{selected[1]}</span><div className={`colorbar-gradient colorbar-${selectedVariable}`} /><div className="colorbar-range"><span>{valueMin === null ? 'no data' : valueMin.toFixed(3)}</span><span>{selected[2]}</span><span>{valueMax === null ? 'no data' : valueMax.toFixed(3)}</span></div></div></div></div>
-      <Coverage coverage={coverage} />
+  return <main className={`ocean-workspace ${!showMap ? '!flex !flex-col h-full bg-slate-950' : ''}`}>
+    {showMap && <section className="ocean-globe-pane"><MapView onPointClick={onPointClick} onSelectFloatForProfile={(id) => setProfile(id)} selectedPoint={selectedPoint} hideSidebar /></section>}
+    <section className={`ocean-data-pane flex flex-col min-h-0 ${!showMap ? 'flex-1 !p-6 !bg-slate-950 text-slate-200' : ''}`}>
+      {showMap && (
+        <div className="workspace-heading"><div><p className="eyebrow">{userMode === 'analyze' ? 'Scientific workspace' : 'Public exploration'}</p><h1>{userMode === 'analyze' ? 'Analyze ocean conditions' : 'Explore the ocean'}</h1><p>Choose a region on the globe, then inspect the water column in three dimensions.</p></div><div className="source-note">{snapshotData?.source || 'Model and observation data'}</div></div>
+      )}
+      
+      <div className={`variable-pills flex items-center justify-between ${!showMap ? '!p-0 mb-4' : ''}`} role="tablist" aria-label="Ocean variable">
+        <div className="flex items-center flex-wrap gap-2">
+          <span className={`control-label ${!showMap ? '!text-slate-400 font-semibold uppercase tracking-wider text-[10px]' : ''}`}>Variable</span>
+          {VARIABLES.map(([id, label]) => (
+            <button key={id} className={`${selectedVariable === id ? `active ${!showMap ? '!bg-teal-500 !border-teal-500 !text-white' : ''}` : ''} ${!showMap && selectedVariable !== id ? '!bg-slate-900 !border-slate-800 !text-slate-300 hover:!bg-slate-800' : ''}`} onClick={() => selectVariable(id)}>
+              {userMode === 'analyze' ? label : label.replace('Ocean ', '')}
+            </button>
+          ))}
+        </div>
+        {!showMap && (
+          <button
+            type="button"
+            onClick={() => setAnomalyOn((v) => !v)}
+            aria-pressed={anomalyOn}
+            title="Anomaly detection (coming in Phase 3)"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11.5px] font-semibold transition-colors cursor-pointer border ${
+              anomalyOn
+                ? 'bg-amber-500/15 border-amber-500/40 text-amber-400'
+                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-300 hover:bg-slate-800'
+            }`}
+          >
+            <FlaskConical size={14} />
+            Anomaly {anomalyOn ? 'ON' : 'OFF'}
+          </button>
+        )}
+      </div>
+
+      <div className={`slab-layout flex-1 min-h-0 flex ${!showMap ? '!border-slate-800/60 !bg-slate-900/40 rounded-xl overflow-hidden' : ''}`}>
+        <label className={`depth-control flex flex-col items-center justify-center py-4 px-2 ${!showMap ? 'w-16 !bg-slate-900/80 border-r border-slate-800/60' : ''}`}>
+          <span className={`${!showMap ? 'text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-2' : ''}`}>{!showMap ? 'Depth' : 'Explore Depth'}</span>
+          <strong className={`${!showMap ? '!text-teal-400 font-mono text-[12px] mb-4' : ''}`}>{selectedDepth}m</strong>
+          <input type="range" min="0" max="1000" step="10" value={selectedDepth} onChange={(event) => setDepth(event.target.value)} className={`${!showMap ? '!h-[200px]' : ''}`} />
+        </label>
+        <div className={`slab-frame flex-1 relative min-w-0 ${!showMap ? '!h-full' : ''}`}>
+          <OceanSlab grid={gridData} floats={floats} variable={selectedVariable} depth={selectedDepth} dataDepth={snapshotData?.depth ?? selectedDepth} bounds={viewport} opacity={heatmapOpacity} verticalExaggeration={verticalExaggeration} threshold={threshold} onSelectMarker={handleMarkerSelect} />
+          <div className={`colorbar absolute !top-auto !bottom-4 !right-4 !w-[220px] ${!showMap ? '!bg-slate-900/90 backdrop-blur-md !border-slate-800 !text-slate-300 rounded-lg shadow-lg' : ''}`}>
+            <span className={`${!showMap ? 'font-semibold' : ''}`}>{selected[1]}</span>
+            <div className={`colorbar-gradient colorbar-${selectedVariable} ${!showMap ? 'rounded' : ''}`} />
+            <div className={`colorbar-range ${!showMap ? '!text-slate-400 font-mono text-[10px]' : ''}`}>
+              <span>{valueMin === null ? 'no data' : valueMin.toFixed(3)}</span>
+              <span>{selected[2]}</span>
+              <span>{valueMax === null ? 'no data' : valueMax.toFixed(3)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div className={`${!showMap ? 'opacity-80' : ''}`}>
+        <Coverage coverage={coverage} />
+      </div>
+      
       {hint && <div className="slice-notice" role="status">{hint}</div>}
-      <div className="workspace-footer"><TimelineControl /><button className="panel-toggle" onClick={() => setOpenPanel(openPanel === 'advanced' ? null : 'advanced')}><SlidersHorizontal size={15} />{userMode === 'analyze' ? 'Advanced controls' : 'About this view'}{openPanel === 'advanced' ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button></div>
+      <div className={`workspace-footer ${!showMap ? '!border-slate-800/60 pt-4' : ''}`}><TimelineControl /><button className="panel-toggle" onClick={() => setOpenPanel(openPanel === 'advanced' ? null : 'advanced')}><SlidersHorizontal size={15} />{userMode === 'analyze' ? 'Advanced controls' : 'About this view'}{openPanel === 'advanced' ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button></div>
       {selectedPoint && <button className="timeline-link" onClick={() => setTimelinePoint(selectedPoint)}>Open point timeline</button>}
       {openPanel === 'advanced' && <div className="workspace-drawer">{userMode === 'analyze' ? <><label>Vertical exaggeration<input type="range" min="0.5" max="4" step="0.1" value={verticalExaggeration} onChange={(event) => setVerticalExaggeration(Number(event.target.value))} /><strong>{verticalExaggeration.toFixed(1)}×</strong></label><label>Display opacity<input type="range" min="0.2" max="1" step="0.05" value={heatmapOpacity} onChange={(event) => dispatch({ type: 'SET_HEATMAP_OPACITY', payload: Number(event.target.value) })} /></label><div className="threshold-controls"><label><span>Threshold filter</span><input type="checkbox" checked={threshold.enabled} onChange={(event) => setThreshold({ ...threshold, enabled: event.target.checked })} /></label><select value={threshold.operator} onChange={(event) => setThreshold({ ...threshold, operator: event.target.value })}><option value=">">greater than</option><option value="<">less than</option><option value="=">approximately equal</option></select><input aria-label="Threshold value" type="number" value={threshold.value} onChange={(event) => setThreshold({ ...threshold, value: Number(event.target.value) })} /><span>{selected[2]} · yellow samples: {threshold.enabled ? gridData.filter((point) => { const value = selectedValue(point, selectedVariable); return threshold.operator === '>' ? value > threshold.value : threshold.operator === '<' ? value < threshold.value : Math.abs(value - threshold.value) <= threshold.tolerance; }).length : 0}</span></div><div className="analyze-availability"><span>Model comparison: unavailable until a measured observation profile is returned.</span><span>Isosurface and volume: unavailable because /ocean/snapshot supplies one 2D depth slice.</span></div><p><Info size={14} /> Yellow points match the loaded numerical values. Source: {snapshotData?.source || 'unavailable'}.</p></> : <p><Info size={14} /> Colors represent the selected variable. Click the globe or a marker to inspect a point. Switch to Analyze for units, sources, filters, and raw values.</p>}</div>}
     </section>
