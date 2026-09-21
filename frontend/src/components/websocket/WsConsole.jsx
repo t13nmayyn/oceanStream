@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
+import { getWsEndpointUrl } from '../../config/api';
 import Panel from '../ui/Panel';
 import Button from '../ui/Button';
 
@@ -51,7 +52,7 @@ export default function WsConsole() {
   const sendCustomMessage = () => {
     if (wsRef.current) wsRef.current.close();
 
-    const wsUrl = `ws://localhost:8000${endpoint}`;
+    const wsUrl = getWsEndpointUrl(endpoint);
     setLogs((prev) => `${prev}\n\n[CONNECTING] ${wsUrl}...`);
 
     const ws = new WebSocket(wsUrl);

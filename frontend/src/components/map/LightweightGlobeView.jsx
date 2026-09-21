@@ -1,12 +1,13 @@
 /**
- * LightweightGlobeView — Phase 2B
+ * LightweightGlobeView — Phase 2B & Point Selection
  *
- * Globe with 6 labeled HTML markers. No snapshot/argo/slab loads.
- * Hover is debounced (300ms) to prevent request spam in SummarySidebar.
- * onClick passes full { id, name, lat, lng, depth, bbox } to parent.
- * Custom Region marker does NOT navigate — handled by parent.
+ * Interactive Globe with:
+ * - 6 labeled HTML region markers + interactive user point marker
+ * - Exact Latitude/Longitude raycasting on globe surface click
+ * - Smooth pointer interaction & TargetCursor support (.cursor-target)
+ * - Hover debounced (300ms) to prevent request spam in SummarySidebar
  */
-import { useEffect, useRef, useState, useImperativeHandle, forwardRef, useCallback } from 'react';
+import { useEffect, useRef, useState, useImperativeHandle, forwardRef, useCallback, useMemo } from 'react';
 import Globe from 'react-globe.gl';
 
 // Major Ocean Basin & Landmark Labels for orientation
@@ -35,7 +36,7 @@ export const REGION_MARKERS = [
 const HOVER_DEBOUNCE_MS = 300;
 
 const LightweightGlobeView = forwardRef(function LightweightGlobeView(
-  { onMarkerClick, onMarkerHover },
+  { onMarkerClick, onMarkerHover, selectedPoint, onPointSelect },
   ref
 ) {
   const containerRef = useRef(null);
@@ -95,12 +96,43 @@ const LightweightGlobeView = forwardRef(function LightweightGlobeView(
   }, []);
 
   /**
+   * Handle user clicking anywhere on the 3D globe surface
+   */
+  const handleGlobeClick = useCallback(({ lat, lng }, event) => {
+    if (lat == null || lng == null) return;
+    
+    // Exact coordinate precision
+    const cleanLat = Number(lat.toFixed(4));
+    const cleanLng = Number(lng.toFixed(4));
+    
+    const latStr = cleanLat >= 0 ? `${cleanLat}°N` : `${Math.abs(cleanLat)}°S`;
+    const lngStr = cleanLng >= 0 ? `${cleanLng}°E` : `${Math.abs(cleanLng)}°W`;
+    const pointName = `Point (${latStr}, ${lngStr})`;
+
+    const pointObj = {
+      id: 'selected-coord-point',
+      name: pointName,
+      lat: cleanLat,
+      lng: cleanLng,
+      depth: 0,
+      isSelectedPoint: true,
+      bbox: {
+        south: Math.max(-90, cleanLat - 2),
+        north: Math.min(90, cleanLat + 2),
+        west: Math.max(-180, cleanLng - 2),
+        east: Math.min(180, cleanLng + 2),
+      },
+    };
+
+    onPointSelect?.(pointObj);
+  }, [onPointSelect]);
+
+  /**
    * Debounced hover — fires onMarkerHover at most once per HOVER_DEBOUNCE_MS.
-   * Prevents SummarySidebar from firing a new fetch on every mouse-move pixel.
    */
   const handleMarkerEnter = useCallback((d) => {
     clearTimeout(hoverTimerRef.current);
-    if (hoveredIdRef.current === d.id) return; // already hovered, no-op
+    if (hoveredIdRef.current === d.id) return;
     hoverTimerRef.current = setTimeout(() => {
       hoveredIdRef.current = d.id;
       onMarkerHover?.(d);
@@ -110,55 +142,134 @@ const LightweightGlobeView = forwardRef(function LightweightGlobeView(
   const handleMarkerLeave = useCallback(() => {
     clearTimeout(hoverTimerRef.current);
     hoveredIdRef.current = null;
-    // Intentionally do NOT call onMarkerHover(null) — sidebar retains last value
   }, []);
 
   const handleMarkerClick = useCallback((d) => {
     globeRef.current?.pointOfView({ lat: d.lat, lng: d.lng, altitude: 1.2 }, 1200);
-    onMarkerClick?.(d); // full marker object: { id, name, lat, lng, depth, bbox }
-  }, [onMarkerClick]);
+    if (d.isSelectedPoint) {
+      onPointSelect?.(d);
+    } else {
+      onMarkerClick?.(d);
+    }
+  }, [onMarkerClick, onPointSelect]);
 
   /**
-   * Creates a persistent HTML marker element: white circle + teal border + label below.
-   * No hover popup — label is always visible. Click delegates to handleMarkerClick.
+   * Creates an HTML marker element attached to the globe surface.
    */
   const createHtmlMarker = useCallback((d) => {
+    const isSelected = d.isSelectedPoint || d.id === 'selected-coord-point';
     const isCustom = d.id === 'custom-region';
     const el = document.createElement('div');
+    el.className = 'cursor-target group';
     el.style.pointerEvents = 'auto';
-    el.style.cursor = isCustom ? 'default' : 'pointer';
-    el.innerHTML = `
-      <div style="display:flex;flex-direction:column;align-items:center;transform:translate(-50%,-100%);">
-        <div style="
-          width:14px;height:14px;border-radius:50%;
-          background:white;
-          border:2.5px solid ${isCustom ? '#94a3b8' : '#10b981'};
-          box-shadow:0 2px 6px rgba(0,0,0,0.25);
-        "></div>
-        <div style="
-          margin-top:5px;
-          background:rgba(255,255,255,0.92);
-          border:1px solid ${isCustom ? '#cbd5e1' : '#10b981'};
-          color:${isCustom ? '#64748b' : '#0f172a'};
-          font-size:10px;font-weight:700;
-          padding:2px 7px;border-radius:5px;
-          white-space:nowrap;
-          box-shadow:0 1px 6px rgba(0,0,0,0.12);
-          backdrop-filter:blur(4px);
-          letter-spacing:0.02em;
-        ">${d.name}</div>
-      </div>
-    `;
+    el.style.cursor = 'pointer';
+
+    if (isSelected) {
+      const latFmt = d.lat >= 0 ? `${d.lat.toFixed(2)}°N` : `${Math.abs(d.lat).toFixed(2)}°S`;
+      const lngFmt = d.lng >= 0 ? `${d.lng.toFixed(2)}°E` : `${Math.abs(d.lng).toFixed(2)}°W`;
+      el.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;transform:translate(-50%,-100%);position:relative;">
+          <!-- Animated Radar Rings -->
+          <div style="
+            position:absolute;top:7px;left:50%;transform:translate(-50%,-50%);
+            width:38px;height:38px;border-radius:50%;
+            border:1.5px solid rgba(0,229,255,0.75);
+            animation:ping 2s cubic-bezier(0,0,0.2,1) infinite;
+            pointer-events:none;
+          "></div>
+          <div style="
+            position:absolute;top:7px;left:50%;transform:translate(-50%,-50%);
+            width:24px;height:24px;border-radius:50%;
+            background:rgba(0,229,255,0.25);
+            border:1.5px solid #00e5ff;
+            pointer-events:none;
+          "></div>
+
+          <!-- Center Pin Anchor -->
+          <div style="
+            width:14px;height:14px;border-radius:50%;
+            background:#00e5ff;
+            border:2.5px solid #ffffff;
+            box-shadow:0 0 12px rgba(0,229,255,0.9), 0 2px 8px rgba(0,0,0,0.5);
+            position:relative;z-index:10;
+          "></div>
+
+          <!-- Coordinate Tag -->
+          <div style="
+            margin-top:7px;
+            background:rgba(15,23,42,0.92);
+            border:1px solid #00e5ff;
+            color:#38bdf8;
+            font-size:10.5px;font-weight:700;
+            padding:3px 8px;border-radius:6px;
+            white-space:nowrap;
+            box-shadow:0 4px 14px rgba(0,0,0,0.35), 0 0 8px rgba(0,229,255,0.3);
+            backdrop-filter:blur(8px);
+            letter-spacing:0.03em;
+            display:flex;align-items:center;gap:4px;
+            z-index:10;
+          ">
+            <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#00e5ff;box-shadow:0 0 6px #00e5ff;"></span>
+            <span>${latFmt}, ${lngFmt}</span>
+          </div>
+        </div>
+      `;
+    } else {
+      el.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;transform:translate(-50%,-100%);">
+          <div style="
+            width:13px;height:13px;border-radius:50%;
+            background:white;
+            border:2.5px solid ${isCustom ? '#94a3b8' : '#10b981'};
+            box-shadow:0 2px 6px rgba(0,0,0,0.25);
+            transition:transform 0.2s ease;
+          "></div>
+          <div style="
+            margin-top:5px;
+            background:rgba(255,255,255,0.94);
+            border:1px solid ${isCustom ? '#cbd5e1' : '#10b981'};
+            color:${isCustom ? '#64748b' : '#0f172a'};
+            font-size:10px;font-weight:700;
+            padding:2px 7px;border-radius:5px;
+            white-space:nowrap;
+            box-shadow:0 1px 6px rgba(0,0,0,0.12);
+            backdrop-filter:blur(4px);
+            letter-spacing:0.02em;
+          ">${d.name}</div>
+        </div>
+      `;
+    }
+
     el.onclick = (e) => { e.stopPropagation(); handleMarkerClick(d); };
     el.onmouseenter = () => handleMarkerEnter(d);
     el.onmouseleave = () => handleMarkerLeave();
     return el;
   }, [handleMarkerClick, handleMarkerEnter, handleMarkerLeave]);
 
+  // Combine predefined region markers with active selected point
+  const allMarkers = useMemo(() => {
+    if (!selectedPoint || selectedPoint.lat == null || selectedPoint.lng == null) {
+      return REGION_MARKERS;
+    }
+    // Filter out previous custom coordinate point if any
+    const base = REGION_MARKERS.filter(m => m.id !== 'selected-coord-point');
+    return [
+      ...base,
+      {
+        id: 'selected-coord-point',
+        name: selectedPoint.name || 'Selected Point',
+        lat: selectedPoint.lat,
+        lng: selectedPoint.lng,
+        depth: selectedPoint.depth || 0,
+        isSelectedPoint: true,
+      },
+    ];
+  }, [selectedPoint]);
+
   return (
     <div
       ref={containerRef}
-      className="w-full h-full absolute inset-0 cursor-grab active:cursor-grabbing select-none overflow-hidden bg-slate-50"
+      className="w-full h-full absolute inset-0 cursor-grab active:cursor-grabbing select-none overflow-hidden bg-slate-950"
     >
       <Globe
         ref={globeRef}
@@ -171,9 +282,10 @@ const LightweightGlobeView = forwardRef(function LightweightGlobeView(
         atmosphereAltitude={0.22}
         enablePointerInteraction={true}
         onGlobeReady={handleGlobeReady}
+        onGlobeClick={handleGlobeClick}
 
-        // HTML markers — white circle, teal border, label below, no popup
-        htmlElementsData={REGION_MARKERS}
+        // HTML markers — region anchors + interactive selected coordinate marker
+        htmlElementsData={allMarkers}
         htmlLat="lat"
         htmlLng="lng"
         htmlElement={createHtmlMarker}

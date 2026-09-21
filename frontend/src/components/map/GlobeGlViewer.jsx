@@ -208,25 +208,25 @@ const GlobeGlViewer = forwardRef(function GlobeGlViewer(
     }
   }, [selectedVariable, selectedDepth, colorPalette, heatmapOpacity, showThermalHeatmap, gridData]);
 
-  // Handle globe background clicks (robust double-click detection)
+  // Handle globe background clicks (immediate point selection + double-click zoom)
   const handleGlobeClick = useCallback(({ lat, lng }, event) => {
-    console.log('[Globe] click', { lat, lng }, event);
+    if (lat == null || lng == null) return;
     const now = Date.now();
     const last = lastClickRef.current;
     
-    // Check either native event.detail or manual timer fallback (<= 400ms interval)
-    console.log('[Globe] detector', { lat, lng, detail: event?.detail, timeDelta: now - last.time, latDelta: Math.abs(lat - last.lat), lngDelta: Math.abs(lng - last.lng) });
+    // Always trigger point selection immediately on click
+    setClickPulse({ lat, lng, time: now });
+    setTimeout(() => setClickPulse(null), 3000);
+    onPointClick?.(lat, lng);
+
     const isDoubleClick = 
       (event && event.detail === 2) || 
       (now - last.time < 400 && Math.abs(lat - last.lat) < 0.5 && Math.abs(lng - last.lng) < 0.5);
 
     if (isDoubleClick) {
       globeRef.current?.pointOfView({ lat, lng, altitude: 1.1 }, 1400);
-      onPointClick?.(lat, lng);
       lastClickRef.current = { time: 0, lat: null, lng: null };
     } else {
-      setClickPulse({ lat, lng, time: now });
-      setTimeout(() => setClickPulse(null), 3000);
       lastClickRef.current = { time: now, lat, lng };
     }
   }, [onPointClick]);

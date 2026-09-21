@@ -1,7 +1,8 @@
- import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, Menu, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
+import { API_BASE } from '../config/api';
 
 import HeroSection from '../components/landing/HeroSection';
 import SectionChallenge from '../components/landing/SectionChallenge';
@@ -159,7 +160,7 @@ function LandingFooter() {
           <span>SYSTEM</span>
           <Link to="/system">Diagnostics</Link>
           <a
-            href="http://localhost:8000/docs"
+            href={`${API_BASE}/docs`}
             target="_blank"
             rel="noopener noreferrer"
           >
