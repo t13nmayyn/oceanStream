@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Waves, BarChart3, Eye, Settings, ChevronDown, Activity, Database, Zap, BookOpen } from 'lucide-react';
+import { Waves, BarChart3, Settings, ChevronDown, Activity, Database, Zap, BookOpen, Globe } from 'lucide-react';
 import { useApp, useAppDispatch } from '../../context/AppContext';
 import { API_BASE } from '../../config/api';
 import ModeSwitcher from '../mode/ModeSwitcher';
@@ -32,33 +32,35 @@ export default function AppNav() {
   }
 
   return (
-    <nav className="app-nav" role="navigation" aria-label="Main navigation">
-      <div className="app-nav-inner">
+    <nav className="os-appnav" role="navigation" aria-label="Main navigation">
+      <div className="os-appnav-inner">
 
         {/* Brand */}
         <button
-          className="app-brand"
+          className="os-appnav-brand cursor-target"
           onClick={() => navigate('/')}
           aria-label="Go to oceanStream home"
         >
-          <span className="app-brand-mark">~</span>
-          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
-            <span className="app-brand-name">oceanStream</span>
-            <span className="app-brand-sub">INCOIS · SIH26067</span>
+          <div className="os-appnav-brand-icon">
+            <Globe size={16} strokeWidth={2} />
+          </div>
+          <div className="os-appnav-brand-text">
+            <span className="os-appnav-brand-name">oceanStream</span>
+            <span className="os-appnav-brand-tag">INCOIS · SIH26067</span>
           </div>
         </button>
 
-        <div className="app-divider" />
+        <div className="os-appnav-sep" />
 
         {/* Nav Links */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }} role="list">
+        <div className="os-appnav-links" role="list">
           {navLinks.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
               role="listitem"
               className={({ isActive }) =>
-                `app-nav-link${isActive ? ' active' : ''}`
+                `os-appnav-link cursor-target${isActive ? ' active' : ''}`
               }
             >
               <Icon size={14} strokeWidth={2} />
@@ -70,7 +72,7 @@ export default function AppNav() {
           <div style={{ position: 'relative' }}>
             <button
               onClick={() => setSystemOpen(!systemOpen)}
-              className={`app-nav-link${systemOpen ? ' active' : ''}`}
+              className={`os-appnav-link cursor-target${systemOpen ? ' active' : ''}`}
               style={{ cursor: 'pointer' }}
               aria-expanded={systemOpen}
               aria-haspopup="true"
@@ -90,44 +92,19 @@ export default function AppNav() {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -6, scale: 0.97 }}
                   transition={{ duration: 0.13 }}
-                  style={{
-                    position: 'absolute',
-                    top: 'calc(100% + 6px)',
-                    left: 0,
-                    width: '200px',
-                    background: '#0d1525',
-                    border: '1px solid #1e3055',
-                    borderRadius: '12px',
-                    boxShadow: '0 12px 32px rgba(0,0,0,0.6)',
-                    overflow: 'hidden',
-                    zIndex: 99999,
-                  }}
+                  className="os-appnav-dropdown"
                 >
                   <div style={{ padding: '6px' }}>
                     <button
                       onClick={() => { navigate('/system'); setSystemOpen(false); }}
-                      style={{
-                        width: '100%', display: 'flex', alignItems: 'center', gap: '8px',
-                        padding: '8px 10px', borderRadius: '8px', border: 'none', background: 'transparent',
-                        fontSize: '13px', color: '#d4e3f7', cursor: 'pointer', textAlign: 'left',
-                        transition: 'background 0.15s',
-                      }}
-                      onMouseEnter={e => e.currentTarget.style.background = '#172647'}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                      className="os-appnav-dropdown-item cursor-target"
                     >
                       <Zap size={13} style={{ color: '#f5a623' }} />
                       System Diagnostics
                     </button>
                     <button
                       onClick={flushCache}
-                      style={{
-                        width: '100%', display: 'flex', alignItems: 'center', gap: '8px',
-                        padding: '8px 10px', borderRadius: '8px', border: 'none', background: 'transparent',
-                        fontSize: '13px', color: '#d4e3f7', cursor: 'pointer', textAlign: 'left',
-                        transition: 'background 0.15s',
-                      }}
-                      onMouseEnter={e => { e.currentTarget.style.background = '#32141c'; e.currentTarget.style.color = '#f54375'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#d4e3f7'; }}
+                      className="os-appnav-dropdown-item os-appnav-dropdown-danger cursor-target"
                     >
                       <Database size={13} />
                       Flush L1 Cache
@@ -139,29 +116,28 @@ export default function AppNav() {
           </div>
         </div>
 
-        {/* Global Mode Switcher in Navbar */}
-        <div style={{ marginLeft: '16px' }} className="hidden md:block">
+        {/* Global Mode Switcher */}
+        <div className="os-appnav-mode hidden md:block">
           <ModeSwitcher compact={true} />
         </div>
 
         {/* Right — Status */}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div className="os-appnav-status-group">
 
           {/* API */}
-          <div className="app-nav-status">
-            <div
-              className={`app-nav-dot ${isOnline ? 'online' : apiStatus === 'checking' ? 'checking' : 'offline'}`}
-              style={isOnline ? { animation: 'pulse 2s infinite' } : undefined}
-            />
+          <div className="os-appnav-status-pill">
+            <div className={`os-appnav-status-dot ${isOnline ? 'online' : apiStatus === 'checking' ? 'checking' : 'offline'}`} />
             <span>{isOnline ? 'API Ready' : apiStatus === 'checking' ? 'Connecting…' : 'API Offline'}</span>
           </div>
 
+          <div className="os-appnav-status-sep" />
+
           {/* WS */}
-          <div className="app-nav-status" style={{ paddingLeft: '12px', borderLeft: '1px solid #1e3055' }}>
+          <div className="os-appnav-status-pill">
             <Activity
               size={11}
-              strokeWidth={2}
-              style={{ color: wsConnected ? '#00c8ff' : '#6b83a6' }}
+              strokeWidth={2.5}
+              className={wsConnected ? 'text-cyan-400' : 'text-slate-500'}
             />
             <span>{wsConnected ? 'Stream Active' : 'Offline'}</span>
           </div>

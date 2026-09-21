@@ -168,7 +168,7 @@ function DiagnosticsInner() {
           style={{ borderTop: '1px solid rgba(30, 48, 85, 0.4)' }}
         >
           {[
-            ['Backend', 'FastAPI + Uvicorn (Port 8000)'],
+            ['Backend', API_BASE],
             ['Cache', 'L1 RAM · L2 Zarr · L3 Copernicus'],
             ['WebSocket', '/ws/ocean-stream'],
             ['Problem', 'SIH-26067 · INCOIS · MoES'],
