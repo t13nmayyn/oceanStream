@@ -76,12 +76,34 @@ def credentials_present() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Concurrency control — max 2 simultaneous Copernicus downloads to prevent
+# flooding the API and exhausting the event loop thread pool.
+# ---------------------------------------------------------------------------
+_COPERNICUS_SEM: Optional[asyncio.Semaphore] = None   # initialised lazily (needs running loop)
+_COPERNICUS_MAX_CONCURRENT = 2
+
+# Global background fetch queue — tracks active fetches to prevent duplicate work
+_active_fetch_keys: set = set()
+_active_fetch_lock = asyncio.Lock() if False else None  # will be created lazily
+
+
+def _get_copernicus_sem() -> asyncio.Semaphore:
+    """Return the global Copernicus semaphore, creating it if needed."""
+    global _COPERNICUS_SEM
+    if _COPERNICUS_SEM is None:
+        _COPERNICUS_SEM = asyncio.Semaphore(_COPERNICUS_MAX_CONCURRENT)
+    return _COPERNICUS_SEM
+
+
+
+# ---------------------------------------------------------------------------
 # Internal: write new data into a zarr store (create or merge)
 # ---------------------------------------------------------------------------
 
 def _write_to_zarr(ds_new: xr.Dataset, zarr_path: Path) -> int:
     """
     Merge ds_new into an existing zarr store at zarr_path, or create it fresh.
+    Uses a safe atomic swap (write to tmp → rename) to avoid partial reads.
     Returns the total zarr dir size in bytes after writing.
     """
     chunks = {"time": 1}
@@ -96,41 +118,44 @@ def _write_to_zarr(ds_new: xr.Dataset, zarr_path: Path) -> int:
 
     ds_chunked = ds_new.chunk(chunks)
 
+    tmp_zarr = zarr_path.parent / f"_{zarr_path.name}_tmp"
+    # Clean up any stale tmp from a previous failed run
+    if tmp_zarr.exists():
+        shutil.rmtree(tmp_zarr)
+
     if zarr_path.exists():
         try:
-            ds_existing = xr.open_zarr(zarr_path)
-            ds_combined = xr.combine_by_coords(
-                [ds_existing, ds_chunked],
-                combine_attrs="override",
-                join="outer",
-            )
+            ds_existing = xr.open_zarr(zarr_path, consolidated=True)
+            ds_combined = xr.merge([ds_existing, ds_chunked], compat="override", join="outer")
+            # Remove duplicate coordinate values along each dimension
             for dim in ("time", "depth", "latitude", "longitude", "lat", "lon"):
-                if dim in ds_combined.dims:
-                    _, idx = np.unique(ds_combined[dim].values, return_index=True)
-                    ds_combined = ds_combined.isel({dim: np.sort(idx)})
+                if dim in ds_combined.dims and dim in ds_combined.coords:
+                    try:
+                        _, idx = np.unique(ds_combined[dim].values, return_index=True)
+                        if len(idx) < ds_combined.sizes[dim]:
+                            ds_combined = ds_combined.isel({dim: np.sort(idx)})
+                    except Exception:
+                        pass
             ds_combined = ds_combined.chunk(chunks)
             ds_existing.close()
         except Exception as e:
-            logger.warning(f"[Zarr merge] combine_by_coords failed ({e}), attempting xr.merge fallback")
-            try:
-                ds_existing = xr.open_zarr(zarr_path)
-                ds_combined = xr.merge([ds_existing, ds_chunked], compat="override").chunk(chunks)
-                ds_existing.close()
-            except Exception:
-                ds_combined = ds_chunked
+            logger.warning(f"[Zarr merge] failed ({e}), creating fresh store with new data only")
+            ds_combined = ds_chunked
 
-        tmp_zarr = zarr_path.parent / f"_{zarr_path.name}_tmp"
-        if tmp_zarr.exists():
-            shutil.rmtree(tmp_zarr)
-        ds_combined.to_zarr(tmp_zarr, mode="w")
+        ds_combined.to_zarr(tmp_zarr, mode="w", consolidated=True)
         ds_combined.close()
+        # Atomic swap
+        old_zarr = zarr_path.parent / f"_{zarr_path.name}_old"
         if zarr_path.exists():
-            shutil.rmtree(zarr_path)
+            zarr_path.rename(old_zarr)
         tmp_zarr.rename(zarr_path)
+        if old_zarr.exists():
+            shutil.rmtree(old_zarr)
     else:
-        ds_chunked.to_zarr(zarr_path, mode="w")
+        ds_chunked.to_zarr(zarr_path, mode="w", consolidated=True)
 
     return sum(f.stat().st_size for f in zarr_path.rglob("*") if f.is_file())
+
 
 
 # ---------------------------------------------------------------------------
@@ -180,28 +205,35 @@ async def fetch_phy_range(
             has_depth = any(v not in ("zos", "mlotst") for v in vl)
             eff_min = max(0.0, float(depth_min)) if has_depth else None
             eff_max = max(eff_min, float(depth_max)) if (has_depth and eff_min is not None) else None
+            sem = _get_copernicus_sem()
             try:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    None,
-                    lambda: copernicusmarine.subset(
-                        dataset_id=did,
-                        variables=vl,
-                        minimum_longitude=lon_min,
-                        maximum_longitude=lon_max,
-                        minimum_latitude=lat_min,
-                        maximum_latitude=lat_max,
-                        start_datetime=start_dt,
-                        end_datetime=end_dt,
-                        minimum_depth=eff_min,
-                        maximum_depth=eff_max,
-                        output_filename=tmp_nc.name,
-                        output_directory=tmpdir,
-                        overwrite=True,
-                    ),
-                )
+                async with sem:
+                    loop = asyncio.get_event_loop()
+                    await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None,
+                            lambda: copernicusmarine.subset(
+                                dataset_id=did,
+                                variables=vl,
+                                minimum_longitude=lon_min,
+                                maximum_longitude=lon_max,
+                                minimum_latitude=lat_min,
+                                maximum_latitude=lat_max,
+                                start_datetime=start_dt,
+                                end_datetime=end_dt,
+                                minimum_depth=eff_min,
+                                maximum_depth=eff_max,
+                                output_filename=tmp_nc.name,
+                                output_directory=tmpdir,
+                                overwrite=True,
+                            ),
+                        ),
+                        timeout=120.0,  # 2-minute cap per group
+                    )
                 if tmp_nc.exists():
                     return xr.open_dataset(str(tmp_nc)).load()
+            except asyncio.TimeoutError:
+                logger.error(f"[PHY TIMEOUT for {did}] exceeded 120s")
             except Exception as e:
                 logger.error(f"[PHY FETCH ERROR for {did}] {e}")
             return None
@@ -220,6 +252,7 @@ async def fetch_phy_range(
                     if p.state.value == "FETCHING":
                         p.state = PageState.NOT_FETCHED
             return {"status": "error", "error": "All physics dataset fetches failed", "date": date_str}
+
 
         fetch_ms = round((time.perf_counter() - t0) * 1000, 1)
         logger.info(f"[PHY] Download done in {fetch_ms}ms ({len(ds_parts)} parts) — merging into zarr...")
@@ -307,28 +340,35 @@ async def fetch_bgc_range(
 
         async def _download_bgc_group(part_idx: int, did: str, vl: List[str]) -> Optional[xr.Dataset]:
             tmp_nc = Path(tmpdir) / f"bgc_part_{part_idx}.nc"
+            sem = _get_copernicus_sem()
             try:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    None,
-                    lambda: copernicusmarine.subset(
-                        dataset_id=did,
-                        variables=vl,
-                        minimum_longitude=lon_min,
-                        maximum_longitude=lon_max,
-                        minimum_latitude=lat_min,
-                        maximum_latitude=lat_max,
-                        start_datetime=start_dt,
-                        end_datetime=end_dt,
-                        minimum_depth=eff_min,
-                        maximum_depth=eff_max,
-                        output_filename=tmp_nc.name,
-                        output_directory=tmpdir,
-                        overwrite=True,
-                    ),
-                )
+                async with sem:
+                    loop = asyncio.get_event_loop()
+                    await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None,
+                            lambda: copernicusmarine.subset(
+                                dataset_id=did,
+                                variables=vl,
+                                minimum_longitude=lon_min,
+                                maximum_longitude=lon_max,
+                                minimum_latitude=lat_min,
+                                maximum_latitude=lat_max,
+                                start_datetime=start_dt,
+                                end_datetime=end_dt,
+                                minimum_depth=eff_min,
+                                maximum_depth=eff_max,
+                                output_filename=tmp_nc.name,
+                                output_directory=tmpdir,
+                                overwrite=True,
+                            ),
+                        ),
+                        timeout=120.0,  # 2-minute cap per group
+                    )
                 if tmp_nc.exists():
                     return xr.open_dataset(str(tmp_nc)).load()
+            except asyncio.TimeoutError:
+                logger.error(f"[BGC TIMEOUT for {did}] exceeded 120s")
             except Exception as e:
                 logger.error(f"[BGC FETCH ERROR for {did}] {e}")
             return None
@@ -347,6 +387,7 @@ async def fetch_bgc_range(
                     if p.state.value == "FETCHING":
                         p.state = PageState.NOT_FETCHED
             return {"status": "error", "error": "All BGC dataset fetches failed", "date": date_str}
+
 
         fetch_ms = round((time.perf_counter() - t0) * 1000, 1)
         logger.info(f"[BGC] Download done in {fetch_ms}ms ({len(ds_parts)} parts) — merging...")

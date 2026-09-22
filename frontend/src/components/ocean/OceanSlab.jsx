@@ -154,11 +154,19 @@ export default function OceanSlab({ grid = [], floats = [], variable = 'temperat
 
     const markerGroup = new THREE.Group();
     const markerMesh = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(0.28, 10, 8),
-      new THREE.MeshStandardMaterial({ color: '#0d7377', roughness: 0.5 }),
+      new THREE.SphereGeometry(0.35, 12, 10),
+      new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.15 }),
       Math.max(1, floats.length)
     );
     markerGroup.add(markerMesh);
+
+    // 3D bounding-box and vertical water-column profile wireframe lines for Argo floats
+    const floatColumns = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: '#38bdf8', transparent: true, opacity: 0.55 })
+    );
+    floatColumns.renderOrder = 4;
+    markerGroup.add(floatColumns);
     scene.add(markerGroup);
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -226,14 +234,61 @@ export default function OceanSlab({ grid = [], floats = [], variable = 'temperat
       
       markerMesh.count = Math.max(0, Math.min(current.floats.length, markerMesh.instanceMatrix.count));
       const matrix = new THREE.Matrix4();
+      const colorBgc = new THREE.Color('#10b981');   // Emerald for BGC
+      const colorCore = new THREE.Color('#06b6d4');  // Cyan for Core
+      const colLines = [];
+
       current.floats.forEach((float, index) => {
-        const x = ((Number(float.lng ?? float.lon) - west) / Math.max(east - west, 0.0001) - 0.5) * 20;
-        const z = ((Number(float.lat) - south) / Math.max(north - south, 0.0001) - 0.5) * 14;
+        const flon = Number(float.lng ?? float.lon ?? 0);
+        const flat = Number(float.lat ?? 0);
+        const x = ((flon - west) / Math.max(east - west, 0.0001) - 0.5) * 20;
+        const z = ((flat - south) / Math.max(north - south, 0.0001) - 0.5) * 14;
         const y = depthY;
         matrix.makeTranslation(x, y, z);
         markerMesh.setMatrixAt(index, matrix);
+
+        const isBgc = float.type === 'bgc' || float.marker_type === 'bgc_float';
+        markerMesh.setColorAt(index, isBgc ? colorBgc : colorCore);
+
+        // Vertical profiling column down from surface (y=0) to 1000m depth
+        const maxDepthM = Number(float.depth_range_m?.[1] ?? float.bbox_3d?.z_max ?? 1000);
+        const bottomY = -maxDepthM * 0.012 * current.verticalExaggeration;
+        // Central vertical profiling stem
+        colLines.push(x, 0, z, x, bottomY, z);
+
+        // If bounding-box 3D is attached, render spatial footprint box in 3D
+        if (float.bbox_3d) {
+          const bx0 = ((Number(float.bbox_3d.x_min) - west) / Math.max(east - west, 0.0001) - 0.5) * 20;
+          const bx1 = ((Number(float.bbox_3d.x_max) - west) / Math.max(east - west, 0.0001) - 0.5) * 20;
+          const bz0 = ((Number(float.bbox_3d.y_min) - south) / Math.max(north - south, 0.0001) - 0.5) * 14;
+          const bz1 = ((Number(float.bbox_3d.y_max) - south) / Math.max(north - south, 0.0001) - 0.5) * 14;
+          // Top frame at surface
+          colLines.push(bx0, 0, bz0, bx1, 0, bz0);
+          colLines.push(bx1, 0, bz0, bx1, 0, bz1);
+          colLines.push(bx1, 0, bz1, bx0, 0, bz1);
+          colLines.push(bx0, 0, bz1, bx0, 0, bz0);
+          // Bottom frame
+          colLines.push(bx0, bottomY, bz0, bx1, bottomY, bz0);
+          colLines.push(bx1, bottomY, bz0, bx1, bottomY, bz1);
+          colLines.push(bx1, bottomY, bz1, bx0, bottomY, bz1);
+          colLines.push(bx0, bottomY, bz1, bx0, bottomY, bz0);
+          // Vertical pillar edges
+          colLines.push(bx0, 0, bz0, bx0, bottomY, bz0);
+          colLines.push(bx1, 0, bz0, bx1, bottomY, bz0);
+          colLines.push(bx1, 0, bz1, bx1, bottomY, bz1);
+          colLines.push(bx0, 0, bz1, bx0, bottomY, bz1);
+        } else {
+          const sz = 0.35;
+          colLines.push(x - sz, depthY, z, x + sz, depthY, z);
+          colLines.push(x, depthY, z - sz, x, depthY, z + sz);
+        }
       });
       markerMesh.instanceMatrix.needsUpdate = true;
+      if (markerMesh.instanceColor) markerMesh.instanceColor.needsUpdate = true;
+
+      floatColumns.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(colLines), 3));
+      floatColumns.geometry.computeBoundingBox();
+      floatColumns.visible = current.floats.length > 0;
       const canvas = mount.querySelector('canvas');
       if (canvas) {
         canvas.dataset.samples = String(points.length);
@@ -293,6 +348,7 @@ export default function OceanSlab({ grid = [], floats = [], variable = 'temperat
       controls.dispose();
       field.geometry.dispose();
       vectors.geometry.dispose();
+      floatColumns.geometry.dispose();
       renderer.dispose();
       mount.removeChild(renderer.domElement);
       if (typeof window !== 'undefined') delete window.__oceanSlabDebug;

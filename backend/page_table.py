@@ -377,6 +377,87 @@ class PageTable:
         return None
 
     # ------------------------------------------------------------------
+    # 3D Nearest Slice Finder — locate closest available depth / spatial slice
+    # ------------------------------------------------------------------
+
+    def find_nearest_slice(
+        self,
+        lat: float,
+        lon: float,
+        depth_m: float,
+        time_str: Optional[str] = None,
+    ) -> Optional[Tuple[Page, float]]:
+        """
+        Locate the nearest page that is currently RESIDENT or ON_DISK.
+        First prioritises depth proximity (e.g. 0-2m -> 3-4m or 0m is nearest),
+        then horizontal spatial proximity.
+        Returns (page, depth_distance_m) or None if no pages are stored.
+        """
+        lat_b = lat_bucket(lat)
+        lon_b = lon_bucket(lon)
+        target_db = depth_bucket(depth_m)
+
+        with self._lock:
+            # Candidates that are actually in RAM or on disk
+            candidates = [
+                p for p in self._pages.values()
+                if p.state in (PageState.RESIDENT, PageState.ON_DISK)
+                and (time_str is None or p.time_bucket == time_str)
+            ]
+            if not candidates:
+                # If no matching date, search all dates
+                candidates = [
+                    p for p in self._pages.values()
+                    if p.state in (PageState.RESIDENT, PageState.ON_DISK)
+                ]
+            if not candidates:
+                return None
+
+            # Sort by: 1) depth distance, 2) horizontal distance in buckets
+            def score(p: Page):
+                depth_dist = abs(p.depth_bucket - target_db) * DEPTH_BIN_M
+                spatial_dist = math.hypot(p.lat_bucket - lat_b, p.lon_bucket - lon_b)
+                return (depth_dist, spatial_dist)
+
+            best = min(candidates, key=score)
+            depth_dist_m = abs((best.depth_bucket * DEPTH_BIN_M) - depth_m)
+            return best, depth_dist_m
+
+    def get_page_state(self, lat_b: int, lon_b: int, depth_b: int, time_b: str) -> PageState:
+        """Safely read page state without creating placeholders."""
+        pid = f"{lat_b}:{lon_b}:{depth_b}:{time_b}"
+        with self._lock:
+            p = self._pages.get(pid)
+            return p.state if p else PageState.NOT_FETCHED
+
+    # ------------------------------------------------------------------
+    # Explicit Data Deletion & Store Pruning
+    # ------------------------------------------------------------------
+
+    def delete_page(self, page_id: str) -> bool:
+        """Explicitly remove a page from the table and adjust disk bytes."""
+        with self._lock:
+            p = self._pages.pop(page_id, None)
+            if p:
+                if p.state == PageState.ON_DISK:
+                    self._disk_bytes = max(0, self._disk_bytes - p.size_bytes)
+                return True
+        return False
+
+    def clear_non_pinned(self) -> int:
+        """Clear all non-pinned pages from the page table. Returns count freed."""
+        removed = 0
+        with self._lock:
+            to_remove = [pid for pid, p in self._pages.items() if not p.pinned]
+            for pid in to_remove:
+                p = self._pages.pop(pid)
+                if p.state == PageState.ON_DISK:
+                    self._disk_bytes = max(0, self._disk_bytes - p.size_bytes)
+                removed += 1
+        return removed
+
+
+    # ------------------------------------------------------------------
     # Serialisation (for /ocean/coverage)
     # ------------------------------------------------------------------
 
