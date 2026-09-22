@@ -20,8 +20,8 @@
 .depth-control { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; width: 76px; padding: 14px 8px; color: #667085; font-size: 11px; }
 .depth-control input { writing-mode: vertical-lr; direction: rtl; height: 240px; accent-color: #0d7377; }
 .depth-control strong { color: #1c1c2e; font-size: 12px; }
-.slab-frame { position: relative; flex: 1 1 auto; min-width: 0; height: 440px; }
-.ocean-slab-canvas { width: 100%; height: 440px; min-height: 0; }
+.slab-frame { position: relative; flex: 1 1 auto; min-width: 0; height: 100%; min-height: 0; }
+.ocean-slab-canvas { width: 100%; height: 100%; min-height: 0; }
 .colorbar { position: absolute; right: 14px; top: 14px; width: 128px; color: #475467; font-size: 11px; background: rgba(255,255,255,.92); padding: 8px; border: 1px solid #e5e7eb; }
 .colorbar-gradient { height: 8px; margin: 7px 0 4px; background: linear-gradient(90deg, #2166ac, #f7f7f7, #b2182b); }
 .colorbar-chlorophyll, .colorbar-nitrate { background: linear-gradient(90deg, #f7fcf5, #41ab5d, #005a32); }

@@ -40,11 +40,68 @@ function vectorMagnitude(point) {
   return Math.hypot(Number(point?.current_u_ms ?? 0), Number(point?.current_v_ms ?? 0));
 }
 
+function fitCameraToSelection(camera, controls, objectOrBounds, padding = 1.75) {
+  // If the canvas/container dimensions are not settled, defer the fit.
+  if (!camera.aspect || camera.aspect === 1) {
+    requestAnimationFrame(() => fitCameraToSelection(camera, controls, objectOrBounds, padding));
+    return;
+  }
+
+  let box;
+  if (objectOrBounds.isObject3D) {
+    box = new THREE.Box3().setFromObject(objectOrBounds);
+  } else {
+    box = objectOrBounds;
+  }
+
+  if (box.isEmpty()) return;
+
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+
+  // The slab geometry lies in the XZ plane (X = longitude, Z = latitude, Y = depth offset).
+  // halfWidth = half X extent, halfHeight = half Z extent (the latitude dimension).
+  const halfWidth = size.x / 2;
+  const halfHeight = size.z / 2;
+
+  const vFov = THREE.MathUtils.degToRad(camera.fov);
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+
+  // Compute minimum distance required to see the full width and height.
+  const distanceV = halfHeight / Math.tan(vFov / 2);
+  const distanceH = halfWidth / Math.tan(hFov / 2);
+
+  // Take the larger (more constraining) dimension and apply comfortable framing padding.
+  let cameraDistance = Math.max(distanceV, distanceH) * padding;
+
+  // Prevent absurdly close camera on degenerate/tiny geometry.
+  cameraDistance = Math.max(cameraDistance, 10);
+
+  // Preserve the existing useful 3D viewing angle from the original (0, 18, 28) camera position.
+  const distNorm = Math.sqrt(18 * 18 + 28 * 28);
+  const dirY = 18 / distNorm;
+  const dirZ = 28 / distNorm;
+  
+  const offset = new THREE.Vector3(0, cameraDistance * dirY, cameraDistance * dirZ);
+  
+  camera.position.copy(center).add(offset);
+  controls.target.copy(center);
+  
+  // Update near/far planes to suit the new scene scale.
+  camera.near = Math.max(0.1, cameraDistance / 100);
+  camera.far = cameraDistance * 100;
+  
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
 export default function OceanSlab({ grid = [], floats = [], variable = 'temperature', depth = 0, dataDepth = depth, bounds, opacity = 0.92, verticalExaggeration = 1, threshold, onSelectMarker }) {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const dataRef = useRef({ grid, floats, variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold });
   const lastGridRef = useRef(grid);
+  const lastFitSignatureRef = useRef('');
+  
   useEffect(() => {
     dataRef.current = { grid, floats, variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold };
   }, [grid, floats, variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold]);
@@ -54,12 +111,13 @@ export default function OceanSlab({ grid = [], floats = [], variable = 'temperat
     if (!mount) return undefined;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#f8fafb');
+    // White background so the slab sits on a clean, light scientific surface.
+    scene.background = new THREE.Color('#F8FAFC');
     const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
     camera.position.set(0, 18, 28);
     camera.lookAt(0, 0, 0);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
-    renderer.setClearColor('#f8fafb', 1);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+    renderer.setClearColor('#F8FAFC', 1);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     mount.appendChild(renderer.domElement);
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -152,9 +210,20 @@ export default function OceanSlab({ grid = [], floats = [], variable = 'temperat
       vectors.visible = current.variable === 'currents';
       field.material.opacity = current.opacity;
       slice.position.y = depthY;
-      controls.target.y = depthY;
-      camera.position.y = depthY + 18;
-      controls.update();
+      
+      // Auto-fit camera to the computed bounding box only when meaningful data changes
+      const currentSignature = `${current.variable}-${current.depth}-${current.dataDepth}-${JSON.stringify(currentBounds)}`;
+      const shouldFit = lastFitSignatureRef.current !== currentSignature;
+      
+      if (shouldFit && field.geometry.boundingBox) {
+        lastFitSignatureRef.current = currentSignature;
+        scene.updateMatrixWorld(true);
+        fitCameraToSelection(camera, controls, field);
+      } else {
+        controls.target.y = depthY;
+        controls.update();
+      }
+      
       markerMesh.count = Math.max(0, Math.min(current.floats.length, markerMesh.instanceMatrix.count));
       const matrix = new THREE.Matrix4();
       current.floats.forEach((float, index) => {
@@ -182,12 +251,21 @@ export default function OceanSlab({ grid = [], floats = [], variable = 'temperat
     };
     update();
 
+    let resizeTimeout;
     const resize = () => {
       const width = mount.clientWidth || 1;
       const height = mount.clientHeight || 1;
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height, false);
+      
+      if (lastFitSignatureRef.current) {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+          scene.updateMatrixWorld(true);
+          fitCameraToSelection(camera, controls, field);
+        }, 150);
+      }
     };
     resize();
     const observer = new ResizeObserver(resize);
