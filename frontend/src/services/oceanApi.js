@@ -113,3 +113,55 @@ export async function getDateInfo() {
     };
   }
 }
+
+/**
+ * Upload an offline ocean dataset (.nc, .csv)
+ */
+export async function uploadDatasetFile(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await fetch(`${API_BASE}/api/upload-dataset`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    let errDetail = 'Upload failed';
+    try {
+      const data = await res.json();
+      errDetail = data.detail || errDetail;
+    } catch {}
+    throw new Error(errDetail);
+  }
+  return res.json();
+}
+
+/**
+ * List all user-uploaded datasets
+ */
+export async function getUploadedDatasets() {
+  const res = await fetch(`${API_BASE}/api/datasets`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return data.datasets || [];
+}
+
+/**
+ * Get spatial grid snapshot from an uploaded dataset
+ */
+export async function getUploadedDatasetSnapshot(datasetId, variable = '', depth = 0) {
+  const params = new URLSearchParams();
+  if (variable) params.append('variable', variable);
+  if (depth !== undefined) params.append('depth', depth.toString());
+
+  const res = await fetch(`${API_BASE}/api/datasets/${datasetId}/snapshot?${params.toString()}`);
+  if (!res.ok) {
+    let errDetail = 'Failed to fetch dataset snapshot';
+    try {
+      const data = await res.json();
+      errDetail = data.detail || errDetail;
+    } catch {}
+    throw new Error(errDetail);
+  }
+  return res.json();
+}

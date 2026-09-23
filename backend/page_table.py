@@ -50,6 +50,8 @@ class PageState(str, Enum):
     ON_DISK     = "ON_DISK"      # in .zarr store, not yet in L1 — 5-25 ms
     FETCHING    = "FETCHING"     # actively streaming from origin API right now
     NOT_FETCHED = "NOT_FETCHED"  # doesn't exist anywhere locally
+    FAILED      = "FAILED"       # fetch attempted and failed — will retry on next request
+    PARTIAL     = "PARTIAL"      # chunk partially written — available but incomplete
 
 
 # ---------------------------------------------------------------------------
@@ -201,9 +203,10 @@ class PageTable:
                     for db in depth_bs:
                         page = self._get_or_create(lb, ln, db, time_str)
                         page.last_access = time.time()
-                        if page.state in (PageState.RESIDENT, PageState.ON_DISK):
+                        if page.state in (PageState.RESIDENT, PageState.ON_DISK, PageState.PARTIAL):
                             served.append(page)
                         else:
+                            # NOT_FETCHED, FETCHING (dedupe — caller checks), FAILED (retry)
                             missing.append(page)
 
         return served, missing
@@ -213,9 +216,10 @@ class PageTable:
     # ------------------------------------------------------------------
 
     def mark_fetching(self, pages: Sequence[Page]) -> None:
+        """Transition NOT_FETCHED or FAILED pages → FETCHING."""
         with self._lock:
             for p in pages:
-                if p.state == PageState.NOT_FETCHED:
+                if p.state in (PageState.NOT_FETCHED, PageState.FAILED):
                     p.state = PageState.FETCHING
 
     def mark_on_disk(self, page_id: str, size_bytes: int = 0) -> None:
@@ -240,6 +244,26 @@ class PageTable:
         with self._lock:
             if page_id in self._pages and self._pages[page_id].state == PageState.RESIDENT:
                 self._pages[page_id].state = PageState.ON_DISK
+
+    def mark_failed(self, pages: Sequence[Page]) -> None:
+        """
+        Transition FETCHING → FAILED for pages whose origin fetch failed.
+        FAILED pages are treated as missing (retry-eligible) by diff().
+        """
+        with self._lock:
+            for p in pages:
+                if p.state == PageState.FETCHING:
+                    p.state = PageState.FAILED
+
+    def mark_partial(self, pages: Sequence[Page]) -> None:
+        """
+        Transition FETCHING → PARTIAL for pages where only a chunk has been written.
+        PARTIAL pages appear in 'served' so existing data is visible immediately.
+        """
+        with self._lock:
+            for p in pages:
+                if p.state == PageState.FETCHING:
+                    p.state = PageState.PARTIAL
 
     def touch(self, page_id: str) -> None:
         """Update last_access timestamp (called on every read)."""
@@ -486,6 +510,8 @@ class PageTable:
                 "lat_bucket":   p.lat_bucket,
                 "lon_bucket":   p.lon_bucket,
                 "depth_bucket": p.depth_bucket,
+                "lat_range":    f"{p.lat_min:.1f}-{p.lat_max:.1f}",
+                "lon_range":    f"{p.lon_min:.1f}-{p.lon_max:.1f}",
                 "depth_range":  f"{p.depth_min:.0f}-{p.depth_max:.0f}",
                 "time_bucket":  p.time_bucket,
                 "state":        p.state.value,
@@ -503,13 +529,17 @@ class PageTable:
         with self._lock:
             counts = {s.value: 0 for s in PageState}
             pinned_count = 0
+            failed_count = 0
             for p in self._pages.values():
                 counts[p.state.value] += 1
                 if p.pinned:
                     pinned_count += 1
+                if p.state == PageState.FAILED:
+                    failed_count += 1
         return {
             "total_pages":   len(self._pages),
             "pinned_pages":  pinned_count,
+            "failed_pages":  failed_count,
             "disk_bytes":    self._disk_bytes,
             "cap_bytes":     self.cap_bytes,
             "disk_used_pct": round(self._disk_bytes / self.cap_bytes * 100, 1),

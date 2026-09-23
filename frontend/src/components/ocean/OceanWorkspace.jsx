@@ -17,22 +17,29 @@ const VARIABLES = [
 ];
 
 function selectedValue(point, variable) {
-  if (variable === 'currents') return Math.hypot(Number(point.current_u_ms ?? 0), Number(point.current_v_ms ?? 0));
+  if (variable === 'currents') {
+    if (point?.current_u_ms == null && point?.current_v_ms == null) return NaN;
+    return Math.hypot(Number(point?.current_u_ms ?? 0), Number(point?.current_v_ms ?? 0));
+  }
   const fields = {
     temperature: 'temperature_c', salinity: 'salinity_psu', chlorophyll: 'chlorophyll_mgl',
     oxygen: 'oxygen_mmolm3', ph: 'ph', nitrate: 'nitrate_mmolm3', pco2: 'pco2_uatm',
   };
-  return Number(point[fields[variable]]);
+  const val = point?.[fields[variable]];
+  if (val == null || val === '') return NaN;
+  const num = Number(val);
+  return Number.isFinite(num) ? num : NaN;
 }
 
 function Coverage({ coverage }) {
   return <div className="ocean-coverage"><span>Data Coverage</span>{DEPTH_BINS.map((depth) => <span className="coverage-item" key={depth}><i className={`coverage-dot ${String(coverage?.[depth] || 'NOT_FETCHED').toLowerCase().replace('_', '-')}`} />{depth}m</span>)}</div>;
 }
 
-export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = true }) {
+export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = true, bbox, region }) {
   const { userMode, selectedVariable, selectedDepth, selectedDate, heatmapOpacity } = useApp();
   const dispatch = useAppDispatch();
-  const { gridData, snapshotData } = useOceanSnapshot('indianOcean');
+  const activeRegion = bbox || region || 'indianOcean';
+  const { gridData, snapshotData } = useOceanSnapshot(activeRegion);
   const { floats } = useArgoFloats(200);
   const [coverage, setCoverage] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -43,12 +50,18 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
   const [verticalExaggeration, setVerticalExaggeration] = useState(1);
   const [threshold, setThreshold] = useState({ enabled: false, operator: '>', value: 28, tolerance: 0.05 });
   const [anomalyOn, setAnomalyOn] = useState(false);
-  const viewport = useMemo(() => snapshotData?.bbox ? {
-    south: snapshotData.bbox.lat_min,
-    north: snapshotData.bbox.lat_max,
-    west: snapshotData.bbox.lon_min,
-    east: snapshotData.bbox.lon_max,
-  } : null, [snapshotData?.bbox]);
+  const viewport = useMemo(() => {
+    if (snapshotData?.bbox) {
+      return {
+        south: snapshotData.bbox.lat_min,
+        north: snapshotData.bbox.lat_max,
+        west: snapshotData.bbox.lon_min,
+        east: snapshotData.bbox.lon_max,
+      };
+    }
+    if (bbox && bbox.south !== undefined) return bbox;
+    return null;
+  }, [snapshotData?.bbox, bbox]);
   const handleMarkerSelect = useCallback((marker) => {
     setProfile(marker.id || marker.platform_number);
   }, []);

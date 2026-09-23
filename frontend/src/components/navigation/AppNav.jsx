@@ -7,9 +7,10 @@ import { API_BASE } from '../../config/api';
 import ModeSwitcher from '../mode/ModeSwitcher';
 
 const navLinks = [
-  { to: '/explorer',      label: 'Explore',       icon: Waves },
-  { to: '/explorer?mode=analyze', label: 'Analyze', icon: BarChart3 },
-  { to: '/about',         label: 'About',         icon: BookOpen },
+  { to: '/explorer',              label: 'Explore',       icon: Waves },
+  { to: '/explorer?mode=analyze', label: 'Analyze',       icon: BarChart3 },
+  { to: '/datasets',              label: 'Datasets',      icon: Database },
+  { to: '/about',                 label: 'About',         icon: BookOpen },
 ];
 
 export default function AppNav() {

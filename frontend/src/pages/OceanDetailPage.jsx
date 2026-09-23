@@ -56,14 +56,31 @@ export default function OceanDetailPage() {
   const initialLon  = location.state?.lon  ?? searchParams.get('lon')  ?? null;
   const initialDepth = Number(location.state?.depth ?? searchParams.get('depth') ?? 0);
   const initialDate  = location.state?.date ?? searchParams.get('date') ?? null;
+  const initialBbox  = location.state?.bbox ?? null;
 
-  // Seed AppContext with the incoming depth + date so OceanWorkspace picks them up
+  const effectiveBbox = useMemo(() => {
+    if (initialBbox) return initialBbox;
+    if (initialLat != null && initialLon != null) {
+      return {
+        south: Math.max(-90, Number(initialLat) - 5),
+        north: Math.min(90, Number(initialLat) + 5),
+        west: Math.max(-180, Number(initialLon) - 5),
+        east: Math.min(180, Number(initialLon) + 5),
+      };
+    }
+    return null;
+  }, [initialBbox, initialLat, initialLon]);
+
+  // Seed AppContext with incoming depth + date + activePointQuery
   useEffect(() => {
     if (Number.isFinite(initialDepth)) {
       dispatch({ type: 'SET_DEPTH', payload: initialDepth });
     }
     if (initialDate) {
       dispatch({ type: 'SET_DATE', payload: initialDate });
+    }
+    if (initialLat != null && initialLon != null) {
+      dispatch({ type: 'SET_ACTIVE_POINT_QUERY', payload: { lat: Number(initialLat), lon: Number(initialLon) } });
     }
   }, []); // run once on mount — useDateControls may override date later if server has a newer one
 
@@ -165,6 +182,8 @@ export default function OceanDetailPage() {
             showMap={false}
             selectedPoint={activePointQuery}
             onPointClick={handlePointClick}
+            bbox={effectiveBbox}
+            region={regionName}
           />
         </div>
 

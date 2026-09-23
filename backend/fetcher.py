@@ -28,7 +28,7 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import xarray as xr
@@ -56,6 +56,36 @@ ARGO_ZARR_PATH   = _OUTPUT_DIR / "argo_data.zarr"
 # Safety cap: max depth span per single fetch request — full ocean water column
 MAX_FETCH_DEPTH_SPAN = 6000.0
 
+# Spatial chunking: large bounding boxes are split into smaller tiles before
+# sending to Copernicus. Copernicus becomes very slow (and often times out) for
+# requests > ~5°×5°. Using 4° keeps each sub-request well within limits while
+# still covering large regions by iterating over tiles.
+MAX_BBOX_CHUNK_DEG: float = float(os.environ.get("OCEAN_CHUNK_DEG", "4.0"))
+
+
+def _split_bbox_into_chunks(
+    lat_min: float, lat_max: float,
+    lon_min: float, lon_max: float,
+    chunk_deg: float = MAX_BBOX_CHUNK_DEG,
+) -> List[Tuple[float, float, float, float]]:
+    """
+    Split a possibly-large bounding box into a list of bounded sub-tiles.
+    Returns a list of (lat_min, lat_max, lon_min, lon_max) tuples.
+    Each tile is at most chunk_deg° on each side.
+    If the bbox is already small enough, returns a single-element list.
+    """
+    tiles = []
+    lat = lat_min
+    while lat < lat_max - 1e-6:
+        lat_hi = min(lat + chunk_deg, lat_max)
+        lon = lon_min
+        while lon < lon_max - 1e-6:
+            lon_hi = min(lon + chunk_deg, lon_max)
+            tiles.append((lat, lat_hi, lon, lon_hi))
+            lon = lon_hi
+        lat = lat_hi
+    return tiles or [(lat_min, lat_max, lon_min, lon_max)]
+
 # ---------------------------------------------------------------------------
 # Credentials
 # ---------------------------------------------------------------------------
@@ -82,9 +112,12 @@ def credentials_present() -> bool:
 _COPERNICUS_SEM: Optional[asyncio.Semaphore] = None   # initialised lazily (needs running loop)
 _COPERNICUS_MAX_CONCURRENT = 2
 
-# Global background fetch queue — tracks active fetches to prevent duplicate work
-_active_fetch_keys: set = set()
-_active_fetch_lock = asyncio.Lock() if False else None  # will be created lazily
+# Hard timeout per download group — real Copernicus transfers can take several
+# minutes for large regions; 120s was too short.
+# asyncio.wait_for cancels the *awaiting coroutine* but the run_in_executor thread
+# cannot be force-stopped. After FETCH_TIMEOUT_SECONDS the task is marked FAILED
+# so the request can be retried rather than staying FETCHING forever.
+FETCH_TIMEOUT_SECONDS: float = float(os.environ.get("OCEAN_FETCH_TIMEOUT", "300"))
 
 
 def _get_copernicus_sem() -> asyncio.Semaphore:
@@ -170,6 +203,7 @@ async def fetch_phy_range(
     variables: Optional[List[str]] = None,
     page_table=None,
     missing_pages=None,
+    on_tile_complete=None,
 ) -> Dict[str, Any]:
     """
     Fetch physics variables from the date-appropriate Copernicus dataset(s)
@@ -181,6 +215,53 @@ async def fetch_phy_range(
     if not credentials_present():
         logger.warning("[PHY] Copernicus credentials not found — skipping fetch")
         return {"status": "skipped", "reason": "no_credentials"}
+
+    # ---- Spatial chunking ----
+    # Split large bboxes into bounded tiles so each Copernicus request stays fast.
+    bbox_lat = lat_max - lat_min
+    bbox_lon = lon_max - lon_min
+    if bbox_lat > MAX_BBOX_CHUNK_DEG or bbox_lon > MAX_BBOX_CHUNK_DEG:
+        tiles = _split_bbox_into_chunks(lat_min, lat_max, lon_min, lon_max)
+        logger.info(
+            f"[PHY] Large bbox ({bbox_lat:.1f}°lat × {bbox_lon:.1f}°lon) → "
+            f"splitting into {len(tiles)} tiles of ≤{MAX_BBOX_CHUNK_DEG}°"
+        )
+        tile_tasks = []
+        for (tlat_min, tlat_max, tlon_min, tlon_max) in tiles:
+            async def _run_tile(tlat_min, tlat_max, tlon_min, tlon_max):
+                res = await fetch_phy_range(
+                    tlat_min, tlat_max, tlon_min, tlon_max,
+                    depth_min=depth_min, depth_max=depth_max,
+                    date_str=date_str, variables=variables,
+                    page_table=None, missing_pages=None,
+                    on_tile_complete=on_tile_complete,
+                )
+                if isinstance(res, dict) and res.get("status") == "success":
+                    if on_tile_complete:
+                        if asyncio.iscoroutinefunction(on_tile_complete):
+                            await on_tile_complete(tlat_min, tlat_max, tlon_min, tlon_max)
+                        else:
+                            on_tile_complete(tlat_min, tlat_max, tlon_min, tlon_max)
+                return res
+            tile_tasks.append(asyncio.create_task(_run_tile(tlat_min, tlat_max, tlon_min, tlon_max)))
+        tile_results = await asyncio.gather(*tile_tasks, return_exceptions=True)
+        successes = [r for r in tile_results if isinstance(r, dict) and r.get("status") == "success"]
+        errors    = [r for r in tile_results if not isinstance(r, dict) or r.get("status") != "success"]
+        if errors:
+            logger.warning(f"[PHY] {len(errors)}/{len(tiles)} tile fetches failed")
+        if successes:
+            if page_table and missing_pages:
+                # All tiles written to Zarr; now update page table
+                zarr_size = sum(f.stat().st_size for f in PHY_ZARR_PATH.rglob("*") if f.is_file()) if PHY_ZARR_PATH.exists() else 0
+                per_page = zarr_size // max(1, len(missing_pages))
+                for p in missing_pages:
+                    page_table.mark_on_disk(p.page_id, size_bytes=per_page)
+                if page_table.needs_eviction():
+                    page_table.evict_lru()
+            return {"status": "success", "date": date_str, "tiles": len(successes)}
+        if page_table and missing_pages:
+            page_table.mark_failed(missing_pages)
+        return {"status": "error", "error": "All tile fetches failed", "date": date_str}
 
     depth_span = depth_max - depth_min
     if depth_span > MAX_FETCH_DEPTH_SPAN:
@@ -228,12 +309,15 @@ async def fetch_phy_range(
                                 overwrite=True,
                             ),
                         ),
-                        timeout=120.0,  # 2-minute cap per group
+                        timeout=FETCH_TIMEOUT_SECONDS,
                     )
                 if tmp_nc.exists():
                     return xr.open_dataset(str(tmp_nc)).load()
             except asyncio.TimeoutError:
-                logger.error(f"[PHY TIMEOUT for {did}] exceeded 120s")
+                logger.error(
+                    f"[PHY TIMEOUT for {did}] exceeded {FETCH_TIMEOUT_SECONDS:.0f}s — "
+                    "executor thread will continue in background but pages marked FAILED"
+                )
             except Exception as e:
                 logger.error(f"[PHY FETCH ERROR for {did}] {e}")
             return None
@@ -248,9 +332,7 @@ async def fetch_phy_range(
         if not ds_parts:
             if page_table and missing_pages:
                 from page_table import PageState
-                for p in missing_pages:
-                    if p.state.value == "FETCHING":
-                        p.state = PageState.NOT_FETCHED
+                page_table.mark_failed(missing_pages)
             return {"status": "error", "error": "All physics dataset fetches failed", "date": date_str}
 
 
@@ -266,12 +348,13 @@ async def fetch_phy_range(
                 logger.warning(f"[PHY merge parts failed: {m_err}], using primary part")
                 ds_new = ds_parts[0]
 
-        zarr_size = _write_to_zarr(ds_new, PHY_ZARR_PATH)
+        loop = asyncio.get_event_loop()
+        zarr_size = await loop.run_in_executor(None, _write_to_zarr, ds_new, PHY_ZARR_PATH)
 
         # Backward-compat: write thetao to ocean_data.zarr
         if "thetao" in ds_new:
             try:
-                _write_to_zarr(ds_new[["thetao"]], OCEAN_ZARR_PATH)
+                await loop.run_in_executor(None, _write_to_zarr, ds_new[["thetao"]], OCEAN_ZARR_PATH)
             except Exception as bc_err:
                 logger.debug(f"[PHY] compat ocean_data.zarr write failed: {bc_err}")
 
@@ -312,6 +395,7 @@ async def fetch_bgc_range(
     variables: Optional[List[str]] = None,
     page_table=None,
     missing_pages=None,
+    on_tile_complete=None,
 ) -> Dict[str, Any]:
     """
     Fetch BGC variables from the date-appropriate Copernicus BGC dataset(s)
@@ -321,6 +405,51 @@ async def fetch_bgc_range(
 
     if not credentials_present():
         return {"status": "skipped", "reason": "no_credentials"}
+
+    # ---- Spatial chunking ----
+    bbox_lat = lat_max - lat_min
+    bbox_lon = lon_max - lon_min
+    if bbox_lat > MAX_BBOX_CHUNK_DEG or bbox_lon > MAX_BBOX_CHUNK_DEG:
+        tiles = _split_bbox_into_chunks(lat_min, lat_max, lon_min, lon_max)
+        logger.info(
+            f"[BGC] Large bbox ({bbox_lat:.1f}°lat × {bbox_lon:.1f}°lon) → "
+            f"splitting into {len(tiles)} tiles of ≤{MAX_BBOX_CHUNK_DEG}°"
+        )
+        tile_tasks = []
+        for (tlat_min, tlat_max, tlon_min, tlon_max) in tiles:
+            async def _run_bgc_tile(tlat_min, tlat_max, tlon_min, tlon_max):
+                res = await fetch_bgc_range(
+                    tlat_min, tlat_max, tlon_min, tlon_max,
+                    depth_min=depth_min, depth_max=depth_max,
+                    date_str=date_str, variables=variables,
+                    page_table=None, missing_pages=None,
+                    on_tile_complete=on_tile_complete,
+                )
+                if isinstance(res, dict) and res.get("status") == "success":
+                    if on_tile_complete:
+                        if asyncio.iscoroutinefunction(on_tile_complete):
+                            await on_tile_complete(tlat_min, tlat_max, tlon_min, tlon_max)
+                        else:
+                            on_tile_complete(tlat_min, tlat_max, tlon_min, tlon_max)
+                return res
+            tile_tasks.append(asyncio.create_task(_run_bgc_tile(tlat_min, tlat_max, tlon_min, tlon_max)))
+        tile_results = await asyncio.gather(*tile_tasks, return_exceptions=True)
+        successes = [r for r in tile_results if isinstance(r, dict) and r.get("status") == "success"]
+        errors    = [r for r in tile_results if not isinstance(r, dict) or r.get("status") != "success"]
+        if errors:
+            logger.warning(f"[BGC] {len(errors)}/{len(tiles)} tile fetches failed")
+        if successes:
+            if page_table and missing_pages:
+                zarr_size = sum(f.stat().st_size for f in BGC_ZARR_PATH.rglob("*") if f.is_file()) if BGC_ZARR_PATH.exists() else 0
+                per_page = zarr_size // max(1, len(missing_pages))
+                for p in missing_pages:
+                    page_table.mark_on_disk(p.page_id, size_bytes=per_page)
+                if page_table.needs_eviction():
+                    page_table.evict_lru()
+            return {"status": "success", "date": date_str, "tiles": len(successes)}
+        if page_table and missing_pages:
+            page_table.mark_failed(missing_pages)
+        return {"status": "error", "error": "All BGC tile fetches failed", "date": date_str}
 
     fetch_vars = variables or BGC_VARIABLES
     groups = group_variables_by_dataset(fetch_vars, date_str)
@@ -363,12 +492,15 @@ async def fetch_bgc_range(
                                 overwrite=True,
                             ),
                         ),
-                        timeout=120.0,  # 2-minute cap per group
+                        timeout=FETCH_TIMEOUT_SECONDS,
                     )
                 if tmp_nc.exists():
                     return xr.open_dataset(str(tmp_nc)).load()
             except asyncio.TimeoutError:
-                logger.error(f"[BGC TIMEOUT for {did}] exceeded 120s")
+                logger.error(
+                    f"[BGC TIMEOUT for {did}] exceeded {FETCH_TIMEOUT_SECONDS:.0f}s — "
+                    "executor thread will continue in background but pages marked FAILED"
+                )
             except Exception as e:
                 logger.error(f"[BGC FETCH ERROR for {did}] {e}")
             return None
@@ -382,10 +514,7 @@ async def fetch_bgc_range(
 
         if not ds_parts:
             if page_table and missing_pages:
-                from page_table import PageState
-                for p in missing_pages:
-                    if p.state.value == "FETCHING":
-                        p.state = PageState.NOT_FETCHED
+                page_table.mark_failed(missing_pages)
             return {"status": "error", "error": "All BGC dataset fetches failed", "date": date_str}
 
 
@@ -401,7 +530,8 @@ async def fetch_bgc_range(
                 logger.warning(f"[BGC merge parts failed: {m_err}], using primary part")
                 ds_new = ds_parts[0]
 
-        zarr_size = _write_to_zarr(ds_new, BGC_ZARR_PATH)
+        loop = asyncio.get_event_loop()
+        zarr_size = await loop.run_in_executor(None, _write_to_zarr, ds_new, BGC_ZARR_PATH)
         for p_ds in ds_parts:
             p_ds.close()
         merge_ms = round((time.perf_counter() - t0) * 1000 - fetch_ms, 1)
