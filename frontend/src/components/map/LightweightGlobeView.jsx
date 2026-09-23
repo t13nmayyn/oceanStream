@@ -146,11 +146,8 @@ const LightweightGlobeView = forwardRef(function LightweightGlobeView(
 
   const handleMarkerClick = useCallback((d) => {
     globeRef.current?.pointOfView({ lat: d.lat, lng: d.lng, altitude: 1.2 }, 1200);
-    if (d.isSelectedPoint) {
-      onPointSelect?.(d);
-    } else {
-      onMarkerClick?.(d);
-    }
+    onPointSelect?.(d);
+    onMarkerClick?.(d);
   }, [onMarkerClick, onPointSelect]);
 
   /**
@@ -262,6 +259,7 @@ const LightweightGlobeView = forwardRef(function LightweightGlobeView(
         lng: selectedPoint.lng,
         depth: selectedPoint.depth || 0,
         isSelectedPoint: true,
+        bbox: selectedPoint.bbox,
       },
     ];
   }, [selectedPoint]);

@@ -33,7 +33,7 @@ if str(_BACKEND_DIR) not in sys.path:
 
 import numpy as np
 import xarray as xr
-from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -119,8 +119,11 @@ _ai.register_ai_routes(app)
 
 # ==============================================================================
 # L1 in-memory cache  (key → {data, ts})
+# Hard cap at L1_MAX_ENTRIES to prevent unbounded growth from pre-warm accumulation.
+# When cap is hit, the oldest 10% of entries are evicted before inserting.
 # ==============================================================================
-L1_TTL_SECONDS = 300   # 5-minute TTL
+L1_TTL_SECONDS  = 300   # 5-minute TTL
+L1_MAX_ENTRIES  = 500   # max number of L1 cache entries before LRU eviction
 _l1: Dict[str, Dict] = {}
 
 def l1_get(key: str) -> Optional[Any]:
@@ -130,6 +133,12 @@ def l1_get(key: str) -> Optional[Any]:
     return None
 
 def l1_set(key: str, data: Any) -> None:
+    if len(_l1) >= L1_MAX_ENTRIES:
+        # Evict the oldest 10% of entries by access timestamp
+        evict_count = max(1, L1_MAX_ENTRIES // 10)
+        oldest = sorted(_l1.items(), key=lambda x: x[1]["ts"])[:evict_count]
+        for k, _ in oldest:
+            _l1.pop(k, None)
     _l1[key] = {"data": data, "ts": time.time()}
 
 def l1_clear() -> int:
@@ -602,13 +611,25 @@ def _read_phy_grid(
             region = region.sel({lc: lats, lnc: lons})
 
         var_data = {}
+        n_lats, n_lons = len(lats), len(lons)
         for src, dst in [("thetao","temperature_c"),("so","salinity_psu"),
                           ("uo","current_u_ms"),("vo","current_v_ms"),("zos","sea_level_m")]:
             if src in region:
                 arr = region[src].values
-                while arr.ndim > 2:
+                # Squeeze only size-1 leading dimensions (time=1, depth=1 after .sel())
+                # Never strip a dim whose size > 1 — that would discard spatial data.
+                while arr.ndim > 2 and arr.shape[0] == 1:
                     arr = arr[0]
-                var_data[dst] = arr
+                if arr.ndim > 2:
+                    # Still too many dims: take first index along each extra leading dim
+                    while arr.ndim > 2:
+                        arr = arr[0]
+                if arr.ndim == 2 and arr.shape == (n_lats, n_lons):
+                    var_data[dst] = arr
+                elif arr.ndim == 2 and arr.shape == (n_lons, n_lats):
+                    var_data[dst] = arr.T   # transposed — fix orientation
+                else:
+                    logger.debug(f"[grid] {src} arr shape {arr.shape} != ({n_lats},{n_lons}), skipping")
 
         rows = []
         for i, la in enumerate(lats):
@@ -831,6 +852,7 @@ def _notify_fetch_complete(page_key: str, lat: float, lon: float, depth: float, 
 async def _bg_fetch_point(page_key: str, lat: float, lon: float, depth: float, date_str: str):
     """Background task: fetch PHY+BGC for a point, update page table + L1."""
 
+    missing = []
     try:
         cache_stats["fetches"] += 1
         lat_b  = int(math.floor(lat / LAT_BIN_DEG))
@@ -854,8 +876,8 @@ async def _bg_fetch_point(page_key: str, lat: float, lon: float, depth: float, d
         await loop.run_in_executor(None, _reload_phy_zarr)
         await loop.run_in_executor(None, _reload_bgc_zarr)
 
-        phy_data = _read_phy_point(lat, lon, depth, date_str)
-        bgc_data = _read_bgc_point(lat, lon, depth, date_str)
+        phy_data = await loop.run_in_executor(None, _read_phy_point, lat, lon, depth, date_str)
+        bgc_data = await loop.run_in_executor(None, _read_bgc_point, lat, lon, depth, date_str)
         l1_set(page_key, {"physics": phy_data, "bgc": bgc_data})
 
         # Promote the correct page bucket IDs (not the point key)
@@ -870,6 +892,8 @@ async def _bg_fetch_point(page_key: str, lat: float, lon: float, depth: float, d
         logger.info(f"[BG FETCH] done for {page_key}")
     except Exception as e:
         logger.error(f"[BG FETCH] failed for {page_key}: {e}")
+        if missing:
+            page_table.mark_failed(missing)
     finally:
         _fetch_tasks.pop(page_key, None)
 
@@ -907,17 +931,20 @@ def _schedule_bg_range_fetch(
 
     async def _runner():
         try:
+            async def _on_tile(tlat_min, tlat_max, tlon_min, tlon_max):
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, _reload_phy_zarr)
+                _notify_fetch_complete(task_key, (tlat_min + tlat_max) / 2, (tlon_min + tlon_max) / 2, depth, date_str)
+
             cache_stats["fetches"] += 1
             res = await _fetcher.fetch_phy_range(
                 lat_min, lat_max, lon_min, lon_max,
                 depth_min=depth_min, depth_max=depth_max,
                 date_str=date_str,
                 page_table=page_table,
+                on_tile_complete=_on_tile
             )
             if res.get("status") == "success":
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, _reload_phy_zarr)
-                _notify_fetch_complete(task_key, (lat_min + lat_max) / 2, (lon_min + lon_max) / 2, depth, date_str)
                 logger.info(f"[BG RANGE FETCH] Ingested real Copernicus data for {task_key}")
         except Exception as e:
             logger.error(f"[BG RANGE FETCH] Failed for {task_key}: {e}")
@@ -930,12 +957,18 @@ def _schedule_bg_range_fetch(
 
 
 async def _get_bbox_floats(lat_min: float, lat_max: float, lon_min: float, lon_max: float, date_str: str) -> List[Dict]:
-    """Retrieve nearby active Argo float observations for 3D overlay."""
+    """Retrieve nearby active Argo float observations for 3D overlay with non-blocking 3s timeout."""
     try:
         center_lat = (lat_min + lat_max) / 2.0
         center_lon = (lon_min + lon_max) / 2.0
         radius_km = min(800.0, max(100.0, _haversine_km(lat_min, lon_min, lat_max, lon_max) / 1.8))
-        return await _argo.find_nearest_floats(center_lat, center_lon, radius_km=radius_km, type="both", date_str=date_str)
+        return await asyncio.wait_for(
+            _argo.find_nearest_floats(center_lat, center_lon, radius_km=radius_km, type="both", date_str=date_str),
+            timeout=3.0,
+        )
+    except asyncio.TimeoutError:
+        logger.debug("[bbox_floats] Argo float fetch timed out (3s cap), continuing without floats")
+        return []
     except Exception as e:
         logger.debug(f"[bbox_floats] failed: {e}")
         return []
@@ -1021,31 +1054,33 @@ async def _prewarm_home_regions():
         logger.info("[PRE-WARM] Phase 2 skipped — no Copernicus credentials")
         return
 
-    logger.info("[PRE-WARM] Phase 2: fetching real Copernicus data for home tiles (background)")
-    for label, lat_min, lat_max, lon_min, lon_max in PREWARM_REGIONS:
+    logger.info("[PRE-WARM] Phase 2: scheduling background Copernicus tasks for home tiles")
+
+    async def _prewarm_region_task(lbl: str, l_min: float, l_max: float, ln_min: float, ln_max: float, d_str: str):
         try:
             phy_res = await _fetcher.fetch_phy_range(
-                lat_min, lat_max, lon_min, lon_max,
+                l_min, l_max, ln_min, ln_max,
                 depth_min=0.0, depth_max=6.0,
-                date_str=date_str,
+                date_str=d_str,
             )
             if phy_res.get("status") == "success":
-                _prewarm_status[label] = "real"
-                # Reload the zarr and refresh L1
-                global phy_dataset_xr
-                if _fetcher.PHY_ZARR_PATH.exists():
-                    phy_dataset_xr = xr.open_zarr(_fetcher.PHY_ZARR_PATH)
-                real_grid = _read_phy_grid(lat_min, lat_max, lon_min, lon_max, 0.0, date_str)
+                _prewarm_status[lbl] = "real"
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, _reload_phy_zarr)
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: _read_phy_grid(l_min, l_max, ln_min, ln_max, 0.0, d_str),
+                )
+                real_grid, _ad, _adate, _is_ref = result
                 if real_grid:
-                    # Augment with value field
                     for row in real_grid:
                         row["value"] = row.get("temperature_c")
-                    snap_key = f"snap:{lat_min:.2f}:{lat_max:.2f}:{lon_min:.2f}:{lon_max:.2f}:0:{date_str}"
+                    snap_key = f"snap:{l_min:.2f}:{l_max:.2f}:{ln_min:.2f}:{ln_max:.2f}:0:{d_str}"
                     snap_data = {
                         "status": "ok", "placeholder": False, "source": "copernicus_real",
-                        "bbox": {"lat_min": lat_min, "lat_max": lat_max,
-                                 "lon_min": lon_min, "lon_max": lon_max},
-                        "depth": 0.0, "date": date_str, "grid": real_grid,
+                        "bbox": {"lat_min": l_min, "lat_max": l_max,
+                                 "lon_min": ln_min, "lon_max": ln_max},
+                        "depth": 0.0, "date": d_str, "grid": real_grid,
                         "coverage": {
                             "total_points": len(real_grid),
                             "physics_coverage_pct": 100.0,
@@ -1053,11 +1088,12 @@ async def _prewarm_home_regions():
                         },
                     }
                     l1_set(snap_key, snap_data)
-                logger.info(f"[PRE-WARM] {label}: upgraded to real Copernicus data")
+                logger.info(f"[PRE-WARM] {lbl}: upgraded to real Copernicus data")
         except Exception as e:
-            logger.debug(f"[PRE-WARM] {label} real fetch failed: {e}")
+            logger.debug(f"[PRE-WARM] {lbl} real fetch failed: {e}")
 
-    logger.info("[PRE-WARM] Phase 2 complete")
+    for label, lat_min, lat_max, lon_min, lon_max in PREWARM_REGIONS:
+        asyncio.create_task(_prewarm_region_task(label, lat_min, lat_max, lon_min, lon_max, date_str))
 
 
 def _get_placeholder_grid(
@@ -1088,6 +1124,227 @@ def _get_placeholder_grid(
             lo = round(lo + step, 6)
         la = round(la + step, 6)
     return grid
+
+
+# ==============================================================================
+# OFFLINE DATASET UPLOAD  (/api/upload-dataset, /api/datasets)
+# ==============================================================================
+
+import io as _io, shutil as _shutil, uuid as _uuid, json as _json
+_UPLOAD_DIR = OUTPUT_DIR / "user_uploads"
+_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+_UPLOAD_REGISTRY_FILE = _UPLOAD_DIR / "registry.json"
+
+
+def _load_upload_registry() -> List[Dict]:
+    try:
+        if _UPLOAD_REGISTRY_FILE.exists():
+            return _json.loads(_UPLOAD_REGISTRY_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
+
+
+def _save_upload_registry(registry: List[Dict]) -> None:
+    _UPLOAD_REGISTRY_FILE.write_text(_json.dumps(registry, indent=2, default=str), encoding="utf-8")
+
+
+def _ingest_uploaded_file(tmp_path: Path, filename: str, dataset_id: str, zarr_path: Path) -> Dict:
+    """
+    Synchronous ingestion (runs in thread-pool executor):
+    Load NetCDF/CSV, normalise coords, write Zarr.
+    All outputs tagged source='user_upload'.
+    """
+    suffix = Path(filename).suffix.lower()
+    try:
+        if suffix in (".nc", ".netcdf"):
+            ds = xr.open_dataset(str(tmp_path)).load()
+        elif suffix == ".csv":
+            import pandas as _pd
+            df = _pd.read_csv(str(tmp_path))
+            rename_map = {}
+            for c in df.columns:
+                cl = c.lower().strip()
+                if cl in ("lat", "latitude"):   rename_map[c] = "latitude"
+                elif cl in ("lon", "longitude", "lng"): rename_map[c] = "longitude"
+                elif cl in ("time", "date", "datetime"): rename_map[c] = "time"
+                elif cl in ("depth", "depth_m"): rename_map[c] = "depth"
+            df = df.rename(columns=rename_map)
+            idx_cols = [c for c in ("latitude", "longitude", "time", "depth") if c in df.columns]
+            if not idx_cols:
+                raise ValueError("CSV must have lat/lon columns (latitude/longitude or lat/lon)")
+            ds = df.set_index(idx_cols).to_xarray()
+        else:
+            raise ValueError(f"Unsupported file type: {suffix!r}. Supported: .nc, .netcdf, .csv")
+
+        # Normalise dimension names
+        rename: Dict = {}
+        for c in list(ds.coords) + list(ds.dims):
+            cl = c.lower()
+            if cl == "lat" and "latitude" not in ds.dims:   rename[c] = "latitude"
+            elif cl == "lon" and "longitude" not in ds.dims: rename[c] = "longitude"
+        if rename:
+            ds = ds.rename(rename)
+
+        variables = list(ds.data_vars)
+        if not variables:
+            raise ValueError("Dataset has no data variables — cannot ingest.")
+
+        bbox: Dict = {}
+        if "latitude" in ds.coords:
+            bbox["lat_min"] = round(float(ds["latitude"].min()), 4)
+            bbox["lat_max"] = round(float(ds["latitude"].max()), 4)
+        if "longitude" in ds.coords:
+            bbox["lon_min"] = round(float(ds["longitude"].min()), 4)
+            bbox["lon_max"] = round(float(ds["longitude"].max()), 4)
+
+        time_range: Dict = {}
+        if "time" in ds.coords:
+            times = ds["time"].values
+            time_range["start"] = str(times.min())[:10]
+            time_range["end"]   = str(times.max())[:10]
+
+        if zarr_path.exists():
+            _shutil.rmtree(zarr_path)
+        chunk_dims = {d: min(50, ds.sizes[d]) for d in ds.dims}
+        ds.chunk(chunk_dims).to_zarr(zarr_path, mode="w", consolidated=True)
+        ds.close()
+        tmp_path.unlink(missing_ok=True)
+
+        return {"status": "ready", "variables": variables, "bbox": bbox, "time_range": time_range, "error": None}
+    except Exception as exc:
+        tmp_path.unlink(missing_ok=True)
+        logger.error(f"[UPLOAD] Ingestion failed for {dataset_id}: {exc}")
+        return {"status": "error", "variables": [], "bbox": {}, "time_range": {}, "error": str(exc)}
+
+
+@app.post("/api/upload-dataset")
+async def upload_dataset(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    """
+    Accept .nc / .csv offline ocean file.  Returns dataset_id immediately;
+    ingestion runs in the background.  Poll GET /api/datasets for status.
+    Uploaded data is always labelled source='user_upload' — never mixed with live data.
+    """
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in (".nc", ".netcdf", ".csv"):
+        raise HTTPException(400, f"Unsupported format '{suffix}'. Accepted: .nc, .netcdf, .csv")
+
+    dataset_id = str(_uuid.uuid4())[:8]
+    tmp_path   = _UPLOAD_DIR / f"{dataset_id}{suffix}"
+    zarr_path  = _UPLOAD_DIR / f"{dataset_id}.zarr"
+
+    contents = await file.read()
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, tmp_path.write_bytes, contents)
+
+    registry = _load_upload_registry()
+    entry: Dict = {
+        "dataset_id":  dataset_id,
+        "filename":    file.filename,
+        "source":      "user_upload",
+        "status":      "processing",
+        "uploaded_at": datetime.utcnow().isoformat(),
+        "variables":   [],
+        "bbox":        {},
+        "time_range":  {},
+        "zarr_path":   str(zarr_path),
+        "error":       None,
+    }
+    registry.append(entry)
+    _save_upload_registry(registry)
+
+    def _bg_ingest():
+        result = _ingest_uploaded_file(tmp_path, file.filename, dataset_id, zarr_path)
+        reg = _load_upload_registry()
+        for e in reg:
+            if e["dataset_id"] == dataset_id:
+                e.update(result)
+        _save_upload_registry(reg)
+        logger.info(f"[UPLOAD] dataset_id={dataset_id} status={result['status']}")
+
+    background_tasks.add_task(_bg_ingest)
+    return {
+        "dataset_id": dataset_id, "filename": file.filename, "status": "processing",
+        "message": "Upload received. Ingestion running in background. Poll /api/datasets for status.",
+    }
+
+
+@app.get("/api/datasets")
+async def list_datasets():
+    """List all user-uploaded offline datasets with their ingestion status."""
+    return {"datasets": _load_upload_registry()}
+
+
+@app.get("/api/datasets/{dataset_id}/snapshot")
+async def uploaded_dataset_snapshot(
+    dataset_id: str,
+    lat_min:  float = Query(-90),
+    lat_max:  float = Query(90),
+    lon_min:  float = Query(-180),
+    lon_max:  float = Query(180),
+    depth:    float = Query(0.0),
+    variable: str   = Query(""),
+):
+    """
+    Serve a spatial grid slice from a user-uploaded dataset.
+    Always tagged source='user_upload'.
+    """
+    registry = _load_upload_registry()
+    entry = next((e for e in registry if e["dataset_id"] == dataset_id), None)
+    if entry is None:
+        raise HTTPException(404, f"Dataset '{dataset_id}' not found")
+    if entry["status"] != "ready":
+        raise HTTPException(409, f"Dataset '{dataset_id}' status is '{entry['status']}', not ready yet")
+
+    zarr_path = Path(entry["zarr_path"])
+    if not zarr_path.exists():
+        raise HTTPException(404, f"Zarr store missing for dataset '{dataset_id}'")
+
+    try:
+        ds = xr.open_zarr(zarr_path, consolidated=True)
+        lc  = "latitude"  if "latitude"  in ds.dims else "lat"
+        lnc = "longitude" if "longitude" in ds.dims else "lon"
+
+        region = ds.sel({lc: slice(lat_min, lat_max), lnc: slice(lon_min, lon_max)})
+        if "depth" in region.dims:
+            region = region.sel(depth=depth, method="nearest")
+        if "time" in region.dims:
+            region = region.isel(time=0)
+
+        avail_vars = list(region.data_vars)
+        pick_var = variable if variable in avail_vars else (avail_vars[0] if avail_vars else None)
+        if not pick_var:
+            ds.close()
+            return {"grid": [], "source": "user_upload", "dataset_id": dataset_id}
+
+        lats = region[lc].values
+        lons = region[lnc].values
+        arr  = region[pick_var].values
+        while arr.ndim > 2 and arr.shape[0] == 1:
+            arr = arr[0]
+
+        grid = []
+        for i, la in enumerate(lats):
+            for j, lo in enumerate(lons):
+                v = _safe_float(arr[i, j]) if arr.ndim == 2 else None
+                grid.append({
+                    "lat": round(float(la), 4), "lon": round(float(lo), 4),
+                    "value": v, pick_var: v,
+                    "source": "user_upload", "dataset_id": dataset_id,
+                })
+        ds.close()
+
+        if len(grid) > 3000:
+            step = max(1, len(grid) // 2500)
+            grid = grid[::step]
+
+        return {
+            "grid": grid, "source": "user_upload", "dataset_id": dataset_id,
+            "filename": entry["filename"], "variable": pick_var,
+            "available_variables": avail_vars,
+        }
+    except Exception as exc:
+        raise HTTPException(500, f"Error reading dataset: {exc}")
 
 
 # ==============================================================================
@@ -1166,8 +1423,9 @@ async def ocean_point(
         }
 
     # ---- L2 hit ----
-    phy_data = _read_phy_point(lat, lon, depth, date_str)
-    bgc_data = _read_bgc_point(lat, lon, depth, date_str)
+    loop = asyncio.get_event_loop()
+    phy_data = await loop.run_in_executor(None, _read_phy_point, lat, lon, depth, date_str)
+    bgc_data = await loop.run_in_executor(None, _read_bgc_point, lat, lon, depth, date_str)
 
     if phy_data or bgc_data:
         cache_stats["l2_hits"] += 1
@@ -1340,8 +1598,10 @@ async def ocean_snapshot(
         return {**cached, "cache": "L1_RAM", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
 
     # 1. Try exact date and depth from L2 Zarr
-    grid, actual_depth, actual_date, is_ref = _read_phy_grid(
-        lat_min, lat_max, lon_min, lon_max, depth, date_str, exact_date=True
+    loop = asyncio.get_event_loop()
+    grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
+        None,
+        lambda: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, depth, date_str, exact_date=True),
     )
     layer_state = "on_disk"
 
@@ -1349,10 +1609,15 @@ async def ocean_snapshot(
         # Cache miss / missing region: trigger background ingestion for exact requested region
         _schedule_bg_range_fetch(lat_min, lat_max, lon_min, lon_max, depth, date_str)
         # Find nearest 3D depth slice in Zarr as reference view
-        grid, actual_depth, actual_date, is_ref = _read_phy_grid(
-            lat_min, lat_max, lon_min, lon_max, depth, date_str, exact_date=False
+        grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
+            None,
+            lambda: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, depth, date_str, exact_date=False),
         )
         layer_state = "fetching" if grid else "not_fetched"
+        
+        if not grid:
+            grid = _get_placeholder_grid(lat_min, lat_max, lon_min, lon_max, depth, date_str, step=1.0)
+            is_ref = True
 
     # Retrieve nearby active Argo floats for 3D overlay
     floats = await _get_bbox_floats(lat_min, lat_max, lon_min, lon_max, date_str)
@@ -1417,6 +1682,7 @@ async def ocean_snapshot(
         "actual_depth_m":    eff_depth,
         "depth":             eff_depth,
         "date":              date_str,
+        "actual_date":       actual_date or date_str,
         "reference_date":    actual_date if is_ref else None,
         "grid":              grid,
         "floats":            _enrich_floats_for_3d(floats, lat_min, lat_max, lon_min, lon_max),
@@ -1490,7 +1756,11 @@ async def ocean_timeline(
         return {**cached, "cache": "L1_RAM",
                 "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
 
-    series = _read_timeline(lat, lon, depth, resolved_start, resolved_end, granularity, var_list)
+    loop = asyncio.get_event_loop()
+    series = await loop.run_in_executor(
+        None,
+        lambda: _read_timeline(lat, lon, depth, resolved_start, resolved_end, granularity, var_list),
+    )
 
     ds_phy = phy_dataset(resolved_start)
     ds_bgc = bgc_dataset(resolved_start)
@@ -1678,65 +1948,69 @@ async def ocean_section(
     depths = [0.0, 5.0, 10.0, 20.0, 30.0, 50.0, 75.0, 100.0, 150.0, 200.0, 300.0, 500.0, 750.0, 1000.0]
     total_dist = _haversine_km(lat1, lon1, lat2, lon2)
 
-    stations = []
-    matrix = []  # shape: (n_depths, n_stations)
-    for d in depths:
-        matrix.append([])
+    def _compute_profile():
+        stations_out = []
+        matrix_out = [[] for _ in depths]
+        for i in range(samples):
+            frac = i / max(1, samples - 1)
+            cur_lat = round(lat1 + frac * (lat2 - lat1), 4)
+            cur_lon = round(lon1 + frac * (lon2 - lon1), 4)
+            cur_dist = round(frac * total_dist, 2)
+            stations_out.append({
+                "station_index": i,
+                "lat": cur_lat,
+                "lon": cur_lon,
+                "distance_km": cur_dist,
+            })
 
-    for i in range(samples):
-        frac = i / max(1, samples - 1)
-        cur_lat = round(lat1 + frac * (lat2 - lat1), 4)
-        cur_lon = round(lon1 + frac * (lon2 - lon1), 4)
-        cur_dist = round(frac * total_dist, 2)
-        stations.append({
-            "station_index": i,
-            "lat": cur_lat,
-            "lon": cur_lon,
-            "distance_km": cur_dist,
-        })
+            # Query all depths for this station at once if in zarr
+            station_phy = {}
+            for d in depths:
+                p = _read_phy_point(cur_lat, cur_lon, d, date_str)
+                if p and p.get("temperature_c") is not None:
+                    station_phy[d] = p
 
-        # Query all depths for this station at once if in zarr
-        station_phy = {}
-        for d in depths:
-            p = _read_phy_point(cur_lat, cur_lon, d, date_str)
-            if p and p.get("temperature_c") is not None:
-                station_phy[d] = p
+            for d_idx, d in enumerate(depths):
+                phy = station_phy.get(d)
+                if not phy:
+                    phy = _synthesize_phy_point(cur_lat, cur_lon, d)
+                    bgc = _synthesize_bgc_point(phy.get("temperature_c"), d)
+                else:
+                    bgc = _read_bgc_point(cur_lat, cur_lon, d, date_str)
 
-        for d_idx, d in enumerate(depths):
-            phy = station_phy.get(d)
-            if not phy:
-                phy = _synthesize_phy_point(cur_lat, cur_lon, d)
-                bgc = _synthesize_bgc_point(phy.get("temperature_c"), d)
-            else:
-                bgc = _read_bgc_point(cur_lat, cur_lon, d, date_str)
+                val = None
+                if variable in ("temperature", "temperature_c", "thetao", "temp"):
+                    val = phy.get("temperature_c")
+                elif variable in ("salinity", "salinity_psu", "so", "sal"):
+                    val = phy.get("salinity_psu")
+                elif variable in ("current_u", "u_current", "uo"):
+                    val = phy.get("current_u_ms")
+                elif variable in ("current_v", "v_current", "vo"):
+                    val = phy.get("current_v_ms")
+                elif variable in ("current_speed", "speed"):
+                    val = phy.get("current_speed_ms")
+                elif variable in ("chlorophyll", "chlorophyll_mgl", "chl"):
+                    val = bgc.get("chlorophyll_mgl")
+                elif variable in ("oxygen", "dissolved_oxygen", "o2"):
+                    val = bgc.get("oxygen_mmolm3")
+                elif variable in ("nitrate", "no3"):
+                    val = bgc.get("nitrate_mmolm3")
+                elif variable in ("ph",):
+                    val = bgc.get("ph")
+                else:
+                    val = phy.get("temperature_c")
 
-            val = None
-            if variable in ("temperature", "temperature_c", "thetao", "temp"):
-                val = phy.get("temperature_c")
-            elif variable in ("salinity", "salinity_psu", "so", "sal"):
-                val = phy.get("salinity_psu")
-            elif variable in ("current_u", "u_current", "uo"):
-                val = phy.get("current_u_ms")
-            elif variable in ("current_v", "v_current", "vo"):
-                val = phy.get("current_v_ms")
-            elif variable in ("current_speed", "speed"):
-                val = phy.get("current_speed_ms")
-            elif variable in ("chlorophyll", "chlorophyll_mgl", "chl"):
-                val = bgc.get("chlorophyll_mgl")
-            elif variable in ("oxygen", "dissolved_oxygen", "o2"):
-                val = bgc.get("oxygen_mmolm3")
-            elif variable in ("nitrate", "no3"):
-                val = bgc.get("nitrate_mmolm3")
-            elif variable in ("ph",):
-                val = bgc.get("ph")
-            else:
-                val = phy.get("temperature_c")
+                matrix_out[d_idx].append(val)
+        return stations_out, matrix_out
 
-            matrix[d_idx].append(val)
+    loop = asyncio.get_event_loop()
+    stations, matrix = await loop.run_in_executor(None, _compute_profile)
 
     result = {
         "status": "ok",
         "date": date_str,
+        "actual_date": date_str,
+        "source": "copernicus_zarr",
         "variable": variable,
         "transect": {
             "start": {"lat": lat1, "lon": lon1},
@@ -1806,13 +2080,16 @@ async def ocean_volume(
             centre_lat_b, centre_lon_b, depth_b, date_str
         ).value.lower()
 
-        grid, actual_depth, actual_date, is_ref = _read_phy_grid(
-            lat_min, lat_max, lon_min, lon_max, d, date_str, exact_date=True
+        loop = asyncio.get_event_loop()
+        grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
+            None,
+            lambda _d=d: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, _d, date_str, exact_date=True),
         )
         if not grid:
             # Try nearest reference slice before falling back to placeholder
-            grid, actual_depth, actual_date, is_ref = _read_phy_grid(
-                lat_min, lat_max, lon_min, lon_max, d, date_str, exact_date=False
+            grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
+                None,
+                lambda _d=d: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, _d, date_str, exact_date=False),
             )
             if not grid:
                 grid = _get_placeholder_grid(lat_min, lat_max, lon_min, lon_max, d, date_str, step=1.0)
@@ -1840,6 +2117,9 @@ async def ocean_volume(
                 "current_v_ms": r.get("current_v_ms"),
             })
 
+        slice_source = "copernicus_zarr" if (not is_ref and actual_depth is not None) else (
+            "copernicus_zarr_reference" if actual_date else "synthetic_placeholder"
+        )
         slices.append({
             "depth_m": d,
             "requested_depth_m": d,
@@ -1847,6 +2127,8 @@ async def ocean_volume(
             "layer_state": layer_state_val,
             "is_reference_slice": is_ref,
             "reference_date": actual_date if is_ref else None,
+            "actual_date": actual_date or date_str,
+            "source": slice_source,
             "n_points": len(pts),
             "points": pts,
         })
@@ -1855,10 +2137,15 @@ async def ocean_volume(
     floats = await _get_bbox_floats(lat_min, lat_max, lon_min, lon_max, date_str)
     enriched_floats = _enrich_floats_for_3d(floats, lat_min, lat_max, lon_min, lon_max)
 
+    vol_source = "copernicus_zarr" if any(not s.get("is_reference_slice") for s in slices) else (
+        "copernicus_zarr_reference" if any(s.get("reference_date") for s in slices) else "synthetic_placeholder"
+    )
     result = {
         "status": "ok",
         "bbox": {"lat_min": lat_min, "lat_max": lat_max, "lon_min": lon_min, "lon_max": lon_max},
         "date": date_str,
+        "actual_date": date_str,
+        "source": vol_source,
         "variable": variable,
         "n_depth_slices": len(slices),
         "depth_slices": slices,
@@ -2827,11 +3114,27 @@ async def ws_ocean_stream(ws: WebSocket):
                 depth_bins = depth_buckets_in_range(depth_min, depth_max)
                 for db in depth_bins:
                     d_mid = db * DEPTH_BIN_M
-                    grid_slice = _read_phy_grid(lat_min, lat_max, lon_min, lon_max, d_mid, date_str)
+                    # _read_phy_grid returns (rows, actual_depth, actual_date, is_ref)
+                    # Must unpack all 4 — iterating the tuple directly is wrong.
+                    loop = asyncio.get_event_loop()
+                    _result = await loop.run_in_executor(
+                        None,
+                        lambda d=d_mid: _read_phy_grid(
+                            lat_min, lat_max, lon_min, lon_max, d, date_str,
+                            exact_date=False,
+                        ),
+                    )
+                    grid_rows, _ad, _adate, _is_ref = _result
 
                     pts = [
-                        {"lat": r["lat"], "lon": r["lon"], "value": r.get("temperature_c")}
-                        for r in grid_slice
+                        {
+                            "lat": r["lat"],
+                            "lon": r["lon"],
+                            "value": r.get("temperature_c"),
+                            "date": _adate,
+                            "is_reference": _is_ref,
+                        }
+                        for r in grid_rows
                     ]
 
                     await ws.send_json({
@@ -2890,4 +3193,20 @@ async def ws_ocean_stream(ws: WebSocket):
 # ==============================================================================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        # Exclude data directories and binary data files from watchfiles.
+        # Without this, every Zarr/NC write inside backend/output/ triggers
+        # a full server reload loop that kills in-flight Copernicus fetches.
+        reload_excludes=[
+            str(BASE_DIR / "output"),
+            "*.zarr",
+            "*.nc",
+            "*.nc.tmp",
+            "*.zarr.tmp",
+        ],
+        reload_dirs=[str(BASE_DIR)],
+    )

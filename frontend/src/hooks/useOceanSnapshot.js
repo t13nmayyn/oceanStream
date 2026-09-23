@@ -4,7 +4,7 @@
  * Returns a grid of physics + BGC values for the globe texture overlay.
  * Falls back gracefully to null (synthetic model) when backend is offline.
  */
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { getOceanSnapshot } from '../services/oceanApi';
 import { useApp, useAppDispatch } from '../context/AppContext';
 
@@ -14,8 +14,6 @@ const REGIONS = {
   global:      { south: -70, north: 70, west: -180, east: 180 },
 };
 
-// Minimum interval between API calls (ms) to avoid spamming
-const FETCH_DEBOUNCE_MS = 2000;
 // Maximum retries for "fetching" status
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 5000;
@@ -29,11 +27,24 @@ export default function useOceanSnapshot(region = 'indianOcean') {
   const [error, setError] = useState(null);
   const [source, setSource] = useState('synthetic'); // 'real' | 'synthetic' | 'placeholder'
 
-  const lastFetchRef = useRef(0);
   const retryCountRef = useRef(0);
   const retryTimeoutRef = useRef(null);
 
-  const bounds = REGIONS[region] || REGIONS.indianOcean;
+  const regionKey = typeof region === 'object' && region !== null
+    ? `${region.south}_${region.north}_${region.west}_${region.east}`
+    : String(region);
+
+  const bounds = useMemo(() => {
+    if (region && typeof region === 'object' && region.south !== undefined && region.north !== undefined) {
+      return {
+        south: Number(region.south),
+        north: Number(region.north),
+        west: Number(region.west),
+        east: Number(region.east),
+      };
+    }
+    return REGIONS[region] || REGIONS.indianOcean;
+  }, [regionKey]);
 
   const fetchSnapshot = useCallback(async (isRetry = false) => {
     // Don't fetch if backend is offline
@@ -41,13 +52,6 @@ export default function useOceanSnapshot(region = 'indianOcean') {
       setSource('synthetic');
       return;
     }
-
-    // Debounce
-    const now = Date.now();
-    if (!isRetry && now - lastFetchRef.current < FETCH_DEBOUNCE_MS) {
-      return;
-    }
-    lastFetchRef.current = now;
 
     setLoading(true);
     setError(null);
@@ -61,27 +65,8 @@ export default function useOceanSnapshot(region = 'indianOcean') {
         return;
       }
 
-      // Handle "fetching" status — data is being ingested, retry later
-      if (result.status === 'fetching') {
-        if (retryCountRef.current < MAX_RETRIES) {
-          retryCountRef.current++;
-          dispatch({
-            type: 'ADD_LOG',
-            payload: {
-              type: 'info',
-              text: `${new Date().toISOString().slice(11, 19)} [SNAPSHOT] Data fetching from origin... retry ${retryCountRef.current}/${MAX_RETRIES}`,
-            },
-          });
-          retryTimeoutRef.current = setTimeout(() => fetchSnapshot(true), RETRY_DELAY_MS);
-        }
-        setSource('synthetic');
-        setLoading(false);
-        return;
-      }
-
-      // Success
+      // Success: populate grid if available (even when status is 'fetching' / reference slice)
       if (result.grid && result.grid.length > 0) {
-        retryCountRef.current = 0;
         setSnapshotData(result);
         setSource(result.placeholder ? 'placeholder' : 'real');
         dispatch({
@@ -95,6 +80,23 @@ export default function useOceanSnapshot(region = 'indianOcean') {
         setSource('synthetic');
       }
 
+      // Handle "fetching" status — origin data is ingesting in background; schedule a background refresh
+      if (result.status === 'fetching') {
+        if (retryCountRef.current < MAX_RETRIES) {
+          retryCountRef.current++;
+          dispatch({
+            type: 'ADD_LOG',
+            payload: {
+              type: 'info',
+              text: `${new Date().toISOString().slice(11, 19)} [SNAPSHOT] Ingestion in progress... retry ${retryCountRef.current}/${MAX_RETRIES}`,
+            },
+          });
+          retryTimeoutRef.current = setTimeout(() => fetchSnapshot(true), RETRY_DELAY_MS);
+        }
+      } else if (result.status === 'ok') {
+        retryCountRef.current = 0;
+      }
+
       setLoading(false);
     } catch (err) {
       console.warn('[useOceanSnapshot] fetch error:', err.message);
@@ -104,15 +106,18 @@ export default function useOceanSnapshot(region = 'indianOcean') {
     }
   }, [apiStatus, bounds, selectedDepth, selectedDate, dispatch]);
 
-  // Fetch on mount and when parameters change
+  // Fetch on mount and when parameters change with small debounce to batch rapid interactions
   useEffect(() => {
     retryCountRef.current = 0;
     if (retryTimeoutRef.current) {
       clearTimeout(retryTimeoutRef.current);
     }
-    fetchSnapshot();
+    const timer = setTimeout(() => {
+      fetchSnapshot();
+    }, 200);
 
     return () => {
+      clearTimeout(timer);
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
       }

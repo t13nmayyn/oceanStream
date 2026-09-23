@@ -22,14 +22,14 @@ from main import app
 
 client = TestClient(app)
 
-PASS = "\033[92m✓\033[0m"
-FAIL = "\033[91m✗\033[0m"
+PASS = "[OK]"
+FAIL = "[FAIL]"
 
 checks = []
 
 def check(name, cond, details=""):
     mark = PASS if cond else FAIL
-    print(f"  {mark} {name}{' — ' + details if details else ''}")
+    print(f"  {mark} {name}{' - ' + details if details else ''}")
     checks.append(cond)
     return cond
 
