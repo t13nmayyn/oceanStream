@@ -410,7 +410,13 @@ def _read_phy_point(lat: float, lon: float, depth: float, date_str: str) -> Dict
         }
         for src, dst in var_map.items():
             if src in pt:
-                result[dst] = _safe_float(pt[src].values)
+                val = _safe_float(pt[src].values)
+                if val == 0.0 and dst in ("temperature_c", "salinity_psu"):
+                    val = None
+                result[dst] = val
+
+        if result.get("temperature_c") is None and result.get("salinity_psu") is None:
+            return {}
 
         # Compute speed and heading for current vectors
         u = result.get("current_u_ms")
@@ -679,6 +685,8 @@ def _read_timeline(
                         val = _safe_float(pt[v].values[i] if hasattr(pt[v].values, '__len__') else pt[v].values)
                         alias = {"thetao":"temperature_c","so":"salinity_psu",
                                  "uo":"current_u_ms","vo":"current_v_ms","zos":"sea_level_m"}.get(v, v)
+                        if val == 0.0 and alias in ("temperature_c", "salinity_psu"):
+                            val = None
                         if alias not in series[bkt]:
                             series[bkt][alias] = []
                         if isinstance(series[bkt][alias], list):

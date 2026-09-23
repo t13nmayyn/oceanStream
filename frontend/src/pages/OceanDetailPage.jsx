@@ -1,66 +1,39 @@
 /**
- * OceanDetailPage — Phase 2D
+ * OceanDetailPage — Phase 3A
  *
  * Route: /ocean-detail
  *
  * Layout:
  *   AppNav (56px)
- *   Context bar: [← Back to Globe] | region/coords | date | [Anomaly toggle]
- *   ┌────────────────────────┬────────────────────────┐
- *   │  Left 60% — OceanSlab  │  Right 40% — Placeholder│
- *   │  + variable controls   │  (Phase 3 data panel)   │
- *   │  + depth slider        │                         │
- *   │  + time player         │                         │
- *   │  + colorbar            │                         │
- *   │  + coverage strip      │                         │
- *   │  + Argo markers (slab) │                         │
- *   └────────────────────────┴────────────────────────┘
+ *   Context bar: [← Back to Globe] | region/coords | date
+ *   ┌────────────────────────┬────────────────────────────────┐
+ *   │  Left 60% — OceanSlab  │  Right 40% — OceanIntelligence │
+ *   │  + variable controls   │  ├─ Point Data (Phase 3A live) │
+ *   │  + depth slider        │  ├─ Timeline Analysis (Phase 3B)│
+ *   │  + time player         │  ├─ Observations (Phase 3B)    │
+ *   │  + colorbar            │  └─ AI Explanation (Phase 3B)  │
+ *   │  + coverage strip      │                                │
+ *   └────────────────────────┴────────────────────────────────┘
  *
  * NO MapView, GlobeGlViewer, or Cesium globe on this page.
- * OceanWorkspace renders with showMap={false} — only the slab + controls.
+ * OceanWorkspace renders with showMap={false}.
  *
  * Context received from router state (primary) or URL params (fallback):
  *   { region, lat, lon, depth, date, bbox }
- * Depth + date are dispatched into AppContext for OceanWorkspace to pick up.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { useApp, useAppDispatch } from '../context/AppContext';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useApiHealth } from '../hooks/useApiHealth';
 import { useDateControls } from '../hooks/useDateControls';
-import { ArrowLeft, FlaskConical } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 
 import AppNav from '../components/navigation/AppNav';
 import OceanWorkspace from '../components/ocean/OceanWorkspace';
 import OceanStreamCopilot from '../components/copilot/OceanStreamCopilot';
+import OceanIntelligencePanel from '../components/scientist/OceanIntelligencePanel';
 
-// ── Right-panel placeholder ──────────────────────────────────────────────────
-
-function DataPanelPlaceholder({ region, lat, lon }) {
-  return (
-    <div className="w-full h-full flex flex-col items-center justify-center bg-white border-l border-[#1C3A63]/20 p-8">
-      <div className="text-center max-w-[280px] w-full">
-        <div className="text-[15px] font-semibold text-[#0B1E3D] mb-2">Ocean Intelligence</div>
-        <div className="text-[12px] text-[#6B7C96] leading-relaxed mb-8">
-          Select a point, inspect the water column, or ask Ocean Assistant.
-        </div>
-        
-        <div className="flex flex-col gap-2 text-left">
-          {['Point Data', 'Timeline Analysis', 'Observations', 'AI Explanation'].map((row, i) => (
-            <div key={row} className="px-4 py-3 rounded-xl bg-[#F8FAFC] border border-[#1C3A63]/20 text-[12px] font-medium text-[#0B1E3D] flex items-center justify-between shadow-none">
-              <span className="flex items-center gap-3">
-                <span className="w-4 h-4 rounded bg-[#E8EDF5] flex items-center justify-center text-[9px] text-[#6B7C96]">{i + 1}</span>
-                {row}
-              </span>
-              <div className="h-1.5 w-1.5 rounded-full bg-[#1C3A63]/30"></div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ── OceanDetailPage ──────────────────────────────────────────────────────────
 
@@ -73,7 +46,7 @@ export default function OceanDetailPage() {
 
   useWebSocket();
   useApiHealth();
-  useDateControls(); // initialises selectedDate from server; drives TimelineControl
+  useDateControls();
 
   const [developerOpen, setDeveloperOpen] = useState(false);
 
@@ -123,6 +96,18 @@ export default function OceanDetailPage() {
     // Point clicks inside OceanWorkspace slab — update AppContext activePointQuery
     dispatch({ type: 'SET_ACTIVE_POINT_QUERY', payload: { lat, lon } });
   }, [dispatch]);
+
+  // ── Effective point: slab-click or marker selection takes precedence,
+  //    then fallback to the router-supplied initial coordinates.
+  const effectivePoint = useMemo(() => {
+    if (activePointQuery?.lat != null && activePointQuery?.lon != null) {
+      return { lat: Number(activePointQuery.lat), lon: Number(activePointQuery.lon) };
+    }
+    if (initialLat != null && initialLon != null) {
+      return { lat: Number(initialLat), lon: Number(initialLon) };
+    }
+    return null;
+  }, [activePointQuery, initialLat, initialLon]);
 
   // ── Context bar labels ─────────────────────────────────────────────────────
   const locationLabel = regionName
@@ -183,12 +168,11 @@ export default function OceanDetailPage() {
           />
         </div>
 
-        {/* Right 40% — Phase 2D placeholder; Phase 3 mounts real data panel here */}
+        {/* Right 40% — Ocean Intelligence Panel (Phase 3A: Point Data live) */}
         <div className="w-[40%] h-full overflow-hidden">
-          <DataPanelPlaceholder
+          <OceanIntelligencePanel
+            point={effectivePoint}
             region={regionName}
-            lat={initialLat}
-            lon={initialLon}
           />
         </div>
       </div>
