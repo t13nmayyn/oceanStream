@@ -1,475 +1,614 @@
-import { useEffect, useRef } from 'react';
+/**
+ * OceanSlab.jsx — 3D Volumetric Ocean Block / Layered Thermal Field
+ * ================================================================
+ *
+ * Core Features:
+ *   1. 3D Volumetric Ocean Block: 0, 10, 50, 100, 200, 500, 1000m continuous layers.
+ *   2. Mountain-like / terrain-like stratified structure driven by thermal topography.
+ *   3. Smooth interpolation between depth layers with scientifically calibrated palettes.
+ *   4. Argo profile overlays extending vertically through the 3D ocean volume.
+ *   5. Seamless recoloring on variable change (temperature, salinity, currents, chlorophyll, oxygen).
+ *   6. Zero blank initial frame: immediately renders "Indian Ocean Reference / Demo Field"
+ *      before smoothly transitioning to real live or backup Zarr data.
+ *   7. OrbitControls (rotate, zoom, pan) with 30-50x vertical exaggeration.
+ */
+
+import { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { getOceanVariableValue } from '../../utils/oceanThermalField';
 
-const DEPTH_BINS = [0, 10, 50, 100, 200, 500, 1000];
+export const DEPTH_BINS = [0, 10, 50, 100, 200, 500, 1000];
 
-// High-contrast, scientifically tailored color palettes (designed for light surfaces)
-const stops = {
-  temperature: ['#1d4ed8', '#0284c7', '#14b8a6', '#f59e0b', '#ef4444', '#b91c1c'],
-  salinity: ['#86efac', '#22c55e', '#16a34a', '#15803d', '#14532d'],
-  chlorophyll: ['#a7f3d0', '#34d399', '#059669', '#047857', '#064e3b'],
-  oxygen: ['#7c3aed', '#6366f1', '#06b6d4', '#10b981', '#047857'],
-  ph: ['#dc2626', '#ea580c', '#eab308', '#84cc16', '#16a34a'],
-  nitrate: ['#bbf7d0', '#4ade80', '#22c55e', '#15803d', '#052e16'],
-  pco2: ['#fef08a', '#facc15', '#f97316', '#dc2626', '#7f1d1d'],
+// Scientifically tailored color palettes
+const PALETTES = {
+  temperature: ['#1e1b4b', '#1e3a8a', '#0284c7', '#06b6d4', '#10b981', '#facc15', '#f97316', '#dc2626'],
+  salinity:    ['#312e81', '#4338ca', '#0891b2', '#059669', '#65a30d', '#ca8a04', '#eab308'],
+  chlorophyll: ['#022c22', '#064e3b', '#047857', '#059669', '#10b981', '#34d399', '#a7f3d0'],
+  oxygen:      ['#450a0a', '#991b1b', '#d97706', '#0284c7', '#2563eb', '#4338ca', '#312e81'],
+  currents:    ['#0f172a', '#1e3a8a', '#0284c7', '#06b6d4', '#10b981', '#facc15', '#ef4444'],
+  ph:          ['#dc2626', '#ea580c', '#eab308', '#84cc16', '#16a34a', '#06b6d4'],
 };
 
-function valueFor(point, variable) {
+// Variable value ranges for normalized color interpolation
+const VARIABLE_DOMAINS = {
+  temperature: [2.0, 31.0],
+  salinity:    [32.0, 37.0],
+  chlorophyll: [0.02, 2.5],
+  oxygen:      [30.0, 260.0],
+  currents:    [0.0, 1.8],
+  ph:          [7.6, 8.3],
+};
+
+function getVariableValue(point, variable) {
+  if (!point) return NaN;
+  if (variable === 'currents') {
+    const u = point.current_u_ms ?? point.uo;
+    const v = point.current_v_ms ?? point.vo;
+    if (u != null && v != null) return Math.hypot(Number(u), Number(v));
+    if (point.current_speed_ms != null) return Number(point.current_speed_ms);
+    return NaN;
+  }
   const aliases = {
-    temperature: ['temperature_c', 'temperature', 'thetao'],
-    salinity: ['salinity_psu', 'salinity', 'so'],
+    temperature: ['temperature_c', 'temperature', 'thetao', 'temp'],
+    salinity:    ['salinity_psu', 'salinity', 'so'],
     chlorophyll: ['chlorophyll_mgl', 'chlorophyll', 'chl'],
-    oxygen: ['oxygen_mmolm3', 'oxygen', 'dissolved_oxygen'],
-    ph: ['ph', 'pH'],
-    nitrate: ['nitrate_mmolm3', 'nitrate', 'no3'],
-    pco2: ['pco2_uatm', 'pco2', 'spco2'],
+    oxygen:      ['oxygen_mmolm3', 'oxygen', 'dissolved_oxygen', 'o2'],
+    ph:          ['ph', 'pH'],
   };
-  const key = (aliases[variable] || aliases.temperature).find((name) => point?.[name] != null);
-  if (!key) return NaN;
-  const num = Number(point[key]);
-  return Number.isFinite(num) ? num : NaN;
+  const keys = aliases[variable] || aliases.temperature;
+  for (const k of keys) {
+    if (point[k] != null && point[k] !== '') {
+      const num = Number(point[k]);
+      if (Number.isFinite(num)) return num;
+    }
+  }
+  if (point.value != null) {
+    const num = Number(point.value);
+    if (Number.isFinite(num)) return num;
+  }
+  return NaN;
 }
 
-function colorFor(value, min, max, variable) {
-  const palette = stops[variable] || stops.temperature;
-  const range = max - min;
-  const t = range > 0.00001 ? Math.max(0, Math.min(1, (value - min) / range)) : 0.5;
-  const numSegments = palette.length - 1;
-  const scaledT = t * numSegments;
-  const index = Math.min(Math.floor(scaledT), numSegments - 1);
-  const localT = scaledT - index;
-  return new THREE.Color(palette[index]).lerp(new THREE.Color(palette[index + 1]), localT);
+function colorForValue(val, min, max, variable) {
+  const palette = PALETTES[variable] || PALETTES.temperature;
+  const span = Math.max(max - min, 0.0001);
+  const t = Math.max(0, Math.min(1, (val - min) / span));
+  const scaled = t * (palette.length - 1);
+  const idx = Math.min(Math.floor(scaled), palette.length - 2);
+  const frac = scaled - idx;
+  const c1 = new THREE.Color(palette[idx]);
+  const c2 = new THREE.Color(palette[idx + 1]);
+  return c1.lerp(c2, frac);
 }
 
-function vectorMagnitude(point) {
-  if (point?.current_u_ms == null && point?.current_v_ms == null) return NaN;
-  return Math.hypot(Number(point?.current_u_ms ?? 0), Number(point?.current_v_ms ?? 0));
-}
-
-function createPointTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 64;
-  canvas.height = 64;
-  const ctx = canvas.getContext('2d');
-  ctx.beginPath();
-  ctx.arc(32, 32, 26, 0, Math.PI * 2);
-  ctx.fillStyle = '#ffffff';
-  ctx.fill();
-  ctx.lineWidth = 4;
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
-  ctx.stroke();
-  const texture = new THREE.CanvasTexture(canvas);
-  return texture;
-}
-
-function fitCameraToVolume(camera, controls, padding = 1.3) {
-  if (!camera.aspect || isNaN(camera.aspect) || camera.aspect <= 0) return;
-
-  const center = new THREE.Vector3(0, -6, 0);
-  const size = new THREE.Vector3(20, 12, 14);
-
-  const vFov = THREE.MathUtils.degToRad(camera.fov);
-  const distanceV = (size.y + size.z * 0.5) / Math.tan(vFov / 2);
-  const distanceH = (size.x / 2) / Math.tan(vFov / 2) / camera.aspect;
-
-  const cameraDistance = Math.max(distanceV, distanceH) * padding;
-
-  const dirY = 0.55;
-  const dirZ = 0.83;
-  const offset = new THREE.Vector3(0, cameraDistance * dirY, cameraDistance * dirZ);
-
-  camera.position.copy(center).add(offset);
-  controls.target.copy(center);
-
-  camera.near = 0.1;
-  camera.far = 1000;
-  camera.updateProjectionMatrix();
-  controls.update();
+// Non-linear depth mapping so thermocline (0–200m) is visually rich and distinct from deep ocean
+function depthToY(depthM, totalHeight = 12, exaggeration = 35) {
+  const normalized = Math.pow(Math.max(0, Math.min(1000, depthM)) / 1000, 0.58);
+  const scaleFactor = Math.min(2.0, Math.max(0.6, exaggeration / 35));
+  return -normalized * totalHeight * scaleFactor;
 }
 
 export default function OceanSlab({
+  depthSlices = [],
+  volumeData = null,
   grid = [],
   floats = [],
   variable = 'temperature',
   depth = 0,
   dataDepth = depth,
   bounds,
-  opacity = 0.92,
-  verticalExaggeration = 1,
-  threshold,
+  opacity = 0.85,
+  verticalExaggeration = 35,
+  source = 'reference',
+  dataSource = null,
+  backupDate = null,
+  regionName = 'Indian Ocean',
   onSelectMarker,
 }) {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
-  const dataRef = useRef({ grid, floats, variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold });
-  const lastGridRef = useRef(grid);
-  const lastFitBoundsRef = useRef('');
+  const [activeFloatInfo, setActiveFloatInfo] = useState(null);
+
+  // Bounds fallback: default Indian Ocean segment
+  const currentBounds = useMemo(() => {
+    return {
+      south: Number(bounds?.south ?? bounds?.lat_min ?? 8),
+      north: Number(bounds?.north ?? bounds?.lat_max ?? 20),
+      west:  Number(bounds?.west  ?? bounds?.lon_min ?? 71),
+      east:  Number(bounds?.east  ?? bounds?.lon_max ?? 88),
+    };
+  }, [bounds]);
+
+  // Keep live references for Three.js render loop
+  const stateRef = useRef({
+    depthSlices,
+    volumeData,
+    grid,
+    floats,
+    variable,
+    depth,
+    dataDepth,
+    bounds: currentBounds,
+    opacity,
+    verticalExaggeration,
+    source,
+    dataSource,
+    backupDate,
+  });
 
   useEffect(() => {
-    dataRef.current = { grid, floats, variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold };
-  }, [grid, floats, variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold]);
+    stateRef.current = {
+      depthSlices,
+      volumeData,
+      grid,
+      floats,
+      variable,
+      depth,
+      dataDepth,
+      bounds: currentBounds,
+      opacity,
+      verticalExaggeration,
+      source,
+      dataSource,
+      backupDate,
+    };
+  }, [depthSlices, volumeData, grid, floats, variable, depth, dataDepth, currentBounds, opacity, verticalExaggeration, source, dataSource, backupDate]);
 
   useEffect(() => {
     const mount = mountRef.current;
-    if (!mount) return undefined;
+    if (!mount) return;
 
+    // ── 1. Three.js Scene Setup ──────────────────────────────────────────
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#F8FAFC');
+    scene.background = new THREE.Color('#070d18'); // Deep marine background
 
-    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
-    camera.position.set(0, 14, 26);
-    camera.lookAt(0, -6, 0);
+    const camera = new THREE.PerspectiveCamera(38, mount.clientWidth / mount.clientHeight, 0.1, 1500);
+    camera.position.set(22, 16, 26);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
-    renderer.setClearColor('#F8FAFC', 1);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(mount.clientWidth, mount.clientHeight);
     mount.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
     controls.target.set(0, -6, 0);
+    controls.minDistance = 8;
+    controls.maxDistance = 120;
     controls.update();
 
-    scene.add(new THREE.AmbientLight('#ffffff', 1.8));
-    const keyLight = new THREE.DirectionalLight('#ffffff', 2.2);
-    keyLight.position.set(8, 20, 12);
-    scene.add(keyLight);
+    // ── 2. Lighting ──────────────────────────────────────────────────────
+    scene.add(new THREE.AmbientLight('#a5b4fc', 1.4));
+    const sunLight = new THREE.DirectionalLight('#ffffff', 2.0);
+    sunLight.position.set(16, 24, 18);
+    scene.add(sunLight);
 
-    // 3D ocean water-column bounding box
-    const box = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(20, 12, 14)),
-      new THREE.LineBasicMaterial({ color: '#94a3b8', transparent: true, opacity: 0.65 })
+    const blueFill = new THREE.DirectionalLight('#0284c7', 1.0);
+    blueFill.position.set(-16, -10, -12);
+    scene.add(blueFill);
+
+    // ── 3. Bounding Volume Structure ────────────────────────────────────
+    const BOX_WIDTH = 22;
+    const BOX_DEPTH = 15;
+    const BOX_HEIGHT = 12;
+
+    // Outer wireframe bounding cage
+    const boxGeo = new THREE.BoxGeometry(BOX_WIDTH, BOX_HEIGHT, BOX_DEPTH);
+    const boxEdges = new THREE.EdgesGeometry(boxGeo);
+    const boxFrame = new THREE.LineSegments(
+      boxEdges,
+      new THREE.LineBasicMaterial({ color: '#38bdf8', transparent: true, opacity: 0.45 })
     );
-    box.position.y = -6;
-    scene.add(box);
+    boxFrame.position.set(0, -BOX_HEIGHT / 2, 0);
+    scene.add(boxFrame);
 
-    // Bathymetry floor grid at seafloor (y = -12)
-    const seafloor = new THREE.GridHelper(20, 10, '#cbd5e1', '#e2e8f0');
-    seafloor.position.y = -12;
-    scene.add(seafloor);
-
-    // Continuous 2D heatmap field texture on the depth slice plane
-    const sliceCanvas = document.createElement('canvas');
-    sliceCanvas.width = 32;
-    sliceCanvas.height = 32;
-    const sliceTexture = new THREE.CanvasTexture(sliceCanvas);
-    sliceTexture.minFilter = THREE.LinearFilter;
-    sliceTexture.magFilter = THREE.LinearFilter;
-
-    const sliceMaterial = new THREE.MeshBasicMaterial({
-      map: sliceTexture,
+    // Subtle translucent water volume block
+    const volumeMat = new THREE.MeshBasicMaterial({
+      color: '#0369a1',
       transparent: true,
-      opacity: 0.85,
-      side: THREE.DoubleSide,
+      opacity: 0.08,
+      side: THREE.BackSide,
       depthWrite: false,
     });
-    const slice = new THREE.Mesh(new THREE.PlaneGeometry(20, 14), sliceMaterial);
-    slice.renderOrder = 2;
-    slice.rotation.x = Math.PI / 2;
-    scene.add(slice);
+    const volumeBlock = new THREE.Mesh(boxGeo, volumeMat);
+    volumeBlock.position.set(0, -BOX_HEIGHT / 2, 0);
+    scene.add(volumeBlock);
 
-    // Discrete scientific data points
-    const pointTexture = createPointTexture();
-    const field = new THREE.Points(
-      new THREE.BufferGeometry(),
-      new THREE.PointsMaterial({
-        size: 9,
-        map: pointTexture,
-        vertexColors: true,
+    // Bathymetry floor grid at 1000m depth
+    const seafloorGrid = new THREE.GridHelper(BOX_WIDTH, 14, '#1e293b', '#0f172a');
+    seafloorGrid.position.set(0, -BOX_HEIGHT, 0);
+    scene.add(seafloorGrid);
+
+    // Subtle surface grid
+    const surfaceGrid = new THREE.GridHelper(BOX_WIDTH, 14, '#38bdf8', '#0284c7');
+    surfaceGrid.position.set(0, 0, 0);
+    surfaceGrid.material.opacity = 0.25;
+    surfaceGrid.material.transparent = true;
+    scene.add(surfaceGrid);
+
+    // Depth markers along the vertical side pillar
+    const markerLines = [];
+    DEPTH_BINS.forEach((d) => {
+      const y = depthToY(d, BOX_HEIGHT, 35);
+      markerLines.push(-BOX_WIDTH / 2, y, -BOX_DEPTH / 2, -BOX_WIDTH / 2 + 0.6, y, -BOX_DEPTH / 2);
+      markerLines.push(-BOX_WIDTH / 2, y, BOX_DEPTH / 2, -BOX_WIDTH / 2 + 0.6, y, BOX_DEPTH / 2);
+    });
+    const depthTicksGeo = new THREE.BufferGeometry();
+    depthTicksGeo.setAttribute('position', new THREE.Float32BufferAttribute(markerLines, 3));
+    const depthTicks = new THREE.LineSegments(
+      depthTicksGeo,
+      new THREE.LineBasicMaterial({ color: '#94a3b8', transparent: true, opacity: 0.85 })
+    );
+    scene.add(depthTicks);
+
+    // Active selected depth scanning frame
+    const scannerGeo = new THREE.EdgesGeometry(new THREE.PlaneGeometry(BOX_WIDTH, BOX_DEPTH));
+    const scannerMat = new THREE.LineBasicMaterial({ color: '#38bdf8', linewidth: 2, transparent: true, opacity: 0.9 });
+    const scannerPlane = new THREE.LineSegments(scannerGeo, scannerMat);
+    scannerPlane.rotation.x = Math.PI / 2;
+    scene.add(scannerPlane);
+
+    // ── 4. Multi-Layer Volumetric Meshes ──────────────────────────────────
+    // Create 7 continuous depth layer planes matching DEPTH_BINS
+    const layerMeshes = [];
+    const layerCanvases = [];
+    const layerTextures = [];
+
+    DEPTH_BINS.forEach((depthM, idx) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 48;
+      layerCanvases.push(canvas);
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      layerTextures.push(texture);
+
+      const planeGeo = new THREE.PlaneGeometry(BOX_WIDTH, BOX_DEPTH, 24, 18);
+      const planeMat = new THREE.MeshStandardMaterial({
+        map: texture,
         transparent: true,
-        opacity: 0.95,
-        alphaTest: 0.05,
-        sizeAttenuation: false,
-        depthTest: false,
-      })
-    );
-    field.renderOrder = 3;
-    scene.add(field);
+        opacity: Math.max(0.65, 0.92 - idx * 0.035),
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        roughness: 0.4,
+        metalness: 0.1,
+      });
 
-    // Velocity vectors
-    const vectors = new THREE.LineSegments(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color: '#0d9488', transparent: true, opacity: 0.9, linewidth: 2 })
-    );
-    vectors.renderOrder = 4;
-    scene.add(vectors);
+      const mesh = new THREE.Mesh(planeGeo, planeMat);
+      mesh.rotation.x = Math.PI / 2;
+      mesh.position.y = depthToY(depthM, BOX_HEIGHT, 35);
+      mesh.renderOrder = 2 + idx;
+      scene.add(mesh);
+      layerMeshes.push(mesh);
+    });
 
-    // Argo float markers & 3D profile columns
-    const markerGroup = new THREE.Group();
-    const markerMesh = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(0.35, 12, 10),
-      new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.15 }),
-      Math.max(1, floats.length)
-    );
-    markerGroup.add(markerMesh);
+    // ── 5. Current Vector Streamlines ────────────────────────────────────
+    const vectorGeo = new THREE.BufferGeometry();
+    const vectorMat = new THREE.LineBasicMaterial({
+      color: '#00ffff',
+      transparent: true,
+      opacity: 0.85,
+    });
+    const currentVectors = new THREE.LineSegments(vectorGeo, vectorMat);
+    currentVectors.renderOrder = 15;
+    scene.add(currentVectors);
 
-    const floatColumns = new THREE.LineSegments(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color: '#0284c7', transparent: true, opacity: 0.65 })
-    );
-    floatColumns.renderOrder = 4;
-    markerGroup.add(floatColumns);
-    scene.add(markerGroup);
+    // ── 6. Argo Float Profile 3D Overlays ────────────────────────────────
+    const argoGroup = new THREE.Group();
+    argoGroup.renderOrder = 20;
+    scene.add(argoGroup);
+
+    const buoyGeo = new THREE.SphereGeometry(0.38, 16, 14);
+    const buoyMat = new THREE.MeshStandardMaterial({
+      color: '#06b6d4',
+      roughness: 0.2,
+      metalness: 0.4,
+      emissive: '#0891b2',
+      emissiveIntensity: 0.4,
+    });
+
+    const profileLinesGeo = new THREE.BufferGeometry();
+    const profileLinesMat = new THREE.LineBasicMaterial({
+      color: '#38bdf8',
+      transparent: true,
+      opacity: 0.85,
+    });
+    const profileLines = new THREE.LineSegments(profileLinesGeo, profileLinesMat);
+    argoGroup.add(profileLines);
 
     const raycaster = new THREE.Raycaster();
-    const pointer = new THREE.Vector2();
-    const fallbackBounds = { west: 0, east: 1, south: 0, north: 1 };
+    const mouse = new THREE.Vector2();
+    let floatBuoyMeshes = [];
 
-    const update = () => {
-      const current = dataRef.current;
-      if (current.grid.length) lastGridRef.current = current.grid;
-      const points = current.grid.length ? current.grid : lastGridRef.current;
-      if (!points.length) return;
+    // ── 7. Render & Update Logic ─────────────────────────────────────────
+    const updateScene = () => {
+      const state = stateRef.current;
+      const { south, north, west, east } = state.bounds;
+      const dLon = Math.max(east - west, 0.0001);
+      const dLat = Math.max(north - south, 0.0001);
+      const exaggeration = state.verticalExaggeration || 35;
+      const activeVariable = state.variable || 'temperature';
+      const [domainMin, domainMax] = VARIABLE_DOMAINS[activeVariable] || [0, 30];
 
-      const currentBounds = current.bounds || fallbackBounds;
-      const west = Number(currentBounds.west ?? currentBounds.lon_min);
-      const east = Number(currentBounds.east ?? currentBounds.lon_max);
-      const south = Number(currentBounds.south ?? currentBounds.lat_min);
-      const north = Number(currentBounds.north ?? currentBounds.lat_max);
-      const depthValue = Number(current.dataDepth ?? current.depth ?? 0);
-      const depthY = -depthValue * 0.012 * current.verticalExaggeration;
+      // Update active depth scanner position
+      const activeY = depthToY(state.depth, BOX_HEIGHT, exaggeration);
+      scannerPlane.position.y = activeY;
 
-      const values = points.map((point) => (current.variable === 'currents' ? vectorMagnitude(point) : valueFor(point, current.variable)));
-      const finiteValues = values.filter(Number.isFinite);
-      const hasData = finiteValues.length > 0;
-      const min = hasData ? Math.min(...finiteValues) : 0;
-      const max = hasData ? Math.max(...finiteValues) : 1;
+      // Extract slices from volumeData or fallback depthSlices
+      const realSlices = state.volumeData?.depth_slices?.length
+        ? state.volumeData.depth_slices
+        : state.depthSlices;
 
-      // Update positions and colors of discrete sample points
-      const positions = new Float32Array(points.length * 3);
-      const colors = new Float32Array(points.length * 3);
-      points.forEach((point, index) => {
-        positions[index * 3] = ((Number(point.lon) - west) / Math.max(east - west, 0.0001) - 0.5) * 20;
-        positions[index * 3 + 1] = depthY;
-        positions[index * 3 + 2] = ((Number(point.lat) - south) / Math.max(north - south, 0.0001) - 0.5) * 14;
+      // Update all 7 continuous depth layers
+      DEPTH_BINS.forEach((binDepth, layerIdx) => {
+        const mesh = layerMeshes[layerIdx];
+        const canvas = layerCanvases[layerIdx];
+        const texture = layerTextures[layerIdx];
+        const targetY = depthToY(binDepth, BOX_HEIGHT, exaggeration);
+        mesh.position.y = targetY;
 
-        const val = Number.isFinite(values[index]) ? values[index] : min;
-        const color = colorFor(val, min, max, current.variable);
-        const matches =
-          current.threshold?.enabled &&
-          Number.isFinite(values[index]) &&
-          (current.threshold.operator === '>'
-            ? values[index] > current.threshold.value
-            : current.threshold.operator === '<'
-            ? values[index] < current.threshold.value
-            : Math.abs(values[index] - current.threshold.value) <= current.threshold.tolerance);
-        if (matches) color.set('#facc15');
-        colors.set([color.r, color.g, color.b], index * 3);
-      });
+        // Find slice data for this depth
+        const sliceData = realSlices.find((s) => Math.abs((s.depth_m ?? s.depth) - binDepth) < 15);
+        const hasRealSlice = Boolean(sliceData && sliceData.points && sliceData.points.length > 0);
+        const points = hasRealSlice ? sliceData.points : null;
 
-      field.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      field.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      if (field.geometry.attributes.position) field.geometry.attributes.position.needsUpdate = true;
-      if (field.geometry.attributes.color) field.geometry.attributes.color.needsUpdate = true;
-      field.geometry.computeBoundingBox();
-      field.geometry.computeBoundingSphere();
-      field.visible = hasData;
-
-      // Draw continuous 2D heatmap field onto sliceCanvas for a real visible 3D ocean field
-      const uniqueLats = Array.from(new Set(points.map((p) => Number(p.lat)))).sort((a, b) => a - b);
-      const uniqueLons = Array.from(new Set(points.map((p) => Number(p.lon)))).sort((a, b) => a - b);
-      if (uniqueLats.length >= 2 && uniqueLons.length >= 2) {
-        const w = uniqueLons.length;
-        const h = uniqueLats.length;
-        if (sliceCanvas.width !== w || sliceCanvas.height !== h) {
-          sliceCanvas.width = w;
-          sliceCanvas.height = h;
-        }
-        const ctx = sliceCanvas.getContext('2d');
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width;
+        const h = canvas.height;
         const imgData = ctx.createImageData(w, h);
 
-        const valMap = new Map();
-        points.forEach((p, idx) => {
-          valMap.set(`${Number(p.lat).toFixed(4)}_${Number(p.lon).toFixed(4)}`, values[idx]);
-        });
+        // Displace layer vertices for mountain-like stratified relief
+        const posAttr = mesh.geometry.attributes.position;
+        const vertexCount = posAttr.count;
 
-        // Top of canvas (y=0) corresponds to highest latitude (north)
         for (let y = 0; y < h; y++) {
-          const lat = uniqueLats[h - 1 - y];
+          const lat = north - (y / (h - 1)) * dLat;
           for (let x = 0; x < w; x++) {
-            const lon = uniqueLons[x];
-            const val = valMap.get(`${lat.toFixed(4)}_${lon.toFixed(4)}`);
-            const col = colorFor(Number.isFinite(val) ? val : min, min, max, current.variable);
+            const lon = west + (x / (w - 1)) * dLon;
+
+            let val;
+            if (hasRealSlice && points) {
+              // Inverse-distance weighting from nearby points
+              let sum = 0, weightSum = 0;
+              for (let i = 0; i < Math.min(points.length, 30); i++) {
+                const p = points[i];
+                const pVal = getVariableValue(p, activeVariable);
+                if (Number.isFinite(pVal)) {
+                  const dist = Math.hypot(p.lat - lat, p.lon - lon) + 0.05;
+                  const weight = 1 / (dist * dist);
+                  sum += pVal * weight;
+                  weightSum += weight;
+                }
+              }
+              val = weightSum > 0 ? sum / weightSum : getOceanVariableValue(lat, lon, activeVariable, binDepth);
+            } else {
+              // Immediate Reference Field: high-fidelity analytical model
+              val = getOceanVariableValue(lat, lon, activeVariable, binDepth);
+            }
+
+            const col = colorForValue(val, domainMin, domainMax, activeVariable);
             const pIdx = (y * w + x) * 4;
-            imgData.data[pIdx] = Math.round(col.r * 255);
+            imgData.data[pIdx]     = Math.round(col.r * 255);
             imgData.data[pIdx + 1] = Math.round(col.g * 255);
             imgData.data[pIdx + 2] = Math.round(col.b * 255);
-            imgData.data[pIdx + 3] = Number.isFinite(val) ? 225 : 0;
+            imgData.data[pIdx + 3] = Math.round(255 * (state.opacity || 0.85));
           }
         }
+
         ctx.putImageData(imgData, 0, 0);
-        sliceTexture.needsUpdate = true;
-        slice.visible = hasData;
-      }
+        texture.needsUpdate = true;
 
-      // Update vectors
-      const vectorPositions = new Float32Array(points.length * 6);
-      points.forEach((point, index) => {
-        const x = ((Number(point.lon) - west) / Math.max(east - west, 0.0001) - 0.5) * 20;
-        const z = ((Number(point.lat) - south) / Math.max(north - south, 0.0001) - 0.5) * 14;
-        const y = depthY;
-        const offsetX = Number(point.current_u_ms ?? 0) * 8;
-        const offsetZ = Number(point.current_v_ms ?? 0) * 8;
-        vectorPositions.set([x, y, z, x + offsetX, y, z + offsetZ], index * 6);
+        // Apply mountain/topographic relief displacement to mesh vertices
+        for (let i = 0; i < vertexCount; i++) {
+          const vx = posAttr.getX(i);
+          const vy = posAttr.getY(i);
+          // Convert plane coordinates back to normalized space [0, 1]
+          const nx = (vx / BOX_WIDTH) + 0.5;
+          const ny = (vy / BOX_DEPTH) + 0.5;
+          const sampleLat = south + ny * dLat;
+          const sampleLon = west + nx * dLon;
+          const sampleVal = getOceanVariableValue(sampleLat, sampleLon, 'temperature', binDepth);
+          const thermalRelief = ((sampleVal - domainMin) / Math.max(domainMax - domainMin, 1)) * 0.8;
+          // Z displacement on plane is vertical relief along layer
+          posAttr.setZ(i, (thermalRelief - 0.4) * (1.2 / Math.max(1, layerIdx * 0.5 + 1)));
+        }
+        posAttr.needsUpdate = true;
+        mesh.geometry.computeVertexNormals();
       });
-      vectors.geometry.setAttribute('position', new THREE.BufferAttribute(vectorPositions, 3));
-      if (vectors.geometry.attributes.position) vectors.geometry.attributes.position.needsUpdate = true;
-      vectors.visible = current.variable === 'currents' && hasData;
 
-      slice.position.y = depthY;
-      sliceMaterial.opacity = Math.max(0.4, current.opacity * 0.9);
-      field.material.opacity = current.opacity;
-
-      // Framing: Auto-fit camera only when spatial boundaries change
-      const boundsSignature = `${west}_${east}_${south}_${north}`;
-      if (lastFitBoundsRef.current !== boundsSignature) {
-        lastFitBoundsRef.current = boundsSignature;
-        scene.updateMatrixWorld(true);
-        fitCameraToVolume(camera, controls);
+      // ── Current Vectors (when variable is currents) ───────────────────
+      if (activeVariable === 'currents' && realSlices.length > 0) {
+        const surfaceSlice = realSlices[0]?.points || [];
+        const lines = [];
+        surfaceSlice.forEach((p) => {
+          const u = Number(p.current_u_ms ?? 0);
+          const v = Number(p.current_v_ms ?? 0);
+          if (u !== 0 || v !== 0) {
+            const px = ((p.lon - west) / dLon - 0.5) * BOX_WIDTH;
+            const pz = ((p.lat - south) / dLat - 0.5) * BOX_DEPTH;
+            const py = 0;
+            const len = Math.min(2.5, Math.hypot(u, v) * 3.5);
+            const headX = px + (u / (Math.hypot(u, v) || 1)) * len;
+            const headZ = pz - (v / (Math.hypot(u, v) || 1)) * len;
+            lines.push(px, py, pz, headX, py, headZ);
+          }
+        });
+        vectorGeo.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+        currentVectors.visible = lines.length > 0;
+      } else {
+        currentVectors.visible = false;
       }
 
-      // Update Argo floats in 3D
-      markerMesh.count = Math.max(0, Math.min(current.floats.length, markerMesh.instanceMatrix.count));
-      const matrix = new THREE.Matrix4();
-      const colorBgc = new THREE.Color('#10b981');
-      const colorCore = new THREE.Color('#06b6d4');
-      const colLines = [];
+      // ── Argo Profile Overlays ─────────────────────────────────────────
+      // Remove old buoy meshes
+      floatBuoyMeshes.forEach((m) => argoGroup.remove(m));
+      floatBuoyMeshes = [];
 
-      current.floats.forEach((float, index) => {
+      const profileSegments = [];
+      const floatList = state.floats || [];
+
+      floatList.forEach((float, fIdx) => {
         const flon = Number(float.lng ?? float.lon ?? 0);
         const flat = Number(float.lat ?? 0);
-        const x = ((flon - west) / Math.max(east - west, 0.0001) - 0.5) * 20;
-        const z = ((flat - south) / Math.max(north - south, 0.0001) - 0.5) * 14;
-        const y = depthY;
-        matrix.makeTranslation(x, y, z);
-        markerMesh.setMatrixAt(index, matrix);
+        if (flon < west - 2 || flon > east + 2 || flat < south - 2 || flat > north + 2) return;
 
+        const x = ((flon - west) / dLon - 0.5) * BOX_WIDTH;
+        const z = ((flat - south) / dLat - 0.5) * BOX_DEPTH;
+        const maxDepthM = Number(float.depth_range_m?.[1] ?? 1000);
+        const bottomY = depthToY(maxDepthM, BOX_HEIGHT, exaggeration);
+
+        // Vertical profile column extending through the ocean volume
+        profileSegments.push(x, 0, z, x, bottomY, z);
+
+        // Observation node ticks down the profile
+        [10, 50, 100, 200, 500, 1000].forEach((d) => {
+          if (d <= maxDepthM) {
+            const nodeY = depthToY(d, BOX_HEIGHT, exaggeration);
+            profileSegments.push(x - 0.25, nodeY, z, x + 0.25, nodeY, z);
+          }
+        });
+
+        // Surface buoy mesh
         const isBgc = float.type === 'bgc' || float.marker_type === 'bgc_float';
-        markerMesh.setColorAt(index, isBgc ? colorBgc : colorCore);
-
-        const maxDepthM = Number(float.depth_range_m?.[1] ?? float.bbox_3d?.z_max ?? 1000);
-        const bottomY = -maxDepthM * 0.012 * current.verticalExaggeration;
-        colLines.push(x, 0, z, x, bottomY, z);
-
-        if (float.bbox_3d) {
-          const bx0 = ((Number(float.bbox_3d.x_min) - west) / Math.max(east - west, 0.0001) - 0.5) * 20;
-          const bx1 = ((Number(float.bbox_3d.x_max) - west) / Math.max(east - west, 0.0001) - 0.5) * 20;
-          const bz0 = ((Number(float.bbox_3d.y_min) - south) / Math.max(north - south, 0.0001) - 0.5) * 14;
-          const bz1 = ((Number(float.bbox_3d.y_max) - south) / Math.max(north - south, 0.0001) - 0.5) * 14;
-          colLines.push(bx0, 0, bz0, bx1, 0, bz0);
-          colLines.push(bx1, 0, bz0, bx1, 0, bz1);
-          colLines.push(bx1, 0, bz1, bx0, 0, bz1);
-          colLines.push(bx0, 0, bz1, bx0, 0, bz0);
-          colLines.push(bx0, bottomY, bz0, bx1, bottomY, bz0);
-          colLines.push(bx1, bottomY, bz0, bx1, bottomY, bz1);
-          colLines.push(bx1, bottomY, bz1, bx0, bottomY, bz1);
-          colLines.push(bx0, bottomY, bz1, bx0, bottomY, bz0);
-          colLines.push(bx0, 0, bz0, bx0, bottomY, bz0);
-          colLines.push(bx1, 0, bz0, bx1, bottomY, bz0);
-          colLines.push(bx1, 0, bz1, bx1, bottomY, bz1);
-          colLines.push(bx0, 0, bz1, bx0, bottomY, bz1);
-        } else {
-          const sz = 0.35;
-          colLines.push(x - sz, depthY, z, x + sz, depthY, z);
-          colLines.push(x, depthY, z - sz, x, depthY, z + sz);
-        }
-      });
-      markerMesh.instanceMatrix.needsUpdate = true;
-      if (markerMesh.instanceColor) markerMesh.instanceColor.needsUpdate = true;
-
-      floatColumns.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(colLines), 3));
-      floatColumns.geometry.computeBoundingBox();
-      floatColumns.visible = current.floats.length > 0;
-
-      const canvas = mount.querySelector('canvas');
-      if (canvas) {
-        canvas.dataset.engine = 'three.js r186';
-        canvas.dataset.samples = String(points.length);
-        canvas.dataset.gridDimensions = `${new Set(points.map((point) => point.lat)).size}x${new Set(points.map((point) => point.lon)).size}`;
-        canvas.dataset.vectorSamples = String(points.filter((point) => point.current_u_ms != null && point.current_v_ms != null).length);
-        canvas.dataset.bounds = `${west},${east},${south},${north}`;
-        canvas.dataset.sliceDepth = String(depthValue);
-        canvas.dataset.valueRange = `${min},${max}`;
-        canvas.dataset.variable = current.variable;
-        canvas.dataset.thresholdMatches = String(
-          current.threshold?.enabled
-            ? points.filter((point) => {
-                const value = current.variable === 'currents' ? vectorMagnitude(point) : valueFor(point, current.variable);
-                return current.threshold.operator === '>'
-                  ? value > current.threshold.value
-                  : current.threshold.operator === '<'
-                  ? value < current.threshold.value
-                  : Math.abs(value - current.threshold.value) <= current.threshold.tolerance;
-              }).length
-            : 0
+        const buoyMesh = new THREE.Mesh(
+          buoyGeo,
+          new THREE.MeshStandardMaterial({
+            color: isBgc ? '#10b981' : '#00f0ff',
+            emissive: isBgc ? '#047857' : '#0284c7',
+            emissiveIntensity: 0.5,
+            roughness: 0.2,
+          })
         );
+        buoyMesh.position.set(x, 0.2, z);
+        buoyMesh.userData = { float, index: fIdx };
+        argoGroup.add(buoyMesh);
+        floatBuoyMeshes.push(buoyMesh);
+      });
+
+      profileLinesGeo.setAttribute('position', new THREE.Float32BufferAttribute(profileSegments, 3));
+      argoGroup.visible = floatList.length > 0;
+    };
+
+    updateScene();
+    sceneRef.current = { update: updateScene };
+
+    // ── 8. Interaction & Raycasting ──────────────────────────────────────
+    const handlePointerClick = (event) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+
+      const intersects = raycaster.intersectObjects(floatBuoyMeshes, false);
+      if (intersects.length > 0) {
+        const clickedFloat = intersects[0].object.userData.float;
+        setActiveFloatInfo(clickedFloat);
+        onSelectMarker?.(clickedFloat);
       }
     };
-    update();
+    renderer.domElement.addEventListener('click', handlePointerClick);
 
-    let resizeTimeout;
-    const resize = () => {
-      const width = mount.clientWidth || 1;
-      const height = mount.clientHeight || 1;
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-      renderer.setSize(width, height, false);
-
-      clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => {
-        scene.updateMatrixWorld(true);
-        fitCameraToVolume(camera, controls);
-      }, 150);
-    };
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(mount);
-
-    const onClick = (event) => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObject(markerMesh)[0];
-      if (hit && dataRef.current.floats[hit.instanceId]) onSelectMarker?.(dataRef.current.floats[hit.instanceId]);
-    };
-    renderer.domElement.addEventListener('click', onClick);
-
-    let frame;
-    const render = () => {
+    // ── 9. Resize & Animation Loop ───────────────────────────────────────
+    let frameId;
+    const animate = () => {
       controls.update();
       renderer.render(scene, camera);
-      frame = requestAnimationFrame(render);
+      frameId = requestAnimationFrame(animate);
     };
-    render();
+    animate();
 
-    sceneRef.current = { update };
-    if (typeof window !== 'undefined') {
-      window.__oceanSlabDebug = { THREE, scene, camera, renderer, controls, field, vectors, slice, markerMesh };
-    }
+    const handleResize = () => {
+      if (!mount) return;
+      const w = mount.clientWidth;
+      const h = mount.clientHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    };
+    const observer = new ResizeObserver(handleResize);
+    observer.observe(mount);
 
     return () => {
-      cancelAnimationFrame(frame);
+      cancelAnimationFrame(frameId);
       observer.disconnect();
-      renderer.domElement.removeEventListener('click', onClick);
+      renderer.domElement.removeEventListener('click', handlePointerClick);
       controls.dispose();
-      field.geometry.dispose();
-      vectors.geometry.dispose();
-      floatColumns.geometry.dispose();
-      sliceTexture.dispose();
-      pointTexture.dispose();
       renderer.dispose();
+      layerTextures.forEach((t) => t.dispose());
+      layerMeshes.forEach((m) => m.geometry.dispose());
       mount.removeChild(renderer.domElement);
-      if (typeof window !== 'undefined') delete window.__oceanSlabDebug;
     };
-  }, [onSelectMarker, floats.length]);
+  }, []);
 
+  // Update on prop changes
   useEffect(() => {
     sceneRef.current?.update();
-  }, [grid, floats, variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold]);
+  }, [depthSlices, volumeData, grid, floats, variable, depth, dataDepth, currentBounds, opacity, verticalExaggeration, source, dataSource, backupDate]);
 
-  return <div ref={mountRef} className="ocean-slab-canvas" aria-label="Three dimensional ocean slab" />;
+  // Determine source badge label
+  const isBackup = dataSource === 'backup_cache' || source === 'backup_cache';
+  const isLive = dataSource === 'copernicus_zarr' || source === 'copernicus_zarr';
+
+  const badgeText = isLive
+    ? 'Copernicus Live Analysis'
+    : isBackup
+    ? `Copernicus Backup Snapshot (${backupDate || 'Stored'})`
+    : `${regionName} Reference / Demo Field`;
+
+  const badgeColor = isLive
+    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+    : isBackup
+    ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+    : 'bg-amber-500/20 text-amber-300 border-amber-500/40';
+
+  return (
+    <div className="relative w-full h-full min-h-[420px] bg-[#070d18] rounded-xl overflow-hidden select-none">
+      {/* 3D WebGL Canvas */}
+      <div ref={mountRef} className="w-full h-full" />
+
+      {/* Top Left: 3D Ocean Volume Status Badge */}
+      <div className="absolute top-3 left-3 z-10 flex flex-col gap-1.5 pointer-events-none">
+        <div className={`px-2.5 py-1 rounded-md text-[11px] font-mono font-semibold border backdrop-blur-md shadow-md ${badgeColor}`}>
+          {badgeText}
+        </div>
+        <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono bg-slate-900/80 px-2 py-0.5 rounded border border-slate-700/50 backdrop-blur-sm">
+          <span>SURFACE: 0m</span>
+          <span>•</span>
+          <span>DEPTH: 1000m (Layered Stratification)</span>
+        </div>
+      </div>
+
+      {/* Floating Active Float HUD (on float click) */}
+      {activeFloatInfo && (
+        <div className="absolute top-3 right-3 z-20 bg-slate-900/95 border border-cyan-500/40 p-3 rounded-xl shadow-2xl backdrop-blur-md text-slate-200 text-xs w-[240px]">
+          <div className="flex items-center justify-between mb-2">
+            <span className="font-bold text-cyan-400">Argo Float #{activeFloatInfo.platform_number || activeFloatInfo.id}</span>
+            <button
+              onClick={() => setActiveFloatInfo(null)}
+              className="text-slate-400 hover:text-white cursor-pointer px-1 text-sm leading-none"
+            >
+              ×
+            </button>
+          </div>
+          <div className="space-y-1 font-mono text-[11px] text-slate-300">
+            <div>Type: <span className="text-teal-400 uppercase font-semibold">{activeFloatInfo.type || 'Core'}</span></div>
+            <div>Position: {Number(activeFloatInfo.lat).toFixed(2)}°N, {Number(activeFloatInfo.lon ?? activeFloatInfo.lng).toFixed(2)}°E</div>
+            <div>Profile Range: 0 → {activeFloatInfo.depth_range_m?.[1] || 1000}m</div>
+            {activeFloatInfo.temperature != null && <div>Temp: <span className="text-amber-400">{activeFloatInfo.temperature}°C</span></div>}
+          </div>
+        </div>
+      )}
+
+      {/* Vertical Depth Reference Axis (Left Bottom) */}
+      <div className="absolute bottom-3 left-3 z-10 flex items-center gap-2 text-[10px] text-slate-400 font-mono bg-slate-900/80 px-2.5 py-1 rounded-md border border-slate-700/50 backdrop-blur-sm pointer-events-none">
+        <span>Vertical exaggeration: ~{verticalExaggeration}×</span>
+        <span>•</span>
+        <span>Orbit: Left-drag | Zoom: Scroll</span>
+      </div>
+    </div>
+  );
 }
-
-export { DEPTH_BINS };

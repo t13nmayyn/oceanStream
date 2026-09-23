@@ -10,7 +10,10 @@ import { useState, useEffect } from 'react';
 import { REGION_MARKERS } from '../map/LightweightGlobeView';
 import { MapPin, Calendar, Layers, Navigation, Compass, ChevronRight, Crosshair } from 'lucide-react';
 
-const QUICK_REGIONS = ['Arabian Sea', 'Bay of Bengal', 'Indian Ocean', 'Andaman Sea', 'Lakshadweep Sea'];
+const QUICK_REGIONS = [
+  'Pacific Ocean', 'Atlantic Ocean', 'Indian Ocean', 'Southern Ocean', 'Arctic Ocean',
+  'Bay of Bengal', 'Arabian Sea', 'Andaman Sea', 'Lakshadweep Sea'
+];
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);

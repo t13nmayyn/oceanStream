@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { REGION_MARKERS } from '../map/LightweightGlobeView';
 
-const QUICK_REGIONS = ['Arabian Sea', 'Bay of Bengal', 'Indian Ocean'];
+const MAJOR_OCEANS = ['Pacific Ocean', 'Atlantic Ocean', 'Indian Ocean', 'Southern Ocean', 'Arctic Ocean'];
+const REGIONAL_SEAS = ['Bay of Bengal', 'Arabian Sea', 'Andaman Sea'];
+const QUICK_REGIONS = [...MAJOR_OCEANS, ...REGIONAL_SEAS];
 
 export default function CoordinatePanel({ onExplore, focusedRegion }) {
   const [lat, setLat] = useState('');
