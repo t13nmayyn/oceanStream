@@ -23,7 +23,7 @@
  *   { region, lat, lon, depth, date, bbox }
  * Depth + date are dispatched into AppContext for OceanWorkspace to pick up.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import { useApp, useAppDispatch } from '../context/AppContext';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -39,21 +39,21 @@ import OceanStreamCopilot from '../components/copilot/OceanStreamCopilot';
 
 function DataPanelPlaceholder({ region, lat, lon }) {
   return (
-    <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/30 border-l border-slate-800/40 p-8">
+    <div className="w-full h-full flex flex-col items-center justify-center bg-white border-l border-[#1C3A63]/20 p-8">
       <div className="text-center max-w-[280px] w-full">
-        <div className="text-[16px] font-semibold text-slate-300 mb-2">Ocean Intelligence</div>
-        <div className="text-[12px] text-slate-500 leading-relaxed mb-8">
+        <div className="text-[15px] font-semibold text-[#0B1E3D] mb-2">Ocean Intelligence</div>
+        <div className="text-[12px] text-[#6B7C96] leading-relaxed mb-8">
           Select a point, inspect the water column, or ask Ocean Assistant.
         </div>
         
         <div className="flex flex-col gap-2 text-left">
           {['Point Data', 'Timeline Analysis', 'Observations', 'AI Explanation'].map((row, i) => (
-            <div key={row} className="px-4 py-3 rounded-xl bg-slate-800/40 border border-slate-700/50 text-[12px] font-medium text-slate-400 flex items-center justify-between shadow-sm">
+            <div key={row} className="px-4 py-3 rounded-xl bg-[#F8FAFC] border border-[#1C3A63]/20 text-[12px] font-medium text-[#0B1E3D] flex items-center justify-between shadow-none">
               <span className="flex items-center gap-3">
-                <span className="w-4 h-4 rounded bg-slate-700/50 flex items-center justify-center text-[9px] text-slate-500">{i + 1}</span>
+                <span className="w-4 h-4 rounded bg-[#E8EDF5] flex items-center justify-center text-[9px] text-[#6B7C96]">{i + 1}</span>
                 {row}
               </span>
-              <div className="h-1.5 w-1.5 rounded-full bg-slate-700"></div>
+              <div className="h-1.5 w-1.5 rounded-full bg-[#1C3A63]/30"></div>
             </div>
           ))}
         </div>
@@ -83,14 +83,31 @@ export default function OceanDetailPage() {
   const initialLon  = location.state?.lon  ?? searchParams.get('lon')  ?? null;
   const initialDepth = Number(location.state?.depth ?? searchParams.get('depth') ?? 0);
   const initialDate  = location.state?.date ?? searchParams.get('date') ?? null;
+  const initialBbox  = location.state?.bbox ?? null;
 
-  // Seed AppContext with the incoming depth + date so OceanWorkspace picks them up
+  const effectiveBbox = useMemo(() => {
+    if (initialBbox) return initialBbox;
+    if (initialLat != null && initialLon != null) {
+      return {
+        south: Math.max(-90, Number(initialLat) - 5),
+        north: Math.min(90, Number(initialLat) + 5),
+        west: Math.max(-180, Number(initialLon) - 5),
+        east: Math.min(180, Number(initialLon) + 5),
+      };
+    }
+    return null;
+  }, [initialBbox, initialLat, initialLon]);
+
+  // Seed AppContext with incoming depth + date + activePointQuery
   useEffect(() => {
     if (Number.isFinite(initialDepth)) {
       dispatch({ type: 'SET_DEPTH', payload: initialDepth });
     }
     if (initialDate) {
       dispatch({ type: 'SET_DATE', payload: initialDate });
+    }
+    if (initialLat != null && initialLon != null) {
+      dispatch({ type: 'SET_ACTIVE_POINT_QUERY', payload: { lat: Number(initialLat), lon: Number(initialLon) } });
     }
   }, []); // run once on mount — useDateControls may override date later if server has a newer one
 
@@ -136,34 +153,34 @@ export default function OceanDetailPage() {
     : '—';
 
   return (
-    <div className="flex flex-col w-screen h-screen overflow-hidden bg-slate-950 text-slate-100">
+    <div className="flex flex-col w-screen h-screen overflow-hidden bg-[#0B1E3D] text-white">
       {/* ── AppNav ─────────────────────────────────────────────────────────── */}
       <AppNav />
 
       {/* ── Context bar ──────────────────────────────────────────────────── */}
       <div
-        className="shrink-0 flex items-center gap-3 px-4 border-b border-slate-800 bg-slate-950/95 backdrop-blur-sm"
+        className="shrink-0 flex items-center gap-3 px-4 border-b border-[#1C3A63] bg-[#0B1E3D]/95 backdrop-blur-sm"
         style={{ height: '44px', marginTop: '56px' }}
       >
         {/* Back to Globe */}
         <button
           type="button"
           onClick={() => navigate('/explorer')}
-          className="flex items-center gap-1.5 text-[12px] font-semibold text-slate-400 hover:text-teal-400 transition-colors cursor-pointer px-2 py-1 rounded-lg hover:bg-slate-800/60 shrink-0"
+          className="flex items-center gap-1.5 text-[12px] font-semibold text-[#8EA4C8] hover:text-teal-400 transition-colors cursor-pointer px-2 py-1 rounded-lg hover:bg-white/10 shrink-0"
         >
           <ArrowLeft size={14} />
           Globe
         </button>
 
-        <div className="w-px h-4 bg-slate-700 shrink-0" />
+        <div className="w-px h-4 bg-[#1C3A63] shrink-0" />
 
         {/* Region / coordinates */}
-        <span className="text-[13px] font-semibold text-slate-200 truncate">{locationLabel}</span>
+        <span className="text-[13px] font-semibold text-white truncate">{locationLabel}</span>
 
-        <div className="w-px h-4 bg-slate-700 shrink-0" />
+        <div className="w-px h-4 bg-[#1C3A63] shrink-0" />
 
         {/* Active date */}
-        <span className="text-[12px] font-mono text-slate-400 shrink-0">{dateLabel}</span>
+        <span className="text-[12px] font-mono text-[#8EA4C8] shrink-0">{dateLabel}</span>
 
         {/* Spacer */}
         <div className="flex-1" />
@@ -180,6 +197,8 @@ export default function OceanDetailPage() {
             showMap={false}
             selectedPoint={activePointQuery}
             onPointClick={handlePointClick}
+            bbox={effectiveBbox}
+            region={regionName}
           />
         </div>
 

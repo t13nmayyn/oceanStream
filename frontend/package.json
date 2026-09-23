@@ -27,6 +27,7 @@
     "react-router-dom": "^7.18.3",
     "tailwindcss": "^4.3.3",
     "three": "^0.186.0",
+    "three-render-objects": "^1.42.0",
     "vite-plugin-cesium": "^1.2.23"
   },
   "devDependencies": {

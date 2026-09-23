@@ -50,6 +50,8 @@ class PageState(str, Enum):
     ON_DISK     = "ON_DISK"      # in .zarr store, not yet in L1 — 5-25 ms
     FETCHING    = "FETCHING"     # actively streaming from origin API right now
     NOT_FETCHED = "NOT_FETCHED"  # doesn't exist anywhere locally
+    FAILED      = "FAILED"       # fetch attempted and failed — will retry on next request
+    PARTIAL     = "PARTIAL"      # chunk partially written — available but incomplete
 
 
 # ---------------------------------------------------------------------------
@@ -201,9 +203,10 @@ class PageTable:
                     for db in depth_bs:
                         page = self._get_or_create(lb, ln, db, time_str)
                         page.last_access = time.time()
-                        if page.state in (PageState.RESIDENT, PageState.ON_DISK):
+                        if page.state in (PageState.RESIDENT, PageState.ON_DISK, PageState.PARTIAL):
                             served.append(page)
                         else:
+                            # NOT_FETCHED, FETCHING (dedupe — caller checks), FAILED (retry)
                             missing.append(page)
 
         return served, missing
@@ -213,9 +216,10 @@ class PageTable:
     # ------------------------------------------------------------------
 
     def mark_fetching(self, pages: Sequence[Page]) -> None:
+        """Transition NOT_FETCHED or FAILED pages → FETCHING."""
         with self._lock:
             for p in pages:
-                if p.state == PageState.NOT_FETCHED:
+                if p.state in (PageState.NOT_FETCHED, PageState.FAILED):
                     p.state = PageState.FETCHING
 
     def mark_on_disk(self, page_id: str, size_bytes: int = 0) -> None:
@@ -240,6 +244,26 @@ class PageTable:
         with self._lock:
             if page_id in self._pages and self._pages[page_id].state == PageState.RESIDENT:
                 self._pages[page_id].state = PageState.ON_DISK
+
+    def mark_failed(self, pages: Sequence[Page]) -> None:
+        """
+        Transition FETCHING → FAILED for pages whose origin fetch failed.
+        FAILED pages are treated as missing (retry-eligible) by diff().
+        """
+        with self._lock:
+            for p in pages:
+                if p.state == PageState.FETCHING:
+                    p.state = PageState.FAILED
+
+    def mark_partial(self, pages: Sequence[Page]) -> None:
+        """
+        Transition FETCHING → PARTIAL for pages where only a chunk has been written.
+        PARTIAL pages appear in 'served' so existing data is visible immediately.
+        """
+        with self._lock:
+            for p in pages:
+                if p.state == PageState.FETCHING:
+                    p.state = PageState.PARTIAL
 
     def touch(self, page_id: str) -> None:
         """Update last_access timestamp (called on every read)."""
@@ -377,6 +401,87 @@ class PageTable:
         return None
 
     # ------------------------------------------------------------------
+    # 3D Nearest Slice Finder — locate closest available depth / spatial slice
+    # ------------------------------------------------------------------
+
+    def find_nearest_slice(
+        self,
+        lat: float,
+        lon: float,
+        depth_m: float,
+        time_str: Optional[str] = None,
+    ) -> Optional[Tuple[Page, float]]:
+        """
+        Locate the nearest page that is currently RESIDENT or ON_DISK.
+        First prioritises depth proximity (e.g. 0-2m -> 3-4m or 0m is nearest),
+        then horizontal spatial proximity.
+        Returns (page, depth_distance_m) or None if no pages are stored.
+        """
+        lat_b = lat_bucket(lat)
+        lon_b = lon_bucket(lon)
+        target_db = depth_bucket(depth_m)
+
+        with self._lock:
+            # Candidates that are actually in RAM or on disk
+            candidates = [
+                p for p in self._pages.values()
+                if p.state in (PageState.RESIDENT, PageState.ON_DISK)
+                and (time_str is None or p.time_bucket == time_str)
+            ]
+            if not candidates:
+                # If no matching date, search all dates
+                candidates = [
+                    p for p in self._pages.values()
+                    if p.state in (PageState.RESIDENT, PageState.ON_DISK)
+                ]
+            if not candidates:
+                return None
+
+            # Sort by: 1) depth distance, 2) horizontal distance in buckets
+            def score(p: Page):
+                depth_dist = abs(p.depth_bucket - target_db) * DEPTH_BIN_M
+                spatial_dist = math.hypot(p.lat_bucket - lat_b, p.lon_bucket - lon_b)
+                return (depth_dist, spatial_dist)
+
+            best = min(candidates, key=score)
+            depth_dist_m = abs((best.depth_bucket * DEPTH_BIN_M) - depth_m)
+            return best, depth_dist_m
+
+    def get_page_state(self, lat_b: int, lon_b: int, depth_b: int, time_b: str) -> PageState:
+        """Safely read page state without creating placeholders."""
+        pid = f"{lat_b}:{lon_b}:{depth_b}:{time_b}"
+        with self._lock:
+            p = self._pages.get(pid)
+            return p.state if p else PageState.NOT_FETCHED
+
+    # ------------------------------------------------------------------
+    # Explicit Data Deletion & Store Pruning
+    # ------------------------------------------------------------------
+
+    def delete_page(self, page_id: str) -> bool:
+        """Explicitly remove a page from the table and adjust disk bytes."""
+        with self._lock:
+            p = self._pages.pop(page_id, None)
+            if p:
+                if p.state == PageState.ON_DISK:
+                    self._disk_bytes = max(0, self._disk_bytes - p.size_bytes)
+                return True
+        return False
+
+    def clear_non_pinned(self) -> int:
+        """Clear all non-pinned pages from the page table. Returns count freed."""
+        removed = 0
+        with self._lock:
+            to_remove = [pid for pid, p in self._pages.items() if not p.pinned]
+            for pid in to_remove:
+                p = self._pages.pop(pid)
+                if p.state == PageState.ON_DISK:
+                    self._disk_bytes = max(0, self._disk_bytes - p.size_bytes)
+                removed += 1
+        return removed
+
+
+    # ------------------------------------------------------------------
     # Serialisation (for /ocean/coverage)
     # ------------------------------------------------------------------
 
@@ -405,6 +510,8 @@ class PageTable:
                 "lat_bucket":   p.lat_bucket,
                 "lon_bucket":   p.lon_bucket,
                 "depth_bucket": p.depth_bucket,
+                "lat_range":    f"{p.lat_min:.1f}-{p.lat_max:.1f}",
+                "lon_range":    f"{p.lon_min:.1f}-{p.lon_max:.1f}",
                 "depth_range":  f"{p.depth_min:.0f}-{p.depth_max:.0f}",
                 "time_bucket":  p.time_bucket,
                 "state":        p.state.value,
@@ -422,13 +529,17 @@ class PageTable:
         with self._lock:
             counts = {s.value: 0 for s in PageState}
             pinned_count = 0
+            failed_count = 0
             for p in self._pages.values():
                 counts[p.state.value] += 1
                 if p.pinned:
                     pinned_count += 1
+                if p.state == PageState.FAILED:
+                    failed_count += 1
         return {
             "total_pages":   len(self._pages),
             "pinned_pages":  pinned_count,
+            "failed_pages":  failed_count,
             "disk_bytes":    self._disk_bytes,
             "cap_bytes":     self.cap_bytes,
             "disk_used_pct": round(self._disk_bytes / self.cap_bytes * 100, 1),

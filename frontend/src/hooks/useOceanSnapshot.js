@@ -1,136 +1,179 @@
 /**
- * useOceanSnapshot.js — Fetches real ocean data from /ocean/snapshot endpoint
+ * useOceanSnapshot.js — Fetches ocean volume data from /ocean/volume endpoint
  *
- * Returns a grid of physics + BGC values for the globe texture overlay.
- * Falls back gracefully to null (synthetic model) when backend is offline.
+ * Provides 3D multi-depth slices (0, 10, 50, 100, 200, 500, 1000m) with
+ * Argo float overlays and automatic fallback:
+ *   live Zarr → backup Zarr (data_source="backup_cache") → reference demo field
  */
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { getOceanSnapshot } from '../services/oceanApi';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { getOceanVolume, getOceanSnapshot } from '../services/oceanApi';
 import { useApp, useAppDispatch } from '../context/AppContext';
 
-// Default bounding box: Indian Ocean region + global coverage
-const REGIONS = {
-  indianOcean: { south: -10, north: 25, west: 50, east: 100 },
-  global:      { south: -70, north: 70, west: -180, east: 180 },
+// Predefined bounding boxes for major world oceans & regional seas
+export const PREDEFINED_OCEANS = {
+  pacific:       { south: -50, north: 50, west: 140, east: -70 },
+  pacificOcean:  { south: -50, north: 50, west: 140, east: -70 },
+  'pacific-ocean': { south: -50, north: 50, west: 140, east: -70 },
+  'Pacific Ocean': { south: -50, north: 50, west: 140, east: -70 },
+
+  atlantic:      { south: -50, north: 60, west: -75, east: 15 },
+  atlanticOcean: { south: -50, north: 60, west: -75, east: 15 },
+  'atlantic-ocean': { south: -50, north: 60, west: -75, east: 15 },
+  'Atlantic Ocean': { south: -50, north: 60, west: -75, east: 15 },
+
+  indian:        { south: -45, north: 25, west: 40, east: 110 },
+  indianOcean:   { south: -45, north: 25, west: 40, east: 110 },
+  'indian-ocean': { south: -45, north: 25, west: 40, east: 110 },
+  'Indian Ocean': { south: -45, north: 25, west: 40, east: 110 },
+
+  southern:      { south: -75, north: -50, west: -180, east: 180 },
+  southernOcean: { south: -75, north: -50, west: -180, east: 180 },
+  'southern-ocean': { south: -75, north: -50, west: -180, east: 180 },
+  'Southern Ocean': { south: -75, north: -50, west: -180, east: 180 },
+
+  arctic:        { south: 65, north: 90, west: -180, east: 180 },
+  arcticOcean:   { south: 65, north: 90, west: -180, east: 180 },
+  'arctic-ocean': { south: 65, north: 90, west: -180, east: 180 },
+  'Arctic Ocean': { south: 65, north: 90, west: -180, east: 180 },
+
+  arabianSea:    { south: 10, north: 25, west: 55, east: 75 },
+  'arabian-sea': { south: 10, north: 25, west: 55, east: 75 },
+  'Arabian Sea': { south: 10, north: 25, west: 55, east: 75 },
+
+  bayOfBengal:   { south: 5, north: 22, west: 80, east: 98 },
+  'bay-of-bengal': { south: 5, north: 22, west: 80, east: 98 },
+  'Bay of Bengal': { south: 5, north: 22, west: 80, east: 98 },
+
+  andamanSea:    { south: 5, north: 15, west: 90, east: 98 },
+  'andaman-sea': { south: 5, north: 15, west: 90, east: 98 },
+  'Andaman Sea': { south: 5, north: 15, west: 90, east: 98 },
+
+  lakshadweepSea: { south: 5, north: 15, west: 68, east: 78 },
+  'lakshadweep-sea': { south: 5, north: 15, west: 68, east: 78 },
+  'Lakshadweep Sea': { south: 5, north: 15, west: 68, east: 78 },
+
+  global:        { south: -70, north: 70, west: -180, east: 180 },
 };
 
-// Minimum interval between API calls (ms) to avoid spamming
-const FETCH_DEBOUNCE_MS = 2000;
-// Maximum retries for "fetching" status
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 5000;
+const DEFAULT_BOUNDS = PREDEFINED_OCEANS.indianOcean;
 
-export default function useOceanSnapshot(region = 'indianOcean') {
+export default function useOceanSnapshot(region = null) {
   const { selectedVariable, selectedDepth, selectedDate, apiStatus } = useApp();
   const dispatch = useAppDispatch();
 
+  const [volumeData, setVolumeData] = useState(null);
   const [snapshotData, setSnapshotData] = useState(null);
+  const [depthSlices, setDepthSlices] = useState([]);
+  const [floats, setFloats] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [source, setSource] = useState('synthetic'); // 'real' | 'synthetic' | 'placeholder'
+  const [source, setSource] = useState('reference'); // 'copernicus_zarr' | 'backup_cache' | 'reference'
+  const [backupDate, setBackupDate] = useState(null);
 
-  const lastFetchRef = useRef(0);
-  const retryCountRef = useRef(0);
-  const retryTimeoutRef = useRef(null);
+  const regionKey = typeof region === 'object' && region !== null
+    ? `${region.south ?? region.lat_min}_${region.north ?? region.lat_max}_${region.west ?? region.lon_min}_${region.east ?? region.lon_max}`
+    : String(region || 'default');
 
-  const bounds = REGIONS[region] || REGIONS.indianOcean;
+  const bounds = useMemo(() => {
+    if (region && typeof region === 'object') {
+      const s = region.south ?? region.lat_min;
+      const n = region.north ?? region.lat_max;
+      const w = region.west ?? region.lon_min;
+      const e = region.east ?? region.lon_max;
+      if (s !== undefined && n !== undefined && w !== undefined && e !== undefined) {
+        return { south: Number(s), north: Number(n), west: Number(w), east: Number(e) };
+      }
+    }
+    if (typeof region === 'string' && PREDEFINED_OCEANS[region]) {
+      return PREDEFINED_OCEANS[region];
+    }
+    return DEFAULT_BOUNDS;
+  }, [regionKey]);
 
-  const fetchSnapshot = useCallback(async (isRetry = false) => {
-    // Don't fetch if backend is offline
+  const fetchSnapshot = useCallback(async () => {
     if (apiStatus === 'offline') {
-      setSource('synthetic');
+      setSource('reference');
       return;
     }
-
-    // Debounce
-    const now = Date.now();
-    if (!isRetry && now - lastFetchRef.current < FETCH_DEBOUNCE_MS) {
-      return;
-    }
-    lastFetchRef.current = now;
 
     setLoading(true);
     setError(null);
 
     try {
-      const result = await getOceanSnapshot(bounds, selectedDepth || 0, selectedDate);
+      // 1. Fetch complete 3D volume across all standard depth bins (0, 10, 50, 100, 200, 500, 1000m)
+      const vol = await getOceanVolume(bounds, '0,10,50,100,200,500,1000', selectedDate, selectedVariable);
 
-      if (!result) {
-        setSource('synthetic');
-        setLoading(false);
-        return;
-      }
+      if (vol && vol.depth_slices && vol.depth_slices.length > 0) {
+        setVolumeData(vol);
+        setDepthSlices(vol.depth_slices);
+        setFloats(vol.floats || []);
+        setSource(vol.data_source || vol.source || 'backup_cache');
+        setBackupDate(vol.backup_date || null);
 
-      // Handle "fetching" status — data is being ingested, retry later
-      if (result.status === 'fetching') {
-        if (retryCountRef.current < MAX_RETRIES) {
-          retryCountRef.current++;
-          dispatch({
-            type: 'ADD_LOG',
-            payload: {
-              type: 'info',
-              text: `${new Date().toISOString().slice(11, 19)} [SNAPSHOT] Data fetching from origin... retry ${retryCountRef.current}/${MAX_RETRIES}`,
-            },
-          });
-          retryTimeoutRef.current = setTimeout(() => fetchSnapshot(true), RETRY_DELAY_MS);
+        // Find depth slice matching currently selected depth or fallback to surface (0m)
+        const targetDepth = Number(selectedDepth || 0);
+        let matchingSlice = vol.depth_slices.find((s) => Math.abs(s.depth_m - targetDepth) < 1.0);
+        if (!matchingSlice) {
+          // Nearest depth slice
+          matchingSlice = vol.depth_slices.reduce((prev, curr) =>
+            Math.abs(curr.depth_m - targetDepth) < Math.abs(prev.depth_m - targetDepth) ? curr : prev
+          );
         }
-        setSource('synthetic');
-        setLoading(false);
-        return;
-      }
 
-      // Success
-      if (result.grid && result.grid.length > 0) {
-        retryCountRef.current = 0;
-        setSnapshotData(result);
-        setSource(result.placeholder ? 'placeholder' : 'real');
+        const pts = matchingSlice?.points || [];
+        setSnapshotData({
+          ...vol,
+          depth: matchingSlice?.depth_m ?? targetDepth,
+          grid: pts,
+        });
+
         dispatch({
           type: 'ADD_LOG',
           payload: {
             type: 'info',
-            text: `${new Date().toISOString().slice(11, 19)} [SNAPSHOT] ${result.grid.length} grid points loaded (${result.source || 'unknown'})`,
+            text: `${new Date().toISOString().slice(11, 19)} [VOLUME 3D] ${vol.depth_slices.length} depth layers loaded (${vol.data_source || vol.source})`,
           },
         });
       } else {
-        setSource('synthetic');
+        // Fallback to 2D snapshot if volume returned empty
+        const snap = await getOceanSnapshot(bounds, selectedDepth || 0, selectedDate);
+        if (snap && snap.grid && snap.grid.length > 0) {
+          setSnapshotData(snap);
+          setSource(snap.source || 'backup_cache');
+          setDepthSlices([
+            { depth_m: snap.depth || 0, points: snap.grid, source: snap.source },
+          ]);
+        } else {
+          setSource('reference');
+        }
       }
-
       setLoading(false);
     } catch (err) {
       console.warn('[useOceanSnapshot] fetch error:', err.message);
       setError(err.message);
-      setSource('synthetic');
+      setSource('reference');
       setLoading(false);
     }
-  }, [apiStatus, bounds, selectedDepth, selectedDate, dispatch]);
+  }, [apiStatus, bounds, selectedDepth, selectedDate, selectedVariable, dispatch]);
 
-  // Fetch on mount and when parameters change
   useEffect(() => {
-    retryCountRef.current = 0;
-    if (retryTimeoutRef.current) {
-      clearTimeout(retryTimeoutRef.current);
-    }
-    fetchSnapshot();
-
-    return () => {
-      if (retryTimeoutRef.current) {
-        clearTimeout(retryTimeoutRef.current);
-      }
-    };
+    const timer = setTimeout(() => {
+      fetchSnapshot();
+    }, 150);
+    return () => clearTimeout(timer);
   }, [fetchSnapshot]);
 
   return {
-    /** The raw snapshot response from the backend (or null) */
+    volumeData,
+    depthSlices,
     snapshotData,
-    /** The grid array from the snapshot */
     gridData: snapshotData?.grid || [],
-    /** Whether we're currently fetching */
+    floats: floats.length > 0 ? floats : (volumeData?.floats || []),
     loading,
-    /** Error message if fetch failed */
     error,
-    /** Data source: 'real', 'placeholder', or 'synthetic' */
     source,
-    /** Manually trigger a re-fetch */
+    backupDate,
+    dataSource: volumeData?.data_source || source,
     refetch: fetchSnapshot,
   };
 }

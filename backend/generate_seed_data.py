@@ -11,9 +11,11 @@ OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 PHY_ZARR_PATH = OUTPUT_DIR / "phy_data.zarr"
+
+
 BGC_ZARR_PATH = OUTPUT_DIR / "bgc_data.zarr"
 OCEAN_ZARR_PATH = OUTPUT_DIR / "ocean_data.zarr"
-ARGO_ZARR_PATH = OUTPUT_DIR / "argo_data.zarr"
+AagyRGO_ZARR_PATH = OUTPUT_DIR / "argo_data.zarr"
 
 print("=" * 60)
 print("Generating High-Resolution Ocean Datasets for L2 Zarr Stores")

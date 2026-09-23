@@ -222,34 +222,34 @@ def last_year_iso() -> str:
     return (date.today() - timedelta(days=365)).isoformat()
 
 
+
+# ---------------------------------------------------------------------------
+# TTL cache for latest_available_iso (recomputed at most once per hour)
+# ---------------------------------------------------------------------------
+import time as _time
+_latest_cache: dict = {"value": None, "expires": 0.0}
+_LATEST_TTL_SECS = 3600  # 1 hour
+
+
 def latest_available_iso() -> str:
     """
     Return the most-recent date for which Copernicus ANFC data is likely published.
-
-    Copernicus ANFC daily products are published with a ~24-36 h lag.
-    Strategy:
-      1. If it is past 14:00 UTC today, yesterday's data is almost certainly
-         available — return yesterday.
-      2. Otherwise (early UTC morning), return 2 days ago as the safe fallback.
-      3. In all cases we cap at MAX_LOOKBACK_DAYS days to avoid stale data.
-
-    This fixes the original broken loop that always returned on offset=1
-    without doing any actual availability check.
+    Result is cached for 1 hour — safe since Copernicus publishes daily.
     """
-    now_utc  = datetime.utcnow()
-    today    = now_utc.date()
+    now_mono = _time.monotonic()
+    if _latest_cache["value"] is not None and now_mono < _latest_cache["expires"]:
+        return _latest_cache["value"]
 
-    # If Copernicus has had time to publish yesterday's data (after ~14:00 UTC)
-    # use yesterday; otherwise use 2 days ago as the safer default.
-    if now_utc.hour >= 14:
-        safe_offset = 1   # yesterday
-    else:
-        safe_offset = 2   # day-before-yesterday
-
+    now_utc = datetime.utcnow()
+    today   = now_utc.date()
+    safe_offset = 1 if now_utc.hour >= 14 else 2
     offset = min(safe_offset, MAX_LOOKBACK_DAYS)
     res = (today - timedelta(days=offset)).isoformat()
-    logger.info(f"Resolved latest available date: {res}")
+    _latest_cache["value"]   = res
+    _latest_cache["expires"] = now_mono + _LATEST_TTL_SECS
+    logger.info(f"[router] Latest available date: {res} (cached 1h)")
     return res
+
 
 
 # ---------------------------------------------------------------------------

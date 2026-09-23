@@ -18,17 +18,17 @@ const STOPS = {
 
 function valueFor(point, variable) {
   const aliases = {
-    temperature: ['temperature_c', 'temperature', 'thetao'],
+    temperature: ['temperature_c', 'temperature', 'thetao', 'temp'],
     salinity: ['salinity_psu', 'salinity', 'so'],
     currents: ['current_speed', 'velocity'],
     chlorophyll: ['chlorophyll_mgl', 'chlorophyll', 'chl'],
-    oxygen: ['oxygen_mmolm3', 'oxygen', 'dissolved_oxygen'],
+    oxygen: ['oxygen_mmolm3', 'oxygen', 'dissolved_oxygen', 'o2'],
     ph: ['ph', 'pH'],
     nitrate: ['nitrate_mmolm3', 'nitrate', 'no3'],
     pco2: ['pco2_uatm', 'pco2', 'spco2'],
   };
   if (variable === 'currents') {
-    return Math.hypot(Number(point?.current_u_ms ?? 0), Number(point?.current_v_ms ?? 0));
+    return Math.hypot(Number(point?.current_u_ms ?? point?.uo ?? 0), Number(point?.current_v_ms ?? point?.vo ?? 0));
   }
   const key = (aliases[variable] || aliases.temperature).find((name) => point?.[name] != null);
   return Number(point?.[key] ?? 0);

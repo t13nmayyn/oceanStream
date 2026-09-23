@@ -312,11 +312,9 @@ const GlobeGlViewer = forwardRef(function GlobeGlViewer(
   const createThermalMesh = useCallback(() => {
     const radius = globeRef.current?.getGlobeRadius() || 100;
     const geo = new THREE.SphereGeometry(radius * 1.0025, 128, 128);
-    const mat = new THREE.MeshStandardMaterial({
+    const mat = new THREE.MeshBasicMaterial({
       transparent: true,
       opacity: heatmapOpacity !== undefined ? heatmapOpacity : 0.82,
-      roughness: 0.25,
-      metalness: 0.05,
       depthWrite: false,
       side: THREE.FrontSide,
       map: thermalTextureRef.current || null,

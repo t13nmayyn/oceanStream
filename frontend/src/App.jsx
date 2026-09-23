@@ -9,6 +9,7 @@ import AnalyticsPage from './pages/AnalyticsPage';
 import ObservationsPage from './pages/ObservationsPage';
 import DiagnosticsPage from './pages/DiagnosticsPage';
 import AboutPage from './pages/AboutPage';
+import DataExplorer from './pages/DataExplorer';
 
 import Toast from './components/ui/Toast';
 
@@ -27,6 +28,8 @@ export default function App() {
           <Route path="/ocean-detail" element={<OceanDetailPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/observations" element={<ObservationsPage />} />
+          <Route path="/datasets" element={<DataExplorer />} />
+          <Route path="/data-explorer" element={<DataExplorer />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/system" element={<DiagnosticsPage />} />
           {/* Fallback to landing */}

@@ -62,6 +62,35 @@ export async function getOceanSnapshot(bounds, depth = 0, date = null) {
   }
 }
 
+/**
+ * Fetch 3D multi-depth volume grid slices across 0, 10, 50, 100, 200, 500, 1000m
+ */
+export async function getOceanVolume(bounds, depths = '0,10,50,100,200,500,1000', date = null, variable = 'temperature') {
+  const south = Number(bounds.south ?? bounds.lat_min ?? 8);
+  const north = Number(bounds.north ?? bounds.lat_max ?? 20);
+  const west = Number(bounds.west ?? bounds.lon_min ?? 71);
+  const east = Number(bounds.east ?? bounds.lon_max ?? 88);
+
+  const params = new URLSearchParams({
+    lat_min: south.toFixed(2),
+    lat_max: north.toFixed(2),
+    lon_min: west.toFixed(2),
+    lon_max: east.toFixed(2),
+    depths,
+    variable,
+  });
+  if (date) params.append('date', date);
+
+  try {
+    const res = await fetch(`${API_BASE}/ocean/volume?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('[oceanApi] getOceanVolume error:', err.message);
+    return null;
+  }
+}
+
 export async function getOceanCoverage(bounds) {
   const params = new URLSearchParams({
     lat_min: bounds.south.toFixed(2),
@@ -112,4 +141,56 @@ export async function getDateInfo() {
       copernicus_available_date: new Date(Date.now() - 86400000).toISOString().slice(0, 10),
     };
   }
+}
+
+/**
+ * Upload an offline ocean dataset (.nc, .csv)
+ */
+export async function uploadDatasetFile(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await fetch(`${API_BASE}/api/upload-dataset`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    let errDetail = 'Upload failed';
+    try {
+      const data = await res.json();
+      errDetail = data.detail || errDetail;
+    } catch {}
+    throw new Error(errDetail);
+  }
+  return res.json();
+}
+
+/**
+ * List all user-uploaded datasets
+ */
+export async function getUploadedDatasets() {
+  const res = await fetch(`${API_BASE}/api/datasets`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return data.datasets || [];
+}
+
+/**
+ * Get spatial grid snapshot from an uploaded dataset
+ */
+export async function getUploadedDatasetSnapshot(datasetId, variable = '', depth = 0) {
+  const params = new URLSearchParams();
+  if (variable) params.append('variable', variable);
+  if (depth !== undefined) params.append('depth', depth.toString());
+
+  const res = await fetch(`${API_BASE}/api/datasets/${datasetId}/snapshot?${params.toString()}`);
+  if (!res.ok) {
+    let errDetail = 'Failed to fetch dataset snapshot';
+    try {
+      const data = await res.json();
+      errDetail = data.detail || errDetail;
+    } catch {}
+    throw new Error(errDetail);
+  }
+  return res.json();
 }
