@@ -48,6 +48,46 @@ export async function getArgoProfile(platformNumber, date = null) {
 }
 
 /**
+ * Fetch nearest underwater gliders / AODN moorings to a coordinate.
+ * Calls /glider/nearest on the FastAPI backend (IOOS Glider DAC + AODN ERDDAP).
+ * Returns { n_gliders, gliders: [] } — silently returns empty on failure.
+ */
+export async function getGlidersNearest(lat, lon, radiusKm = 500) {
+  const params = new URLSearchParams({
+    lat: lat.toFixed(4),
+    lon: lon.toFixed(4),
+    radius_km: radiusKm.toString(),
+  });
+
+  try {
+    const res = await fetch(`${API_BASE}/glider/nearest?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('[argoApi] getGlidersNearest unavailable:', err.message);
+    return { status: 'unavailable', n_gliders: 0, gliders: [] };
+  }
+}
+
+/**
+ * Fetch full vertical profile for an underwater glider mission.
+ * Calls /glider/profile on the FastAPI backend.
+ */
+export async function getGliderProfile(datasetId, server = null) {
+  const params = new URLSearchParams({ dataset_id: datasetId });
+  if (server) params.append('server', server);
+
+  try {
+    const res = await fetch(`${API_BASE}/glider/profile?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('[argoApi] getGliderProfile unavailable:', err.message);
+    return { status: 'unavailable', dataset_id: datasetId, profile: [] };
+  }
+}
+
+/**
  * Fetch global active Argo floats list
  */
 export async function getActiveArgoFloats(limit = 100) {

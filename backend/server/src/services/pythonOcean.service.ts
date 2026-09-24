@@ -7,7 +7,7 @@
 import { OceanPointQuery, OceanPointResponse } from '../types/ocean.types';
 
 const PYTHON_API_URL = process.env.PYTHON_API_URL ?? 'http://127.0.0.1:8000';
-const UPSTREAM_TIMEOUT_MS = parseInt(process.env.UPSTREAM_TIMEOUT_MS ?? '10000', 10);
+const UPSTREAM_TIMEOUT_MS = parseInt(process.env.UPSTREAM_TIMEOUT_MS ?? '20000', 10);
 
 /**
  * Forward a validated point query to the Python /ocean/point endpoint.
