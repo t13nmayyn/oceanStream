@@ -94,9 +94,17 @@ BOUNDING_BOX = {
     "max_lat": 20.0,
 }
 
-# Time window: 1 month of daily data (July 2024)
-START_TIME = "2024-07-01T00:00:00"
-END_TIME = "2024-07-31T00:00:00"
+# Dynamically resolve available Copernicus observation date
+# Copernicus product versions (e.g. 202406) must not be confused with observation dates.
+from datetime import datetime, timedelta, date
+from router import latest_available_iso
+
+_latest_date_str = latest_available_iso()
+_latest_dt = datetime.strptime(_latest_date_str, "%Y-%m-%d").date()
+# Manageable recent window: past 7 days up to latest available date
+_start_dt = _latest_dt - timedelta(days=7)
+START_TIME = f"{_start_dt.isoformat()}T00:00:00"
+END_TIME = f"{_latest_dt.isoformat()}T00:00:00"
 
 # Depth bounds: 0 to 50 meters (upper ocean surface and mixed layer)
 MIN_DEPTH = 0.49
@@ -193,7 +201,7 @@ def fetch_argo_float_data():
     print("=" * 75)
     print(f"Region Box   : Lon [{BOUNDING_BOX['min_lon']}, {BOUNDING_BOX['max_lon']}], "
           f"Lat [{BOUNDING_BOX['min_lat']}, {BOUNDING_BOX['max_lat']}]")
-    print(f"Time Range   : 2024-07-01 to 2024-07-31")
+    print(f"Time Range   : {_start_dt.isoformat()} to {_latest_dt.isoformat()}")
     print(f"Depth Range  : 0 to 50 dbar (meters)")
     print(f"Target Zarr  : {ARGO_ZARR_PATH}")
     print("-" * 75)
@@ -209,8 +217,8 @@ def fetch_argo_float_data():
             BOUNDING_BOX["max_lat"],
             0,
             50,
-            "2024-07-01",
-            "2024-07-31"
+            _start_dt.isoformat(),
+            _latest_dt.isoformat()
         ]).to_xarray()
     except Exception as e:
         print(f"\n[ERROR] Failed to fetch Argo data: {e}")

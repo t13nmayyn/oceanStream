@@ -23,14 +23,21 @@ const OCEAN_LABELS = [
   { lat: 10.0, lng: 72.0, text: 'Lakshadweep Sea', color: '#94a3b8', size: 0.9 },
 ];
 
-/** 6 region markers. Custom Region has no bbox (no direct navigation). */
+/** Major World Oceans + Regional Seas markers */
 export const REGION_MARKERS = [
-  { id: 'arabian-sea',     name: 'Arabian Sea',      lat: 16.5, lng: 64.0, depth: 0, bbox: { south: 10,  north: 25, west: 55, east: 75 } },
-  { id: 'bay-of-bengal',   name: 'Bay of Bengal',    lat: 15.0, lng: 88.5, depth: 0, bbox: { south: 5,   north: 22, west: 80, east: 98 } },
-  { id: 'indian-ocean',    name: 'Indian Ocean',     lat: -5.0, lng: 78.0, depth: 0, bbox: { south: -20, north: 10, west: 55, east: 95 } },
-  { id: 'andaman-sea',     name: 'Andaman Sea',      lat: 11.5, lng: 93.0, depth: 0, bbox: { south: 5,   north: 15, west: 90, east: 98 } },
-  { id: 'lakshadweep-sea', name: 'Lakshadweep Sea',  lat: 10.0, lng: 72.0, depth: 0, bbox: { south: 5,   north: 15, west: 68, east: 78 } },
-  { id: 'custom-region',   name: 'Custom Region',    lat:  0.0, lng: 80.0, depth: 0 },
+  // Major World Oceans
+  { id: 'pacific-ocean',   name: 'Pacific Ocean',    lat: 0.0,   lng: -160.0, depth: 0, bbox: { south: -30, north: 35, west: 140, east: -90 }, isOcean: true },
+  { id: 'atlantic-ocean',  name: 'Atlantic Ocean',   lat: 15.0,  lng: -35.0,  depth: 0, bbox: { south: -25, north: 45, west: -70, east: -10 }, isOcean: true },
+  { id: 'indian-ocean',    name: 'Indian Ocean',     lat: -10.0, lng: 75.0,   depth: 0, bbox: { south: -35, north: 25, west: 45,  east: 105 }, isOcean: true },
+  { id: 'southern-ocean',  name: 'Southern Ocean',   lat: -60.0, lng: 60.0,   depth: 0, bbox: { south: -72, north: -45, west: -180, east: 180 }, isOcean: true },
+  { id: 'arctic-ocean',    name: 'Arctic Ocean',     lat: 78.0,  lng: 0.0,    depth: 0, bbox: { south: 65,  north: 90,  west: -180, east: 180 }, isOcean: true },
+
+  // Regional Seas (underneath major oceans)
+  { id: 'arabian-sea',     name: 'Arabian Sea',      lat: 16.5,  lng: 64.0,   depth: 0, bbox: { south: 10,  north: 25, west: 55,  east: 75 } },
+  { id: 'bay-of-bengal',   name: 'Bay of Bengal',    lat: 15.0,  lng: 88.5,   depth: 0, bbox: { south: 5,   north: 22, west: 80,  east: 98 } },
+  { id: 'andaman-sea',     name: 'Andaman Sea',      lat: 11.5,  lng: 93.0,   depth: 0, bbox: { south: 5,   north: 15, west: 90,  east: 98 } },
+  { id: 'lakshadweep-sea', name: 'Lakshadweep Sea',  lat: 10.0,  lng: 72.0,   depth: 0, bbox: { south: 5,   north: 15, west: 68,  east: 78 } },
+  { id: 'custom-region',   name: 'Custom Region',    lat: 0.0,   lng: 80.0,   depth: 0 },
 ];
 
 const HOVER_DEBOUNCE_MS = 300;

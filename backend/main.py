@@ -81,6 +81,9 @@ PHY_ZARR_PATH  = OUTPUT_DIR / "phy_data.zarr"
 BGC_ZARR_PATH  = OUTPUT_DIR / "bgc_data.zarr"
 OCEAN_ZARR_PATH = OUTPUT_DIR / "ocean_data.zarr"   # legacy compat
 ARGO_ZARR_PATH  = OUTPUT_DIR / "argo_data.zarr"
+# Backup snapshot (written by create_backup.py, served when live zarr absent)
+BACKUP_PHY_ZARR_PATH = OUTPUT_DIR / "backup_phy.zarr"
+BACKUP_BGC_ZARR_PATH = OUTPUT_DIR / "backup_bgc.zarr"
 
 ROOT_DIR       = BASE_DIR.parent
 AODN_DIR       = ROOT_DIR / "aodn_output"
@@ -153,6 +156,11 @@ phy_dataset_xr:    Optional[xr.Dataset] = None
 bgc_dataset_xr:    Optional[xr.Dataset] = None
 ocean_dataset_xr:  Optional[xr.Dataset] = None   # legacy fallback
 argo_dataset_xr:   Optional[xr.Dataset] = None
+# Backup Zarr datasets (from create_backup.py) — served when live zarr is unavailable
+backup_phy_dataset_xr: Optional[xr.Dataset] = None
+backup_bgc_dataset_xr: Optional[xr.Dataset] = None
+# Metadata extracted from backup zarr attrs
+backup_date: Optional[str] = None   # actual snapshot date stored in backup
 
 cache_stats = {"l1_hits": 0, "l2_hits": 0, "fetches": 0, "total_requests": 0}
 
@@ -285,6 +293,7 @@ def _reload_bgc_zarr():
 @app.on_event("startup")
 def load_datasets():
     global phy_dataset_xr, bgc_dataset_xr, ocean_dataset_xr, argo_dataset_xr
+    global backup_phy_dataset_xr, backup_bgc_dataset_xr, backup_date
     logger.info("=" * 60)
     logger.info("Initialising L2 storage layer (Zarr)")
 
@@ -307,10 +316,33 @@ def load_datasets():
         else:
             logger.info(f"[L2] {label} zarr not found at {path} (will fetch on demand)")
 
+    # Load backup Zarr stores (created by create_backup.py)
+    for path, attr_name, label in [
+        (BACKUP_PHY_ZARR_PATH, "backup_phy_dataset_xr", "Backup Physics"),
+        (BACKUP_BGC_ZARR_PATH, "backup_bgc_dataset_xr", "Backup BGC"),
+    ]:
+        if path.exists():
+            try:
+                ds = _safe_open_zarr(path)
+                if ds is not None:
+                    globals()[attr_name] = ds
+                    # Extract backup_date from attrs if available
+                    if attr_name == "backup_phy_dataset_xr":
+                        bdate = ds.attrs.get("backup_date")
+                        if bdate:
+                            backup_date = str(bdate)
+                            logger.info(f"[BACKUP] {label} loaded — snapshot date: {backup_date}")
+                    logger.info(f"[BACKUP OK] {label} zarr: {dict(ds.sizes)}")
+            except Exception as e:
+                logger.warning(f"[BACKUP WARN] {label} zarr open failed: {e}")
+        else:
+            logger.info(f"[BACKUP] {label} zarr not found at {path} (run create_backup.py to generate)")
+
     logger.info("=" * 60)
     logger.info("[PRE-WARM] Scheduling home-region pre-warm...")
     # Schedule the async pre-warm; it runs once startup is complete
     asyncio.ensure_future(_prewarm_home_regions())
+
 
 
 # ==============================================================================
@@ -550,24 +582,37 @@ def _read_phy_grid(
     lon_min: float, lon_max: float,
     depth: float, date_str: str,
     exact_date: bool = True,
+    use_backup: bool = False,
 ) -> Tuple[List[Dict], Optional[float], str, bool]:
     """Return (rows, actual_depth, actual_date, is_reference).
     If exact_date is True, requires date_str to exist in dataset time steps.
     If exact_date is False, allows nearest 3D depth/time slice as a reference view.
+    If use_backup is True, reads from the backup_phy zarr instead of live zarr.
     """
-    global phy_dataset_xr
-    if phy_dataset_xr is None and PHY_ZARR_PATH.exists():
-        try:
-            phy_dataset_xr = xr.open_zarr(PHY_ZARR_PATH, consolidated=True)
-        except Exception:
+    global phy_dataset_xr, backup_phy_dataset_xr
+    if use_backup:
+        # Use backup zarr (from create_backup.py)
+        ds = backup_phy_dataset_xr
+        if ds is None and BACKUP_PHY_ZARR_PATH.exists():
             try:
-                phy_dataset_xr = xr.open_zarr(PHY_ZARR_PATH)
+                backup_phy_dataset_xr = xr.open_zarr(BACKUP_PHY_ZARR_PATH)
+                ds = backup_phy_dataset_xr
             except Exception:
                 pass
+    else:
+        if phy_dataset_xr is None and PHY_ZARR_PATH.exists():
+            try:
+                phy_dataset_xr = xr.open_zarr(PHY_ZARR_PATH, consolidated=True)
+            except Exception:
+                try:
+                    phy_dataset_xr = xr.open_zarr(PHY_ZARR_PATH)
+                except Exception:
+                    pass
+        ds = phy_dataset_xr or ocean_dataset_xr
 
-    ds = phy_dataset_xr or ocean_dataset_xr
     if ds is None:
         return [], None, date_str, False
+
 
     try:
         # Date verification: if exact_date is requested, do not fake the date
@@ -2081,6 +2126,21 @@ async def ocean_volume(
     centre_lat_b = int(math.floor(centre_lat / LAT_BIN_DEG))
     centre_lon_b = int(math.floor(centre_lon / LON_BIN_DEG))
 
+    # Determine whether the backup zarr is available as a fallback
+    global backup_date, backup_phy_dataset_xr
+    if backup_phy_dataset_xr is None and BACKUP_PHY_ZARR_PATH.exists():
+        try:
+            backup_phy_dataset_xr = xr.open_zarr(BACKUP_PHY_ZARR_PATH)
+            bdate = backup_phy_dataset_xr.attrs.get("backup_date")
+            if not bdate and "time" in backup_phy_dataset_xr.coords:
+                bdate = str(backup_phy_dataset_xr["time"].values[0])[:10]
+            if bdate:
+                backup_date = str(bdate)
+        except Exception:
+            pass
+
+    _backup_available = backup_phy_dataset_xr is not None or BACKUP_PHY_ZARR_PATH.exists()
+
     for d in depth_list:
         # Query page table for real layer state (resident / on_disk / fetching / not_fetched)
         depth_b = int(math.floor(d / DEPTH_BIN_M))
@@ -2089,19 +2149,36 @@ async def ocean_volume(
         ).value.lower()
 
         loop = asyncio.get_event_loop()
+        slice_src_tag = "copernicus_zarr"
+
+        # Priority Tier 1 — live zarr exact date
         grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
             None,
             lambda _d=d: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, _d, date_str, exact_date=True),
         )
         if not grid:
-            # Try nearest reference slice before falling back to placeholder
+            # Priority Tier 2a — live zarr nearest time (reference slice)
             grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
                 None,
                 lambda _d=d: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, _d, date_str, exact_date=False),
             )
-            if not grid:
-                grid = _get_placeholder_grid(lat_min, lat_max, lon_min, lon_max, d, date_str, step=1.0)
+            if grid:
+                slice_src_tag = "copernicus_zarr_reference"
+        if not grid and _backup_available:
+            # Priority Tier 2b — backup zarr (stored historical snapshot, marked as backup_cache)
+            grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
+                None,
+                lambda _d=d: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, _d, date_str,
+                                            exact_date=False, use_backup=True),
+            )
+            if grid:
+                slice_src_tag = "backup_cache"
                 is_ref = True
+        if not grid:
+            # Priority Tier 3 — no data available
+            grid = []
+            is_ref = False
+            slice_src_tag = "no_data"
 
         pts = []
         for r in grid:
@@ -2110,10 +2187,12 @@ async def ocean_volume(
                 val = r.get("temperature_c")
             elif variable in ("salinity", "salinity_psu", "so", "sal"):
                 val = r.get("salinity_psu")
-            elif variable in ("current_speed", "speed"):
+            elif variable in ("current_speed", "speed", "currents", "uo", "vo"):
                 val = r.get("current_speed_ms")
             elif variable in ("chlorophyll", "chl"):
                 val = r.get("chlorophyll_mgl")
+            elif variable in ("oxygen", "o2", "dissolved_oxygen"):
+                val = r.get("oxygen_mmolm3")
             else:
                 val = r.get("temperature_c")
 
@@ -2121,13 +2200,15 @@ async def ocean_volume(
                 "lat": r["lat"],
                 "lon": r["lon"],
                 "value": val,
+                "temperature_c": r.get("temperature_c"),
+                "salinity_psu": r.get("salinity_psu"),
                 "current_u_ms": r.get("current_u_ms"),
                 "current_v_ms": r.get("current_v_ms"),
+                "current_speed_ms": r.get("current_speed_ms"),
+                "chlorophyll_mgl": r.get("chlorophyll_mgl"),
+                "oxygen_mmolm3": r.get("oxygen_mmolm3"),
             })
 
-        slice_source = "copernicus_zarr" if (not is_ref and actual_depth is not None) else (
-            "copernicus_zarr_reference" if actual_date else "synthetic_placeholder"
-        )
         slices.append({
             "depth_m": d,
             "requested_depth_m": d,
@@ -2136,7 +2217,7 @@ async def ocean_volume(
             "is_reference_slice": is_ref,
             "reference_date": actual_date if is_ref else None,
             "actual_date": actual_date or date_str,
-            "source": slice_source,
+            "source": slice_src_tag,
             "n_points": len(pts),
             "points": pts,
         })
@@ -2145,15 +2226,31 @@ async def ocean_volume(
     floats = await _get_bbox_floats(lat_min, lat_max, lon_min, lon_max, date_str)
     enriched_floats = _enrich_floats_for_3d(floats, lat_min, lat_max, lon_min, lon_max)
 
-    vol_source = "copernicus_zarr" if any(not s.get("is_reference_slice") for s in slices) else (
-        "copernicus_zarr_reference" if any(s.get("reference_date") for s in slices) else "synthetic_placeholder"
-    )
+    # Determine overall volume source for metadata
+    if any(s.get("source") == "copernicus_zarr" for s in slices):
+        vol_source = "copernicus_zarr"
+    elif any(s.get("source") == "backup_cache" for s in slices):
+        vol_source = "backup_cache"
+    elif any(s.get("source") == "copernicus_zarr_reference" for s in slices):
+        vol_source = "copernicus_zarr_reference"
+    else:
+        vol_source = "no_data"
+
+    effective_backup_date = backup_date
+    if vol_source == "backup_cache" and not effective_backup_date:
+        for s in slices:
+            if s.get("actual_date"):
+                effective_backup_date = s["actual_date"]
+                break
+
     result = {
-        "status": "ok",
+        "status": "ok" if vol_source != "no_data" else "no_data",
         "bbox": {"lat_min": lat_min, "lat_max": lat_max, "lon_min": lon_min, "lon_max": lon_max},
         "date": date_str,
-        "actual_date": date_str,
+        "actual_date": effective_backup_date if vol_source == "backup_cache" else date_str,
         "source": vol_source,
+        "backup_date": effective_backup_date if vol_source == "backup_cache" else None,
+        "data_source": vol_source,
         "variable": variable,
         "n_depth_slices": len(slices),
         "depth_slices": slices,
@@ -2161,6 +2258,7 @@ async def ocean_volume(
         "dataset_info": route_info(date_str),
     }
     l1_set(cache_key, result)
+
     return {**result, "cache": "COMPUTED", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
 
 

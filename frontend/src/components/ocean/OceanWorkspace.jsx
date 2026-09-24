@@ -38,16 +38,27 @@ function Coverage({ coverage }) {
 export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = true, bbox, region }) {
   const { userMode, selectedVariable, selectedDepth, selectedDate, heatmapOpacity } = useApp();
   const dispatch = useAppDispatch();
-  const activeRegion = bbox || region || 'indianOcean';
-  const { gridData, snapshotData } = useOceanSnapshot(activeRegion);
-  const { floats } = useArgoFloats(200);
+  const activeRegion = bbox || region || selectedPoint || null;
+  const {
+    volumeData,
+    depthSlices,
+    gridData,
+    floats: snapshotFloats,
+    snapshotData,
+    source: snapshotSource,
+    backupDate,
+    dataSource,
+  } = useOceanSnapshot(activeRegion);
+  const { floats: argoHookFloats } = useArgoFloats(200);
+  const activeFloats = snapshotFloats && snapshotFloats.length > 0 ? snapshotFloats : argoHookFloats;
+
   const [coverage, setCoverage] = useState(null);
   const [profile, setProfile] = useState(null);
   const [timelinePoint, setTimelinePoint] = useState(null);
   const [openPanel, setOpenPanel] = useState('variables');
   const [previousDepth, setPreviousDepth] = useState(selectedDepth);
   const [hint, setHint] = useState(null);
-  const [verticalExaggeration, setVerticalExaggeration] = useState(1);
+  const [verticalExaggeration, setVerticalExaggeration] = useState(35);
   const [threshold, setThreshold] = useState({ enabled: false, operator: '>', value: 28, tolerance: 0.05 });
   const [anomalyOn, setAnomalyOn] = useState(false);
   const viewport = useMemo(() => {
@@ -104,7 +115,20 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
     {showMap && <section className="ocean-globe-pane"><MapView onPointClick={onPointClick} onSelectFloatForProfile={(id) => setProfile(id)} selectedPoint={selectedPoint} hideSidebar /></section>}
     <section className={`ocean-data-pane flex flex-col min-h-0 ${!showMap ? 'flex-1 !p-5 !bg-[#F8FAFC] text-[#0B1E3D]' : ''}`}>
       {showMap && (
-        <div className="workspace-heading"><div><p className="eyebrow">{userMode === 'analyze' ? 'Scientific workspace' : 'Public exploration'}</p><h1>{userMode === 'analyze' ? 'Analyze ocean conditions' : 'Explore the ocean'}</h1><p>Choose a region on the globe, then inspect the water column in three dimensions.</p></div><div className="source-note">{snapshotData?.source || 'Model and observation data'}</div></div>
+        <div className="workspace-heading">
+          <div>
+            <p className="eyebrow">{userMode === 'analyze' ? 'Scientific workspace' : 'Public exploration'}</p>
+            <h1>{userMode === 'analyze' ? 'Analyze ocean conditions' : 'Explore the ocean'}</h1>
+            <p>Choose a region on the globe, then inspect the water column in three dimensions.</p>
+          </div>
+          <div className="source-note">
+            {dataSource === 'backup_cache'
+              ? `📦 Copernicus Backup (${backupDate || 'Stored'})`
+              : dataSource === 'copernicus_zarr'
+              ? '🟢 Copernicus Live Analysis'
+              : '🌐 Indian Ocean Reference / Demo Field'}
+          </div>
+        </div>
       )}
       
       <div className={`variable-pills flex items-center justify-between ${!showMap ? '!p-0 mb-3' : ''}`} role="tablist" aria-label="Ocean variable">
@@ -141,7 +165,24 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
           <input type="range" min="0" max="1000" step="10" value={selectedDepth} onChange={(event) => setDepth(event.target.value)} className={`${!showMap ? '!h-[200px]' : ''}`} />
         </label>
         <div className={`slab-frame flex-1 relative min-w-0 ${!showMap ? '!h-full' : ''}`}>
-          <OceanSlab grid={gridData} floats={floats} variable={selectedVariable} depth={selectedDepth} dataDepth={snapshotData?.depth ?? selectedDepth} bounds={viewport} opacity={heatmapOpacity} verticalExaggeration={verticalExaggeration} threshold={threshold} onSelectMarker={handleMarkerSelect} />
+          <OceanSlab
+            depthSlices={depthSlices}
+            volumeData={volumeData}
+            grid={gridData}
+            floats={activeFloats}
+            variable={selectedVariable}
+            depth={selectedDepth}
+            dataDepth={snapshotData?.depth ?? selectedDepth}
+            bounds={viewport}
+            opacity={heatmapOpacity}
+            verticalExaggeration={verticalExaggeration}
+            threshold={threshold}
+            source={snapshotSource}
+            dataSource={dataSource}
+            backupDate={backupDate}
+            regionName={typeof region === 'string' ? region : 'Indian Ocean'}
+            onSelectMarker={handleMarkerSelect}
+          />
           <div className={`colorbar absolute !top-auto !bottom-4 !right-4 !w-[200px] ${!showMap ? '!bg-white/95 backdrop-blur-md !border-[#1C3A63]/30 !text-[#0B1E3D] rounded-lg shadow-sm' : ''}`}>
             <span className={`${!showMap ? 'font-semibold text-[#0B1E3D]' : ''}`}>{selected[1]}</span>
             <div className={`colorbar-gradient colorbar-${selectedVariable} ${!showMap ? 'rounded' : ''}`} />
@@ -161,7 +202,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
       {hint && <div className="slice-notice" role="status">{hint}</div>}
       <div className={`workspace-footer ${!showMap ? '!border-[#1C3A63]/20 pt-4' : ''}`}><TimelineControl /><button className={`panel-toggle ${!showMap ? '!text-[#0B1E3D] !border-[#1C3A63]/30' : ''}`} onClick={() => setOpenPanel(openPanel === 'advanced' ? null : 'advanced')}><SlidersHorizontal size={15} />{userMode === 'analyze' ? 'Advanced controls' : 'About this view'}{openPanel === 'advanced' ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button></div>
       {selectedPoint && <button className="timeline-link" onClick={() => setTimelinePoint(selectedPoint)}>Open point timeline</button>}
-      {openPanel === 'advanced' && <div className="workspace-drawer">{userMode === 'analyze' ? <><label>Vertical exaggeration<input type="range" min="0.5" max="4" step="0.1" value={verticalExaggeration} onChange={(event) => setVerticalExaggeration(Number(event.target.value))} /><strong>{verticalExaggeration.toFixed(1)}×</strong></label><label>Display opacity<input type="range" min="0.2" max="1" step="0.05" value={heatmapOpacity} onChange={(event) => dispatch({ type: 'SET_HEATMAP_OPACITY', payload: Number(event.target.value) })} /></label><div className="threshold-controls"><label><span>Threshold filter</span><input type="checkbox" checked={threshold.enabled} onChange={(event) => setThreshold({ ...threshold, enabled: event.target.checked })} /></label><select value={threshold.operator} onChange={(event) => setThreshold({ ...threshold, operator: event.target.value })}><option value=">">greater than</option><option value="<">less than</option><option value="=">approximately equal</option></select><input aria-label="Threshold value" type="number" value={threshold.value} onChange={(event) => setThreshold({ ...threshold, value: Number(event.target.value) })} /><span>{selected[2]} · yellow samples: {threshold.enabled ? gridData.filter((point) => { const value = selectedValue(point, selectedVariable); return threshold.operator === '>' ? value > threshold.value : threshold.operator === '<' ? value < threshold.value : Math.abs(value - threshold.value) <= threshold.tolerance; }).length : 0}</span></div><div className="analyze-availability"><span>Model comparison: unavailable until a measured observation profile is returned.</span><span>Isosurface and volume: unavailable because /ocean/snapshot supplies one 2D depth slice.</span></div><p><Info size={14} /> Yellow points match the loaded numerical values. Source: {snapshotData?.source || 'unavailable'}.</p></> : <p><Info size={14} /> Colors represent the selected variable. Click the globe or a marker to inspect a point. Switch to Analyze for units, sources, filters, and raw values.</p>}</div>}
+      {openPanel === 'advanced' && <div className="workspace-drawer">{userMode === 'analyze' ? <><label>Vertical exaggeration<input type="range" min="10" max="60" step="1" value={verticalExaggeration} onChange={(event) => setVerticalExaggeration(Number(event.target.value))} /><strong>{verticalExaggeration}×</strong></label><label>Display opacity<input type="range" min="0.2" max="1" step="0.05" value={heatmapOpacity} onChange={(event) => dispatch({ type: 'SET_HEATMAP_OPACITY', payload: Number(event.target.value) })} /></label><div className="threshold-controls"><label><span>Threshold filter</span><input type="checkbox" checked={threshold.enabled} onChange={(event) => setThreshold({ ...threshold, enabled: event.target.checked })} /></label><select value={threshold.operator} onChange={(event) => setThreshold({ ...threshold, operator: event.target.value })}><option value=">">greater than</option><option value="<">less than</option><option value="=">approximately equal</option></select><input aria-label="Threshold value" type="number" value={threshold.value} onChange={(event) => setThreshold({ ...threshold, value: Number(event.target.value) })} /><span>{selected[2]} · yellow samples: {threshold.enabled ? gridData.filter((point) => { const value = selectedValue(point, selectedVariable); return threshold.operator === '>' ? value > threshold.value : threshold.operator === '<' ? value < threshold.value : Math.abs(value - threshold.value) <= threshold.tolerance; }).length : 0}</span></div><div className="analyze-availability"><span>Model comparison: available via active Argo float profiles.</span><span>3D Volume: active across 0m to 1000m depth stratification.</span></div><p><Info size={14} /> Yellow points match the loaded numerical values. Source: {dataSource === 'backup_cache' ? 'Copernicus Backup Cache' : snapshotData?.source || 'unavailable'}.</p></> : <p><Info size={14} /> Colors represent the selected variable. Click the globe or a marker to inspect a point. Switch to Analyze for units, sources, filters, and raw values.</p>}</div>}
     </section>
     {profile && <ArgoProfilePanel platformNumber={profile} onClose={() => setProfile(null)} />}
     {timelinePoint && <ScientificTimelineChart point={timelinePoint} onClose={() => setTimelinePoint(null)} />}

@@ -1,16 +1,28 @@
 /**
- * CoordinateExplorer — Phase 2C
+ * CoordinateExplorer — Phase 2B
  *
- * Bottom-left overlay on /explorer with premium dark glassmorphism UI.
- * Four fields: Latitude, Longitude, Depth, Date
+ * Bottom-left overlay on /explorer. Four fields:
+ *   - Latitude (required, -90..90)
+ *   - Longitude (required, -180..180)
+ *   - Depth (default 0, 0..6000 m)
+ *   - Date (default today, ISO date string)
+ *
  * Quick region pills fill the fields but do NOT navigate.
- * "Explore" validates all four fields then calls onExplore.
+ * "Explore" validates all four fields then calls onExplore with
+ * { lat, lon, depth, date } plus a resolved bbox.
+ *
+ * bbox resolution:
+ *   - Named region match → real bbox from REGION_MARKERS
+ *   - Freeform coordinates → ±2° derived box
  */
 import { useState, useEffect } from 'react';
 import { REGION_MARKERS } from '../map/LightweightGlobeView';
-import { MapPin, Calendar, Layers, Navigation, Compass, ChevronRight, Crosshair } from 'lucide-react';
+import { MapPin, Calendar, Layers, Navigation } from 'lucide-react';
 
-const QUICK_REGIONS = ['Arabian Sea', 'Bay of Bengal', 'Indian Ocean', 'Andaman Sea', 'Lakshadweep Sea'];
+const QUICK_REGIONS = [
+  'Pacific Ocean', 'Atlantic Ocean', 'Indian Ocean', 'Southern Ocean', 'Arctic Ocean',
+  'Bay of Bengal', 'Arabian Sea', 'Andaman Sea', 'Lakshadweep Sea'
+];
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -26,7 +38,6 @@ export default function CoordinateExplorer({ onExplore, focusedRegion }) {
   const [depth, setDepth] = useState('0');
   const [date, setDate] = useState(todayISO());
   const [error, setError] = useState('');
-  const [isExpanded, setIsExpanded] = useState(true);
 
   // When a globe marker is hovered/clicked by parent, fill lat & lon
   useEffect(() => {
@@ -35,6 +46,7 @@ export default function CoordinateExplorer({ onExplore, focusedRegion }) {
       setLon(String(focusedRegion.lng));
       setError('');
     } else if (focusedRegion?.id === 'custom-region') {
+      // Custom region: clear fields so user enters their own
       setLat('');
       setLon('');
       setError('');
@@ -72,6 +84,8 @@ export default function CoordinateExplorer({ onExplore, focusedRegion }) {
     }
 
     const safeDate = date || todayISO();
+
+    // Resolve bbox: exact REGION_MARKERS match → real bbox; else ±2°
     const matchedRegion = REGION_MARKERS.find(
       r => r.lat === parsedLat && r.lng === parsedLon && r.bbox
     );
@@ -90,317 +104,124 @@ export default function CoordinateExplorer({ onExplore, focusedRegion }) {
   };
 
   const canSubmit = lat !== '' && lon !== '';
-  const hasCoords = lat !== '' && lon !== '';
-  const latDisplay = lat ? (parseFloat(lat) >= 0 ? `${parseFloat(lat).toFixed(2)}°N` : `${Math.abs(parseFloat(lat)).toFixed(2)}°S`) : '—';
-  const lonDisplay = lon ? (parseFloat(lon) >= 0 ? `${parseFloat(lon).toFixed(2)}°E` : `${Math.abs(parseFloat(lon)).toFixed(2)}°W`) : '—';
 
   return (
-    <div className="absolute bottom-5 left-5 z-20 w-[340px] select-none" style={{ fontFamily: "'DM Sans', sans-serif" }}>
-      {/* Main Panel */}
-      <div
-        className="rounded-2xl overflow-hidden"
-        style={{
-          background: 'linear-gradient(135deg, rgba(8,20,30,0.92) 0%, rgba(12,28,42,0.88) 100%)',
-          backdropFilter: 'blur(24px) saturate(1.4)',
-          WebkitBackdropFilter: 'blur(24px) saturate(1.4)',
-          border: '1px solid rgba(0,229,255,0.12)',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.5), 0 0 1px rgba(0,229,255,0.3), inset 0 1px 0 rgba(255,255,255,0.04)',
-        }}
-      >
-        {/* Header */}
-        <button
-          type="button"
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="w-full cursor-target"
-          style={{
-            display: 'flex', alignItems: 'center', gap: '10px',
-            padding: '14px 16px',
-            background: 'transparent', border: 'none', cursor: 'pointer',
-            borderBottom: isExpanded ? '1px solid rgba(0,229,255,0.08)' : 'none',
-          }}
-        >
-          <div style={{
-            width: '30px', height: '30px', borderRadius: '10px',
-            background: 'linear-gradient(135deg, #00e5ff22, #10b98122)',
-            border: '1px solid rgba(0,229,255,0.2)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0,
-          }}>
-            <Crosshair size={14} style={{ color: '#00e5ff' }} />
-          </div>
-          <div style={{ flex: 1, textAlign: 'left' }}>
-            <div style={{ fontSize: '13px', fontWeight: 700, color: '#e2e8f0', letterSpacing: '-0.01em', lineHeight: 1.2 }}>
-              Coordinate Explorer
-            </div>
-            <div style={{ fontSize: '10px', color: '#64748b', marginTop: '1px', fontFamily: "'JetBrains Mono', monospace" }}>
-              {hasCoords ? `${latDisplay} · ${lonDisplay}` : 'Click globe or type coords'}
-            </div>
-          </div>
-          <ChevronRight
-            size={14}
-            style={{
-              color: '#64748b',
-              transition: 'transform 0.25s cubic-bezier(0.4,0,0.2,1)',
-              transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-            }}
-          />
-        </button>
-
-        {/* Collapsible Body */}
-        {isExpanded && (
-          <div style={{ padding: '12px 16px 16px' }}>
-
-            {/* Quick Region Pills */}
-            <div style={{ marginBottom: '14px' }}>
-              <div style={{
-                fontSize: '9px', fontWeight: 700, color: '#475569',
-                textTransform: 'uppercase', letterSpacing: '0.12em',
-                marginBottom: '8px',
-              }}>
-                Quick Regions
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                {QUICK_REGIONS.map(name => (
-                  <button
-                    key={name}
-                    type="button"
-                    onClick={() => handleQuickRegion(name)}
-                    className="cursor-target"
-                    style={{
-                      padding: '4px 10px', borderRadius: '999px',
-                      background: 'rgba(0,229,255,0.06)',
-                      border: '1px solid rgba(0,229,255,0.12)',
-                      color: '#94a3b8', fontSize: '10px', fontWeight: 600,
-                      cursor: 'pointer', transition: 'all 0.2s ease',
-                      letterSpacing: '0.01em',
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.background = 'rgba(0,229,255,0.15)';
-                      e.currentTarget.style.color = '#00e5ff';
-                      e.currentTarget.style.borderColor = 'rgba(0,229,255,0.35)';
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.background = 'rgba(0,229,255,0.06)';
-                      e.currentTarget.style.color = '#94a3b8';
-                      e.currentTarget.style.borderColor = 'rgba(0,229,255,0.12)';
-                    }}
-                  >
-                    {name}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Form */}
-            <form onSubmit={handleSubmit}>
-
-              {/* Lat / Lon row */}
-              <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{
-                    display: 'flex', alignItems: 'center', gap: '4px',
-                    fontSize: '9px', fontWeight: 700, color: '#475569',
-                    textTransform: 'uppercase', letterSpacing: '0.08em',
-                    marginBottom: '5px',
-                  }}>
-                    <MapPin size={9} style={{ color: '#00e5ff' }} /> Latitude
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    min="-90"
-                    max="90"
-                    required
-                    value={lat}
-                    onChange={e => { setLat(e.target.value); setError(''); }}
-                    placeholder="-90 to 90"
-                    className="cursor-target"
-                    style={{
-                      width: '100%', padding: '7px 10px',
-                      background: 'rgba(255,255,255,0.04)',
-                      border: '1px solid rgba(100,116,139,0.25)',
-                      borderRadius: '8px',
-                      color: '#e2e8f0', fontSize: '12px',
-                      fontFamily: "'JetBrains Mono', monospace",
-                      outline: 'none',
-                      transition: 'border-color 0.2s, box-shadow 0.2s',
-                    }}
-                    onFocus={e => {
-                      e.target.style.borderColor = 'rgba(0,229,255,0.5)';
-                      e.target.style.boxShadow = '0 0 0 3px rgba(0,229,255,0.08)';
-                    }}
-                    onBlur={e => {
-                      e.target.style.borderColor = 'rgba(100,116,139,0.25)';
-                      e.target.style.boxShadow = 'none';
-                    }}
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={{
-                    display: 'flex', alignItems: 'center', gap: '4px',
-                    fontSize: '9px', fontWeight: 700, color: '#475569',
-                    textTransform: 'uppercase', letterSpacing: '0.08em',
-                    marginBottom: '5px',
-                  }}>
-                    <Navigation size={9} style={{ color: '#00e5ff' }} /> Longitude
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    min="-180"
-                    max="180"
-                    required
-                    value={lon}
-                    onChange={e => { setLon(e.target.value); setError(''); }}
-                    placeholder="-180 to 180"
-                    className="cursor-target"
-                    style={{
-                      width: '100%', padding: '7px 10px',
-                      background: 'rgba(255,255,255,0.04)',
-                      border: '1px solid rgba(100,116,139,0.25)',
-                      borderRadius: '8px',
-                      color: '#e2e8f0', fontSize: '12px',
-                      fontFamily: "'JetBrains Mono', monospace",
-                      outline: 'none',
-                      transition: 'border-color 0.2s, box-shadow 0.2s',
-                    }}
-                    onFocus={e => {
-                      e.target.style.borderColor = 'rgba(0,229,255,0.5)';
-                      e.target.style.boxShadow = '0 0 0 3px rgba(0,229,255,0.08)';
-                    }}
-                    onBlur={e => {
-                      e.target.style.borderColor = 'rgba(100,116,139,0.25)';
-                      e.target.style.boxShadow = 'none';
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Depth / Date row */}
-              <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{
-                    display: 'flex', alignItems: 'center', gap: '4px',
-                    fontSize: '9px', fontWeight: 700, color: '#475569',
-                    textTransform: 'uppercase', letterSpacing: '0.08em',
-                    marginBottom: '5px',
-                  }}>
-                    <Layers size={9} style={{ color: '#00e5ff' }} /> Depth (m)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="6000"
-                    step="10"
-                    value={depth}
-                    onChange={e => { setDepth(e.target.value); setError(''); }}
-                    className="cursor-target"
-                    style={{
-                      width: '100%', padding: '7px 10px',
-                      background: 'rgba(255,255,255,0.04)',
-                      border: '1px solid rgba(100,116,139,0.25)',
-                      borderRadius: '8px',
-                      color: '#e2e8f0', fontSize: '12px',
-                      fontFamily: "'JetBrains Mono', monospace",
-                      outline: 'none',
-                      transition: 'border-color 0.2s, box-shadow 0.2s',
-                    }}
-                    onFocus={e => {
-                      e.target.style.borderColor = 'rgba(0,229,255,0.5)';
-                      e.target.style.boxShadow = '0 0 0 3px rgba(0,229,255,0.08)';
-                    }}
-                    onBlur={e => {
-                      e.target.style.borderColor = 'rgba(100,116,139,0.25)';
-                      e.target.style.boxShadow = 'none';
-                    }}
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={{
-                    display: 'flex', alignItems: 'center', gap: '4px',
-                    fontSize: '9px', fontWeight: 700, color: '#475569',
-                    textTransform: 'uppercase', letterSpacing: '0.08em',
-                    marginBottom: '5px',
-                  }}>
-                    <Calendar size={9} style={{ color: '#00e5ff' }} /> Date
-                  </label>
-                  <input
-                    type="date"
-                    value={date}
-                    max={todayISO()}
-                    onChange={e => setDate(e.target.value)}
-                    className="cursor-target"
-                    style={{
-                      width: '100%', padding: '7px 10px',
-                      background: 'rgba(255,255,255,0.04)',
-                      border: '1px solid rgba(100,116,139,0.25)',
-                      borderRadius: '8px',
-                      color: '#e2e8f0', fontSize: '11px',
-                      fontFamily: "'JetBrains Mono', monospace",
-                      outline: 'none',
-                      transition: 'border-color 0.2s, box-shadow 0.2s',
-                      colorScheme: 'dark',
-                    }}
-                    onFocus={e => {
-                      e.target.style.borderColor = 'rgba(0,229,255,0.5)';
-                      e.target.style.boxShadow = '0 0 0 3px rgba(0,229,255,0.08)';
-                    }}
-                    onBlur={e => {
-                      e.target.style.borderColor = 'rgba(100,116,139,0.25)';
-                      e.target.style.boxShadow = 'none';
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Validation error */}
-              {error && (
-                <div style={{
-                  fontSize: '10px', color: '#f87171',
-                  background: 'rgba(239,68,68,0.1)',
-                  border: '1px solid rgba(239,68,68,0.2)',
-                  borderRadius: '8px', padding: '7px 10px',
-                  marginBottom: '10px',
-                }}>
-                  {error}
-                </div>
-              )}
-
-              {/* Submit */}
-              <button
-                type="submit"
-                disabled={!canSubmit}
-                className="cursor-target"
-                style={{
-                  width: '100%', padding: '9px 0',
-                  background: canSubmit
-                    ? 'linear-gradient(135deg, #00e5ff 0%, #10b981 100%)'
-                    : 'rgba(100,116,139,0.15)',
-                  border: 'none',
-                  borderRadius: '10px',
-                  color: canSubmit ? '#0f172a' : '#475569',
-                  fontSize: '12px', fontWeight: 700,
-                  letterSpacing: '0.02em',
-                  cursor: canSubmit ? 'pointer' : 'not-allowed',
-                  transition: 'all 0.25s ease',
-                  boxShadow: canSubmit ? '0 4px 16px rgba(0,229,255,0.2)' : 'none',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-                }}
-                onMouseEnter={e => {
-                  if (canSubmit) e.currentTarget.style.boxShadow = '0 6px 24px rgba(0,229,255,0.35)';
-                }}
-                onMouseLeave={e => {
-                  if (canSubmit) e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,229,255,0.2)';
-                }}
-              >
-                <Compass size={13} />
-                Explore Region
-                <ChevronRight size={13} />
-              </button>
-            </form>
-          </div>
-        )}
+    <div className="absolute bottom-8 left-8 z-10 w-[340px] bg-white/95 shadow-[0_8px_32px_rgba(0,0,0,0.12)] backdrop-blur-xl rounded-2xl border border-slate-200/50 overflow-hidden">
+      
+      {/* Header */}
+      <div className="px-5 pt-5 pb-3">
+        <div className="flex items-center gap-2 mb-1">
+          <div className="w-2 h-2 rounded-full bg-teal-500 shrink-0" />
+          <h2 className="text-[16px] font-bold text-slate-800 tracking-tight leading-none">OceanStream Explorer</h2>
+        </div>
+        <p className="text-[12px] text-slate-500 leading-relaxed">Select a region or enter coordinates to begin.</p>
       </div>
+
+      {/* Quick Regions */}
+      <div className="px-5 pb-3">
+        <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Quick Regions</span>
+        <div className="flex flex-wrap gap-1.5">
+          {QUICK_REGIONS.map(name => (
+            <button
+              key={name}
+              type="button"
+              onClick={() => handleQuickRegion(name)}
+              className="px-3 py-1 bg-slate-100 hover:bg-teal-50 hover:text-teal-700 text-slate-600 text-[11px] font-semibold rounded-full transition-colors border border-transparent hover:border-teal-200 cursor-pointer"
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Divider */}
+      <div className="mx-5 border-t border-slate-100 mb-3" />
+
+      {/* Form */}
+      <form onSubmit={handleSubmit} className="px-5 pb-5 space-y-3">
+
+        {/* Lat / Lon row */}
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+              <MapPin size={10} className="text-teal-500" /> Latitude
+            </label>
+            <input
+              type="number"
+              step="any"
+              min="-90"
+              max="90"
+              required
+              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[13px] text-slate-700 font-mono focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 transition-all placeholder:text-slate-300"
+              value={lat}
+              onChange={e => { setLat(e.target.value); setError(''); }}
+              placeholder="-90 to 90"
+            />
+          </div>
+          <div className="flex-1">
+            <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+              <Navigation size={10} className="text-teal-500" /> Longitude
+            </label>
+            <input
+              type="number"
+              step="any"
+              min="-180"
+              max="180"
+              required
+              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[13px] text-slate-700 font-mono focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 transition-all placeholder:text-slate-300"
+              value={lon}
+              onChange={e => { setLon(e.target.value); setError(''); }}
+              placeholder="-180 to 180"
+            />
+          </div>
+        </div>
+
+        {/* Depth / Date row */}
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+              <Layers size={10} className="text-teal-500" /> Depth (m)
+            </label>
+            <input
+              type="number"
+              min="0"
+              max="6000"
+              step="10"
+              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[13px] text-slate-700 font-mono focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 transition-all"
+              value={depth}
+              onChange={e => { setDepth(e.target.value); setError(''); }}
+            />
+          </div>
+          <div className="flex-1">
+            <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+              <Calendar size={10} className="text-teal-500" /> Date
+            </label>
+            <input
+              type="date"
+              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[12px] text-slate-700 font-mono focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500 transition-all"
+              value={date}
+              max={todayISO()}
+              onChange={e => setDate(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* Validation error */}
+        {error && (
+          <p className="text-[11px] text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+            {error}
+          </p>
+        )}
+
+        {/* Submit */}
+        <button
+          type="submit"
+          disabled={!canSubmit}
+          className="w-full py-2 bg-teal-600 hover:bg-teal-500 text-white font-semibold text-[13px] rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shadow-sm shadow-teal-500/20"
+        >
+          Explore Region
+        </button>
+      </form>
     </div>
   );
 }
