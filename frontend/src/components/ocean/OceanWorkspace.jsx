@@ -159,11 +159,53 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
       </div>
 
       <div className={`slab-layout flex-1 min-h-0 flex ${!showMap ? '!border-[#1C3A63]/30 !bg-white rounded-xl overflow-hidden shadow-sm' : ''}`}>
-        <label className={`depth-control flex flex-col items-center justify-center py-4 px-2 ${!showMap ? 'w-16 !bg-[#F8FAFC] border-r border-[#1C3A63]/20' : ''}`}>
-          <span className={`${!showMap ? 'text-[10px] uppercase font-bold text-[#6B7C96] tracking-wider mb-2' : ''}`}>{!showMap ? 'Depth' : 'Explore Depth'}</span>
-          <strong className={`${!showMap ? '!text-teal-600 font-mono text-[12px] mb-4' : ''}`}>{selectedDepth}m</strong>
-          <input type="range" min="0" max="1000" step="10" value={selectedDepth} onChange={(event) => setDepth(event.target.value)} className={`${!showMap ? '!h-[200px]' : ''}`} />
-        </label>
+        <div className={`depth-selector-panel flex flex-col items-center justify-between py-3 px-2 ${!showMap ? 'w-24 !bg-[#F8FAFC] border-r border-[#1C3A63]/20' : 'w-24 bg-[#0B1E3D]/90 border-r border-[#1C3A63]/50 text-white'} select-none shrink-0`}>
+          <div className="flex flex-col items-center mb-1">
+            <span className={`text-[10px] uppercase font-bold tracking-wider ${!showMap ? 'text-[#6B7C96]' : 'text-[#8EA4C8]'}`}>Depth</span>
+            <div className="flex items-baseline gap-0.5 mt-0.5">
+              <strong className="text-teal-400 font-mono text-[14px] leading-tight font-bold">{selectedDepth}</strong>
+              <span className={`text-[10px] font-mono ${!showMap ? 'text-[#6B7C96]' : 'text-[#8EA4C8]'}`}>m</span>
+            </div>
+          </div>
+
+          {/* Physical Depth Horizon Scale: 0m · 20m · 50m · 100m · 200m · 400m · 600m · 800m · 1000m */}
+          <div className="flex flex-col gap-1 w-full my-auto overflow-y-auto py-1">
+            {[0, 20, 50, 100, 200, 400, 600, 800, 1000].map((d) => {
+              const isSelected = selectedDepth === d || (selectedDepth >= d - 10 && selectedDepth < d + 15);
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setDepth(d)}
+                  title={`Select ${d}m physical depth`}
+                  className={`w-full py-0.5 px-1.5 rounded text-[10.5px] font-mono font-medium transition-all text-center cursor-pointer border ${
+                    isSelected
+                      ? 'bg-teal-500 text-white border-teal-400 shadow-sm shadow-teal-500/30 font-bold scale-[1.03]'
+                      : !showMap
+                      ? 'bg-white text-[#0B1E3D] border-[#1C3A63]/20 hover:bg-[#F0F4FF] hover:border-teal-400'
+                      : 'bg-[#102A4E] text-[#CBD5E1] border-[#1C3A63]/60 hover:bg-[#1C3A63] hover:text-white'
+                  }`}
+                >
+                  {d === 0 ? '0m' : `${d}m`}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="w-full flex flex-col items-center mt-1 pt-1 border-t border-[#1C3A63]/20">
+            <input
+              type="range"
+              min="0"
+              max="1000"
+              step="10"
+              value={selectedDepth}
+              onChange={(e) => setDepth(Number(e.target.value))}
+              className="w-16 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-400"
+              title="Continuous depth scrubbing"
+              aria-label="Fine depth scrubbing"
+            />
+          </div>
+        </div>
         <div className={`slab-frame flex-1 relative min-w-0 ${!showMap ? '!h-full' : ''}`}>
           <OceanSlab
             depthSlices={depthSlices}

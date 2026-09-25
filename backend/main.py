@@ -1624,6 +1624,7 @@ async def ocean_point(
 
 def _validate_spatial_bounds(
     lat_min: float, lat_max: float, lon_min: float, lon_max: float,
+    allow_antimeridian: bool = True,
 ):
     """Validate spatial coordinates are within valid geographical ranges [-90, 90] and [-180, 180]."""
     if not (-90.0 <= lat_min <= 90.0 and -90.0 <= lat_max <= 90.0):
@@ -1632,7 +1633,7 @@ def _validate_spatial_bounds(
         raise HTTPException(400, "Longitude must be within [-180.0, 180.0] degrees")
     if lat_min > lat_max:
         raise HTTPException(400, f"lat_min ({lat_min}) cannot be greater than lat_max ({lat_max})")
-    if lon_min > lon_max:
+    if not allow_antimeridian and lon_min > lon_max:
         raise HTTPException(400, f"lon_min ({lon_min}) cannot be greater than lon_max ({lon_max})")
 
 
@@ -2158,8 +2159,16 @@ async def ocean_volume(
     Lightweight 3D volume grid slices across multiple depths.
     Returns array of depth slices: each slice contains regular grid points with (lat, lon, value).
     Powers 3D isosurface and volumetric rendering in Three.js/Cesium.
+
+    Priority tier:
+      1. Live Zarr exact date (L2)
+      2a. Live Zarr nearest date (L2 reference)
+      2b. Backup Zarr nearest date (Indian Ocean only: 4N-26N, 62E-96E)
+      3. Analytically-generated demo volume (non-Indian-Ocean or Zarr empty)
+         — labeled source="analytical_demo", placeholder=True
+         — NOT real scientific measurements
     """
-    _validate_spatial_bounds(lat_min, lat_max, lon_min, lon_max)
+    _validate_spatial_bounds(lat_min, lat_max, lon_min, lon_max, allow_antimeridian=True)
     t0 = time.perf_counter()
     date_str = resolve_date_input(date)
 
@@ -2174,19 +2183,26 @@ async def ocean_volume(
     if not depth_list:
         depth_list = [0.0, 10.0, 50.0, 100.0, 200.0]
 
-    cache_key = f"vol:{lat_min:.2f}:{lat_max:.2f}:{lon_min:.2f}:{lon_max:.2f}:{','.join(str(d) for d in depth_list)}:{date_str}:{variable}"
+    cache_key = (
+        f"vol:{lat_min:.2f}:{lat_max:.2f}:{lon_min:.2f}:{lon_max:.2f}:"
+        f"{','.join(str(d) for d in depth_list)}:{date_str}:{variable}"
+    )
     cached = l1_get(cache_key)
     if cached:
         return {**cached, "cache": "L1_RAM", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
 
     slices = []
-    # Centre lat/lon bucket for page table lookups
     centre_lat = (lat_min + lat_max) / 2.0
-    centre_lon = (lon_min + lon_max) / 2.0
+    if lon_min <= lon_max:
+        centre_lon = (lon_min + lon_max) / 2.0
+        lon_span = max(0.01, lon_max - lon_min)
+    else:
+        lon_span = (180.0 - lon_min) + (lon_max - (-180.0))
+        centre_lon = ((lon_min + lon_span / 2.0 + 180.0) % 360.0) - 180.0
+
     centre_lat_b = int(math.floor(centre_lat / LAT_BIN_DEG))
     centre_lon_b = int(math.floor(centre_lon / LON_BIN_DEG))
 
-    # Determine whether the backup zarr is available as a fallback
     global backup_date, backup_phy_dataset_xr
     if backup_phy_dataset_xr is None and BACKUP_PHY_ZARR_PATH.exists():
         try:
@@ -2201,8 +2217,149 @@ async def ocean_volume(
 
     _backup_available = backup_phy_dataset_xr is not None or BACKUP_PHY_ZARR_PATH.exists()
 
+    # Backup Zarr coverage: Indian Ocean 4N-26N, 62E-96E
+    BACKUP_LAT_MIN, BACKUP_LAT_MAX = 4.0, 26.0
+    BACKUP_LON_MIN, BACKUP_LON_MAX = 62.0, 96.0
+    overlap_lat = max(0.0, min(lat_max, BACKUP_LAT_MAX) - max(lat_min, BACKUP_LAT_MIN))
+    if lon_min <= lon_max:
+        overlap_lon = max(0.0, min(lon_max, BACKUP_LON_MAX) - max(lon_min, BACKUP_LON_MIN))
+    else:
+        overlap_lon = (
+            max(0.0, min(180.0, BACKUP_LON_MAX) - max(lon_min, BACKUP_LON_MIN)) +
+            max(0.0, min(lon_max, BACKUP_LON_MAX) - max(-180.0, BACKUP_LON_MIN))
+        )
+    region_area = max(0.01, (lat_max - lat_min) * lon_span)
+    backup_frac = (overlap_lat * overlap_lon) / region_area
+    USE_ANALYTICAL_DEMO = backup_frac < 0.20  # <20% overlap with Indian Ocean backup
+
+    COPERNICUS_DEPTH_LEVELS = [0.494025, 9.573, 49.324, 98.96, 203.44, 494.3, 1000.0]
+
+    def _nearest_copernicus_depth(depth_val: float) -> float:
+        return min(COPERNICUS_DEPTH_LEVELS, key=lambda d_lvl: abs(d_lvl - depth_val))
+
+    def _ocean_sst(lat: float, lon: float) -> float:
+        """Physical SST formula with latitude, gyre dynamics, and realistic ranges."""
+        lat_rad = math.radians(lat)
+        base = 28.5 * math.cos(lat_rad) ** 0.8
+        lon_factor = 1.2 * math.sin(math.radians(lon * 2.0))
+        if lat < -40:
+            base -= (abs(lat) - 40) * 0.40
+        if lat > 50:
+            base -= (abs(lat) - 50) * 0.45
+        if lat > 70:
+            base -= (lat - 70) * 0.6
+        noise = 0.6 * math.sin(lat * 3.7 + lon * 2.1) + 0.4 * math.cos(lat * 5.3 - lon * 1.9)
+        return round(max(-2.0, min(32.0, base + lon_factor + noise)), 3)
+
+    def _ocean_sss(lat: float, lon: float) -> float:
+        """Surface salinity (PSU) analytical model."""
+        lat_abs = abs(lat)
+        base = 35.0
+        if lat_abs < 5:     base -= 0.8
+        elif lat_abs < 20:  base += 0.6
+        elif lat_abs < 45:  base += 0.3
+        else:               base -= 1.2
+        noise = 0.3 * math.sin(lat * 4.1 + lon * 1.3)
+        return round(max(30.0, min(38.0, base + noise)), 3)
+
+    def _ocean_currents(lat: float, lon: float) -> Tuple[float, float]:
+        """Simplified geostrophic-like current vectors (m/s)."""
+        u = 0.08 * math.cos(math.radians(lat * 2.0)) * math.sin(math.radians(lon * 0.5))
+        v = 0.05 * math.sin(math.radians(lat * 1.5))
+        if lat < -45:  # ACC
+            u = 0.22 + 0.06 * math.sin(math.radians(lon * 0.8))
+            v = 0.04 * math.cos(math.radians(lon * 0.8))
+        if 25 <= lat <= 45 and -80 <= lon <= -30:  # Gulf Stream
+            u = 0.35 * math.exp(-abs(lat - 35) / 8.0)
+            v = 0.12 * math.exp(-abs(lat - 35) / 8.0)
+        if 20 <= lat <= 40 and 130 <= lon <= 165:  # Kuroshio
+            u = 0.30 * math.exp(-abs(lat - 30) / 9.0)
+            v = 0.08 * math.exp(-abs(lat - 30) / 9.0)
+        return round(u, 4), round(v, 4)
+
+    def _synthesize_analytical_grid(
+        la_min: float, la_max: float, lo_min: float, lo_max: float,
+        depth: float, var: str, step: float = 2.0,
+    ) -> List[Dict]:
+        """Spatially-varying analytical demo grid with antimeridian wrapping support."""
+        nd = _nearest_copernicus_depth(depth)
+        depth_decay = math.exp(-nd / 220.0)
+        sal_decay   = math.exp(-nd / 350.0)
+
+        # Generate longitude coordinates (handling antimeridian wrap)
+        lons = []
+        if lo_min <= lo_max:
+            cur_lo = lo_min
+            while cur_lo <= lo_max + 1e-9:
+                lons.append(round(cur_lo, 3))
+                cur_lo += step
+        else:
+            cur_lo = lo_min
+            while cur_lo <= 180.0:
+                lons.append(round(cur_lo, 3))
+                cur_lo += step
+            cur_lo = -180.0
+            while cur_lo <= lo_max + 1e-9:
+                lons.append(round(cur_lo, 3))
+                cur_lo += step
+
+        # Generate latitude coordinates
+        lats = []
+        cur_la = la_min
+        while cur_la <= la_max + 1e-9:
+            lats.append(round(cur_la, 3))
+            cur_la += step
+
+        rows: List[Dict] = []
+        for la in lats:
+            for lo in lons:
+                sst = _ocean_sst(la, lo)
+                deep_temp = round(4.0 + (sst - 4.0) * depth_decay, 3)
+                sss0 = _ocean_sss(la, lo)
+                deep_sal  = round(34.7 + (sss0 - 34.7) * sal_decay, 3)
+                u, v = _ocean_currents(la, lo)
+                u_d  = round(u * depth_decay, 4)
+                v_d  = round(v * depth_decay, 4)
+                spd  = round(math.sqrt(u_d**2 + v_d**2), 4)
+                lat_abs = abs(la)
+                base_chl = 0.08 if 15 < lat_abs < 35 else (0.25 if lat_abs < 15 else 0.40)
+                chl = round(max(0.01, base_chl + base_chl * 2.8 * math.exp(-((nd - 35.0) ** 2) / 320.0)
+                                + 0.04 * math.sin(la * 5.0 + lo * 3.0)), 4)
+                o2  = round(65.0 + 145.0 * depth_decay, 2)
+                no3 = round(1.2  + 28.0  * (1.0 - math.exp(-nd / 60.0)), 2)
+                ph  = round(8.12 - 0.30  * (1.0 - math.exp(-nd / 90.0)), 3)
+                pco2 = round(395.0 + 85.0 * (1.0 - math.exp(-nd / 110.0)), 1)
+
+                if var in ("salinity", "salinity_psu", "so"):
+                    val = deep_sal
+                elif var in ("currents", "current_speed", "speed", "velocity"):
+                    val = spd
+                elif var in ("chlorophyll", "chl"):
+                    val = chl
+                elif var in ("oxygen", "o2"):
+                    val = o2
+                elif var in ("nitrate", "no3"):
+                    val = no3
+                elif var in ("ph", "pH"):
+                    val = ph
+                elif var in ("pco2", "spco2"):
+                    val = pco2
+                else:
+                    val = deep_temp
+
+                rows.append({
+                    "lat": round(la, 3), "lon": round(lo, 3),
+                    "depth_m": nd, "requested_depth_m": depth, "actual_depth_m": nd,
+                    "temperature_c": deep_temp, "salinity_psu": deep_sal,
+                    "current_u_ms": u_d, "current_v_ms": v_d, "current_speed_ms": spd,
+                    "chlorophyll_mgl": chl, "oxygen_mmolm3": o2,
+                    "nitrate_mmolm3": no3, "ph": ph, "pco2_uatm": pco2,
+                    "value": val,
+                    "placeholder": True, "source": "analytical_demo",
+                })
+        return rows
+
     for d in depth_list:
-        # Query page table for real layer state (resident / on_disk / fetching / not_fetched)
         depth_b = int(math.floor(d / DEPTH_BIN_M))
         layer_state_val = page_table.get_page_state(
             centre_lat_b, centre_lon_b, depth_b, date_str
@@ -2211,38 +2368,37 @@ async def ocean_volume(
         loop = asyncio.get_event_loop()
         slice_src_tag = "copernicus_zarr"
 
-        # Priority Tier 1 — live zarr exact date
-        grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
-            None,
-            lambda _d=d: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, _d, date_str, exact_date=True),
-        )
-        if not grid:
-            # Priority Tier 2a — live zarr nearest time (reference slice)
+        if USE_ANALYTICAL_DEMO:
+            area_deg2 = max(0.01, (lat_max - lat_min) * lon_span)
+            step = max(1.5, min(4.0, math.sqrt(area_deg2 / 400.0)))
+            grid = _synthesize_analytical_grid(lat_min, lat_max, lon_min, lon_max, d, variable, step)
+            actual_depth = _nearest_copernicus_depth(d)
+            actual_date = date_str
+            is_ref = True
+            slice_src_tag = "analytical_demo"
+            layer_state_val = "not_fetched"
+        else:
             grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
                 None,
-                lambda _d=d: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, _d, date_str, exact_date=False),
+                lambda _d=d: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, _d, date_str, exact_date=True),
             )
-            if grid:
-                slice_src_tag = "copernicus_zarr_reference"
-        if not grid and _backup_available:
-            # Priority Tier 2b — backup zarr (stored historical snapshot, marked as backup_cache)
-            grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
-                None,
-                lambda _d=d: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, _d, date_str,
-                                            exact_date=False, use_backup=True),
-            )
-            if grid:
-                slice_src_tag = "backup_cache"
-                is_ref = True
-        if not grid:
-            # Priority Tier 3 — no data available
-            grid = []
-            is_ref = False
-            slice_src_tag = "no_data"
+            if not grid:
+                grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
+                    None,
+                    lambda _d=d: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, _d, date_str, exact_date=False),
+                )
+                if grid:
+                    slice_src_tag = "copernicus_zarr_reference"
+            if not grid and _backup_available:
+                grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
+                    None,
+                    lambda _d=d: _read_phy_grid_backup(lat_min, lat_max, lon_min, lon_max, _d, date_str),
+                )
+                if grid:
+                    slice_src_tag = "backup_cache"
 
         pts = []
         for r in grid:
-            val = None
             if variable in ("temperature", "temperature_c", "thetao", "temp"):
                 val = r.get("temperature_c")
             elif variable in ("salinity", "salinity_psu", "so", "sal"):
@@ -2255,18 +2411,15 @@ async def ocean_volume(
                 val = r.get("oxygen_mmolm3")
             else:
                 val = r.get("temperature_c")
-
             pts.append({
-                "lat": r["lat"],
-                "lon": r["lon"],
-                "value": val,
+                "lat": r["lat"], "lon": r["lon"], "value": val,
                 "temperature_c": r.get("temperature_c"),
-                "salinity_psu": r.get("salinity_psu"),
-                "current_u_ms": r.get("current_u_ms"),
-                "current_v_ms": r.get("current_v_ms"),
+                "salinity_psu":  r.get("salinity_psu"),
+                "current_u_ms":  r.get("current_u_ms"),
+                "current_v_ms":  r.get("current_v_ms"),
                 "current_speed_ms": r.get("current_speed_ms"),
                 "chlorophyll_mgl": r.get("chlorophyll_mgl"),
-                "oxygen_mmolm3": r.get("oxygen_mmolm3"),
+                "oxygen_mmolm3":   r.get("oxygen_mmolm3"),
             })
 
         slices.append({
@@ -2282,17 +2435,28 @@ async def ocean_volume(
             "points": pts,
         })
 
-    # Fetch Argo float bounding-box markers for 3D overlay (same as /ocean/snapshot)
-    floats = await _get_bbox_floats(lat_min, lat_max, lon_min, lon_max, date_str)
-    enriched_floats = _enrich_floats_for_3d(floats, lat_min, lat_max, lon_min, lon_max)
+    # Fetch active Argo floats for bounding box
+    try:
+        if lon_min <= lon_max:
+            floats_res = await _argo.fetch_active_floats(lat_min, lat_max, lon_min, lon_max, days=60, float_type="both")
+            raw_floats = floats_res.get("floats", []) if isinstance(floats_res, dict) else []
+        else:
+            f1 = await _argo.fetch_active_floats(lat_min, lat_max, lon_min, 180.0, days=60, float_type="both")
+            f2 = await _argo.fetch_active_floats(lat_min, lat_max, -180.0, lon_max, days=60, float_type="both")
+            raw_floats = (f1.get("floats", []) if isinstance(f1, dict) else []) + (f2.get("floats", []) if isinstance(f2, dict) else [])
+    except Exception:
+        raw_floats = []
 
-    # Determine overall volume source for metadata
+    enriched_floats = _enrich_floats_for_3d(raw_floats, lat_min, lat_max, lon_min, lon_max)
+
     if any(s.get("source") == "copernicus_zarr" for s in slices):
         vol_source = "copernicus_zarr"
     elif any(s.get("source") == "backup_cache" for s in slices):
         vol_source = "backup_cache"
     elif any(s.get("source") == "copernicus_zarr_reference" for s in slices):
         vol_source = "copernicus_zarr_reference"
+    elif any(s.get("source") == "analytical_demo" for s in slices):
+        vol_source = "analytical_demo"
     else:
         vol_source = "no_data"
 
@@ -2311,20 +2475,20 @@ async def ocean_volume(
         "source": vol_source,
         "backup_date": effective_backup_date if vol_source == "backup_cache" else None,
         "data_source": vol_source,
+        "n_slices": len(slices),
         "variable": variable,
-        "n_depth_slices": len(slices),
         "depth_slices": slices,
         "floats": enriched_floats,
-        "dataset_info": route_info(date_str),
+        "is_reference": vol_source in ("analytical_demo", "copernicus_zarr_reference", "backup_cache"),
+        "disclaimer": (
+            "Analytical demo data based on physical ocean equations. NOT real Copernicus measurements."
+            if vol_source == "analytical_demo" else None
+        ),
+        "cache": "NONE",
+        "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
     }
     l1_set(cache_key, result)
-
-    return {**result, "cache": "COMPUTED", "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2)}
-
-
-# ==============================================================================
-# /argo/nearest
-# ==============================================================================
+    return result
 
 @app.get("/argo/nearest")
 async def argo_nearest(

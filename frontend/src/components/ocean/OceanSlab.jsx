@@ -385,6 +385,8 @@ export default function OceanSlab({
           ? '🟢 Copernicus Live (L2 Cache)'
           : current.dataSource === 'backup_cache'
           ? `📦 Copernicus Backup (${current.backupDate || 'Stored'})`
+          : current.dataSource === 'analytical_demo'
+          ? '🌐 Analytical Ocean Model (Demo Field)'
           : '🌐 Cached Ocean Volume';
 
         hudRef.current.innerHTML = `

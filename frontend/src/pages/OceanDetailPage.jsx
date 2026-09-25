@@ -40,10 +40,10 @@ import OceanIntelligencePanel from '../components/scientist/OceanIntelligencePan
 
 export default function OceanDetailPage() {
   const location = useLocation();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
-  const { selectedDate, apiStatus, wsStatus, logs, activePointQuery } = useApp();
+  const { selectedDate, selectedDepth, selectedVariable, apiStatus, wsStatus, logs, activePointQuery } = useApp();
 
   useWebSocket();
   useApiHealth();
@@ -57,6 +57,7 @@ export default function OceanDetailPage() {
   const initialLon  = location.state?.lon  ?? searchParams.get('lon')  ?? null;
   const initialDepth = Number(location.state?.depth ?? searchParams.get('depth') ?? 0);
   const initialDate  = location.state?.date ?? searchParams.get('date') ?? null;
+  const initialVariable = searchParams.get('variable') ?? null;
   const initialBbox  = location.state?.bbox ?? null;
 
   const [selectedOcean, setSelectedOcean] = useState(() => {
@@ -102,10 +103,13 @@ export default function OceanDetailPage() {
     }
   }, []);
 
-  // Seed AppContext with incoming depth + date + activePointQuery
+  // Seed AppContext with incoming depth + variable + date + activePointQuery
   useEffect(() => {
     if (Number.isFinite(initialDepth)) {
       dispatch({ type: 'SET_DEPTH', payload: initialDepth });
+    }
+    if (initialVariable) {
+      dispatch({ type: 'SET_SELECTED_VARIABLE', payload: initialVariable });
     }
     if (initialDate) {
       dispatch({ type: 'SET_DATE', payload: initialDate });
@@ -113,7 +117,34 @@ export default function OceanDetailPage() {
     if (initialLat != null && initialLon != null) {
       dispatch({ type: 'SET_ACTIVE_POINT_QUERY', payload: { lat: Number(initialLat), lon: Number(initialLon) } });
     }
-  }, []); // run once on mount — useDateControls may override date later if server has a newer one
+  }, []); // run once on mount
+
+  // Sync state back to URL query parameters without page reload
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams);
+    let changed = false;
+
+    if (selectedOcean && params.get('region') !== selectedOcean) {
+      params.set('region', selectedOcean);
+      changed = true;
+    }
+    if (selectedDepth != null && params.get('depth') !== String(selectedDepth)) {
+      params.set('depth', String(selectedDepth));
+      changed = true;
+    }
+    if (selectedVariable && params.get('variable') !== selectedVariable) {
+      params.set('variable', selectedVariable);
+      changed = true;
+    }
+    if (selectedDate && params.get('date') !== selectedDate) {
+      params.set('date', selectedDate);
+      changed = true;
+    }
+
+    if (changed) {
+      setSearchParams(params, { replace: true });
+    }
+  }, [selectedOcean, selectedDepth, selectedVariable, selectedDate, searchParams, setSearchParams]);
 
   // Set mode from URL (default explore)
   useEffect(() => {

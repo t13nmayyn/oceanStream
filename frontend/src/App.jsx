@@ -26,6 +26,7 @@ export default function App() {
           <Route path="/" element={<LandingPage />} />
           <Route path="/explorer" element={<ExplorerPage />} />
           <Route path="/ocean-detail" element={<OceanDetailPage />} />
+          <Route path="/ocean" element={<OceanDetailPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/observations" element={<ObservationsPage />} />
           <Route path="/datasets" element={<DataExplorer />} />
