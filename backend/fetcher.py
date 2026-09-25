@@ -56,6 +56,15 @@ ARGO_ZARR_PATH   = _OUTPUT_DIR / "argo_data.zarr"
 # Safety cap: max depth span per single fetch request — full ocean water column
 MAX_FETCH_DEPTH_SPAN = 6000.0
 
+# The shallowest coordinate in Copernicus ANFC/MY datasets is approximately
+# 0.494 m. Sending minimum_depth=0.0 causes a "depth coordinate not found"
+# error. Always clamp depth requests to this minimum.
+COPERNICUS_MIN_DEPTH: float = 0.494
+
+def _clamp_depth(d: float) -> float:
+    """Clamp a depth value to the Copernicus dataset minimum (~0.494m)."""
+    return max(COPERNICUS_MIN_DEPTH, float(d))
+
 # Spatial chunking: large bounding boxes are split into smaller tiles before
 # sending to Copernicus. Copernicus becomes very slow (and often times out) for
 # requests > ~5°×5°. Using 4° keeps each sub-request well within limits while
@@ -284,7 +293,9 @@ async def fetch_phy_range(
         async def _download_phy_group(part_idx: int, did: str, vl: List[str]) -> Optional[xr.Dataset]:
             tmp_nc = Path(tmpdir) / f"phy_part_{part_idx}.nc"
             has_depth = any(v not in ("zos", "mlotst") for v in vl)
-            eff_min = max(0.0, float(depth_min)) if has_depth else None
+            # Clamp to Copernicus minimum depth (~0.494m) — sending 0.0 causes
+            # "depth coordinate not found" errors from the dataset API.
+            eff_min = _clamp_depth(float(depth_min)) if has_depth else None
             eff_max = max(eff_min, float(depth_max)) if (has_depth and eff_min is not None) else None
             sem = _get_copernicus_sem()
             try:
@@ -464,7 +475,8 @@ async def fetch_bgc_range(
 
     ds_parts = []
     with tempfile.TemporaryDirectory(prefix="ocean_bgc_") as tmpdir:
-        eff_min = max(0.0, float(depth_min))
+        # Clamp depth to Copernicus minimum (~0.494m)
+        eff_min = _clamp_depth(float(depth_min))
         eff_max = max(eff_min, float(depth_max))
 
         async def _download_bgc_group(part_idx: int, did: str, vl: List[str]) -> Optional[xr.Dataset]:

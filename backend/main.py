@@ -129,6 +129,17 @@ L1_TTL_SECONDS  = 300   # 5-minute TTL
 L1_MAX_ENTRIES  = 500   # max number of L1 cache entries before LRU eviction
 _l1: Dict[str, Dict] = {}
 
+# ---------------------------------------------------------------------------
+# Copernicus minimum depth — the shallowest level in the ANFC/MY datasets
+# is approximately 0.494 m. Sending depth=0.0 to the subset() API causes
+# a "no data at coordinate" error. Always clamp to COPERNICUS_MIN_DEPTH.
+# ---------------------------------------------------------------------------
+COPERNICUS_MIN_DEPTH: float = 0.494
+
+def _clamp_depth_min(d: float) -> float:
+    """Ensure depth is at or above the Copernicus dataset's shallowest level."""
+    return max(COPERNICUS_MIN_DEPTH, float(d))
+
 def l1_get(key: str) -> Optional[Any]:
     entry = _l1.get(key)
     if entry and (time.time() - entry["ts"]) < L1_TTL_SECONDS:
@@ -967,19 +978,35 @@ def _schedule_prefetch(lat: float, lon: float, depth: float, date_str: str):
             l1_set(nkey, {"physics": phy_check, "bgc": bgc_check})
 
 
+# Tracks keys of range-fetch tasks that have already failed once.
+# We do NOT retry them automatically — caller must request again later.
+_failed_fetch_keys: set = set()
+
+
 def _schedule_bg_range_fetch(
     lat_min: float, lat_max: float,
     lon_min: float, lon_max: float,
     depth: float, date_str: str,
-):
-    """Trigger bounded background ingestion for a bounding box at given depth layer."""
+) -> Optional[asyncio.Task]:
+    """
+    Trigger ONE bounded background ingestion for a bounding box at given depth layer.
+    Guardrails:
+    - Deduplicates: if the same key is already running, returns the existing task.
+    - No-retry: if the key previously failed, returns None immediately.
+    - Hard timeout: 180s per fetch (enforced inside fetch_phy_range).
+    - Depth clamped to COPERNICUS_MIN_DEPTH.
+    """
     task_key = f"range:{lat_min:.2f}:{lat_max:.2f}:{lon_min:.2f}:{lon_max:.2f}:{depth:.1f}:{date_str}"
     if task_key in _fetch_tasks:
-        return _fetch_tasks[task_key]
+        return _fetch_tasks[task_key]  # already in flight
+    if task_key in _failed_fetch_keys:
+        logger.debug(f"[BG RANGE FETCH] Skipping previously-failed key: {task_key}")
+        return None  # no retry after failure
     if not _fetcher.credentials_present():
         return None
 
-    depth_min = max(0.0, depth - 25.0)
+    # Clamp depth to Copernicus minimum (0.494m)
+    depth_min = _clamp_depth_min(max(0.0, depth - 25.0))
     depth_max = depth + 25.0
 
     async def _runner():
@@ -990,17 +1017,27 @@ def _schedule_bg_range_fetch(
                 _notify_fetch_complete(task_key, (tlat_min + tlat_max) / 2, (tlon_min + tlon_max) / 2, depth, date_str)
 
             cache_stats["fetches"] += 1
-            res = await _fetcher.fetch_phy_range(
-                lat_min, lat_max, lon_min, lon_max,
-                depth_min=depth_min, depth_max=depth_max,
-                date_str=date_str,
-                page_table=page_table,
-                on_tile_complete=_on_tile
+            res = await asyncio.wait_for(
+                _fetcher.fetch_phy_range(
+                    lat_min, lat_max, lon_min, lon_max,
+                    depth_min=depth_min, depth_max=depth_max,
+                    date_str=date_str,
+                    page_table=page_table,
+                    on_tile_complete=_on_tile,
+                ),
+                timeout=180.0,
             )
             if res.get("status") == "success":
                 logger.info(f"[BG RANGE FETCH] Ingested real Copernicus data for {task_key}")
+            else:
+                logger.warning(f"[BG RANGE FETCH] Fetch returned non-success for {task_key}: {res}")
+                _failed_fetch_keys.add(task_key)
+        except asyncio.TimeoutError:
+            logger.error(f"[BG RANGE FETCH] Timed out (180s) for {task_key}")
+            _failed_fetch_keys.add(task_key)
         except Exception as e:
             logger.error(f"[BG RANGE FETCH] Failed for {task_key}: {e}")
+            _failed_fetch_keys.add(task_key)
         finally:
             _fetch_tasks.pop(task_key, None)
 
@@ -1044,10 +1081,13 @@ async def _prewarm_home_regions():
         For each PREWARM_REGIONS tile, generate physics+BGC from the analytical
         model and pin them as RESIDENT in both L1 and the page_table.
     Phase 2 — REAL (background, only if credentials present):
-        Kick off Copernicus fetches for each tile; when they complete the
+        Kick off ONE bounded Copernicus fetch per tile; when they complete the
         pages upgrade from synthetic → real data transparently.
+        Max 1 retry. No infinite loop.
     """
-    date_str = yesterday_iso()
+    # Use latest_available_iso — same as all other endpoints.
+    # yesterday_iso() can point to a date Copernicus hasn't published yet.
+    date_str = latest_available_iso()
     logger.info(f"[PRE-WARM] Phase 1: synthesising {len(PREWARM_REGIONS)} home-region tiles for {date_str}")
 
     for label, lat_min, lat_max, lon_min, lon_max in PREWARM_REGIONS:
@@ -1110,11 +1150,23 @@ async def _prewarm_home_regions():
     logger.info("[PRE-WARM] Phase 2: scheduling background Copernicus tasks for home tiles")
 
     async def _prewarm_region_task(lbl: str, l_min: float, l_max: float, ln_min: float, ln_max: float, d_str: str):
+        """
+        ONE bounded Copernicus fetch for the home region tile.
+        Fetches 0–200m at surface: clamped to COPERNICUS_MIN_DEPTH (~0.494m).
+        Max 1 attempt. No retry loop. No background-forever task.
+        """
         try:
-            phy_res = await _fetcher.fetch_phy_range(
-                l_min, l_max, ln_min, ln_max,
-                depth_min=0.0, depth_max=6.0,
-                date_str=d_str,
+            # Clamp depth_min to Copernicus minimum (0.494m) — sending 0.0 causes
+            # "depth coordinate not found" errors from the dataset API.
+            eff_depth_min = _clamp_depth_min(0.0)
+            eff_depth_max = 200.0  # surface + shallow layers only
+            phy_res = await asyncio.wait_for(
+                _fetcher.fetch_phy_range(
+                    l_min, l_max, ln_min, ln_max,
+                    depth_min=eff_depth_min, depth_max=eff_depth_max,
+                    date_str=d_str,
+                ),
+                timeout=180.0,  # hard timeout: 3 minutes per tile
             )
             if phy_res.get("status") == "success":
                 _prewarm_status[lbl] = "real"
@@ -1122,7 +1174,7 @@ async def _prewarm_home_regions():
                 await loop.run_in_executor(None, _reload_phy_zarr)
                 result = await loop.run_in_executor(
                     None,
-                    lambda: _read_phy_grid(l_min, l_max, ln_min, ln_max, 0.0, d_str),
+                    lambda: _read_phy_grid(l_min, l_max, ln_min, ln_max, eff_depth_min, d_str),
                 )
                 real_grid, _ad, _adate, _is_ref = result
                 if real_grid:
@@ -1133,7 +1185,7 @@ async def _prewarm_home_regions():
                         "status": "ok", "placeholder": False, "source": "copernicus_real",
                         "bbox": {"lat_min": l_min, "lat_max": l_max,
                                  "lon_min": ln_min, "lon_max": ln_max},
-                        "depth": 0.0, "date": d_str, "grid": real_grid,
+                        "depth": eff_depth_min, "date": d_str, "grid": real_grid,
                         "coverage": {
                             "total_points": len(real_grid),
                             "physics_coverage_pct": 100.0,
@@ -1142,8 +1194,16 @@ async def _prewarm_home_regions():
                     }
                     l1_set(snap_key, snap_data)
                 logger.info(f"[PRE-WARM] {lbl}: upgraded to real Copernicus data")
+            else:
+                logger.info(f"[PRE-WARM] {lbl}: fetch returned {phy_res.get('status')} — keeping synthetic")
+        except asyncio.TimeoutError:
+            logger.warning(f"[PRE-WARM] {lbl}: timed out after 180s — keeping synthetic")
         except Exception as e:
             logger.debug(f"[PRE-WARM] {lbl} real fetch failed: {e}")
+        finally:
+            # Always mark done (no retry)
+            if _prewarm_status.get(lbl) not in ("real",):
+                _prewarm_status.setdefault(lbl, "synthetic")
 
     for label, lat_min, lat_max, lon_min, lon_max in PREWARM_REGIONS:
         asyncio.create_task(_prewarm_region_task(label, lat_min, lat_max, lon_min, lon_max, date_str))
@@ -3304,15 +3364,23 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=True,
-        # Exclude data directories and binary data files from watchfiles.
+        # Exclude runtime-generated data directories from watchfiles.
         # Without this, every Zarr/NC write inside backend/output/ triggers
         # a full server reload loop that kills in-flight Copernicus fetches.
+        # The "watchfiles.main: changes detected" log message is watchfiles
+        # noticing filesystem changes — it is NOT a Copernicus error.
         reload_excludes=[
             str(BASE_DIR / "output"),
+            str(BASE_DIR / "output" / "user_uploads"),
             "*.zarr",
             "*.nc",
             "*.nc.tmp",
             "*.zarr.tmp",
+            "*_tmp*",
+            "*_old*",
+            "*.zarray",
+            "*.zattrs",
+            "*.zgroup",
         ],
         reload_dirs=[str(BASE_DIR)],
     )

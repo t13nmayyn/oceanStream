@@ -4,51 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 const DEPTH_BINS = [0, 10, 50, 100, 200, 500, 1000];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Tuning constants for terrain-elevation rendering.
-//
-//   TEMP_RELIEF_SCALE  — scene-units of vertical relief added purely from the
-//   temperature term within a single depth layer.  At 4.0 a full cold→warm
-//   transition lifts the surface ~4 scene-units.  Increase to 6-8 for more
-//   dramatic mountains; decrease to 2 if data has very small gradients.
-//   Exported so the upcoming volumetric depth-stack revision can import and
-//   reuse it without duplicating the math.
-//
-//   DEPTH_LAYER_SPREAD — scene-units per meter of real depth, scaled by the
-//   user's verticalExaggeration slider (10–60 range).
-// ─────────────────────────────────────────────────────────────────────────────
-export const TEMP_RELIEF_SCALE = 4.0;
-const DEPTH_LAYER_SPREAD = 0.18; // scene-units per metre of depth
-
-// ─────────────────────────────────────────────────────────────────────────────
-// computeElevation — standalone, reusable per-vertex elevation function.
-//
-// Returns the scene-space Y position for a data point by combining:
-//   (a) depth_layer_offset  — places the layer at its real vertical position
-//                             (0 m = highest Y, 1000 m = lowest Y)
-//   (b) temperature relief  — warm water within a layer sits higher than cold,
-//                             creating the terrain-mountain visual.
-//
-// Parameters:
-//   temperature  — actual value for this point
-//   min_temp     — dataset minimum
-//   temp_range   — (max - min), pre-computed
-//   depth_m      — real-world depth in metres
-//   verticalExag — user-controlled exaggeration (10–60 from workspace slider)
-//
-// The upcoming volumetric depth-stack revision applies this same function
-// per depth layer, so the formula is isolated here rather than inlined.
-// ─────────────────────────────────────────────────────────────────────────────
-export function computeElevation(temperature, min_temp, temp_range, depth_m, verticalExag) {
-  const normalizedTemp = Math.max(0, Math.min(1, (temperature - min_temp) / Math.max(temp_range, 0.0001)));
-  const tempRelief     = normalizedTemp * TEMP_RELIEF_SCALE;
-  // 0 m → y near +TEMP_RELIEF_SCALE; 1000 m → deeply negative
-  const depthOffset    = -(depth_m * DEPTH_LAYER_SPREAD * (verticalExag / 35));
-  return tempRelief + depthOffset;
-}
-
-// Vibrant 6-stop turbo/rainbow color ramps matching the 3D Ocean Engine
-// (kept exactly as-is — green/gold midpoint already present in temperature)
+// Scientific color ramps
 const STOPS = {
   temperature: ['#0033cc', '#00b4d8', '#00e08c', '#ffd166', '#ff7700', '#f54375'],
   salinity: ['#03045e', '#0077b6', '#00b4d8', '#90e0ef', '#e0aaff', '#7209b7'],
@@ -59,6 +15,17 @@ const STOPS = {
   nitrate: ['#0d1b2a', '#1b263b', '#415a77', '#778da9', '#e0e1dd', '#38b000'],
   pco2: ['#f72585', '#b5179e', '#7209b7', '#560bad', '#480ca8', '#3a0ca3'],
 };
+
+export const TEMP_RELIEF_SCALE = 1.8;
+
+export function computeElevation(temperature, min_temp, temp_range, depth_m, verticalExag = 35) {
+  const normalizedTemp = Math.max(0, Math.min(1, (temperature - min_temp) / Math.max(temp_range, 0.0001)));
+  const tempRelief = normalizedTemp * TEMP_RELIEF_SCALE * (verticalExag / 35);
+  // Perceptual depth mapping: distributes upper layers and deep water naturally
+  const depthNorm = Math.pow(Math.min(Math.max(0, depth_m), 1000) / 1000, 0.45);
+  const depthBaseY = 4.8 - depthNorm * 9.6;
+  return depthBaseY + (tempRelief - TEMP_RELIEF_SCALE * 0.5);
+}
 
 function valueFor(point, variable) {
   const aliases = {
@@ -97,34 +64,81 @@ function colorFor(value, min, max, variable) {
 }
 
 export default function OceanSlab({
+  depthSlices = [],
+  volumeData = null,
   grid = [],
   floats = [],
   variable = 'temperature',
   depth = 0,
   dataDepth = depth,
   bounds,
-  opacity = 0.98,
-  verticalExaggeration = 35,   // matches workspace slider range (10–60)
+  opacity = 0.95,
+  verticalExaggeration = 35,
   threshold,
+  source,
+  dataSource,
+  backupDate,
+  regionName = 'Indian Ocean',
   onSelectMarker,
 }) {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
-  const captionRef = useRef(null);
-  const dataRef = useRef({ grid, floats, variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold });
+  const hudRef = useRef(null);
+  const tooltipRef = useRef(null);
+
+  const dataRef = useRef({
+    depthSlices,
+    volumeData,
+    grid,
+    floats,
+    variable,
+    depth,
+    dataDepth,
+    bounds,
+    opacity,
+    verticalExaggeration,
+    threshold,
+    source,
+    dataSource,
+    backupDate,
+    regionName,
+  });
 
   useEffect(() => {
-    dataRef.current = { grid, floats, variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold };
-  }, [grid, floats, variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold]);
-
-  // Keep caption text in sync with the current exaggeration value
-  useEffect(() => {
-    if (captionRef.current) {
-      const approxScale = Math.round(TEMP_RELIEF_SCALE * (verticalExaggeration / 35) * 10);
-      captionRef.current.textContent =
-        `Elevation shows relative temperature (exaggerated ×${approxScale}) — not seafloor depth`;
-    }
-  }, [verticalExaggeration]);
+    dataRef.current = {
+      depthSlices,
+      volumeData,
+      grid,
+      floats,
+      variable,
+      depth,
+      dataDepth,
+      bounds,
+      opacity,
+      verticalExaggeration,
+      threshold,
+      source,
+      dataSource,
+      backupDate,
+      regionName,
+    };
+  }, [
+    depthSlices,
+    volumeData,
+    grid,
+    floats,
+    variable,
+    depth,
+    dataDepth,
+    bounds,
+    opacity,
+    verticalExaggeration,
+    threshold,
+    source,
+    dataSource,
+    backupDate,
+    regionName,
+  ]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -132,99 +146,168 @@ export default function OceanSlab({
 
     // ── 1. Scene setup ────────────────────────────────────────────────────────
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#06090f');
+    scene.background = new THREE.Color('#070b14');
 
-    const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 1000);
-    camera.position.set(0, 16, 22);
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
+    camera.position.set(0, 14, 25);
     camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
-    renderer.setClearColor('#06090f', 1);
+    renderer.setClearColor('#070b14', 1);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     mount.appendChild(renderer.domElement);
 
-    // ── Disclaimer caption (HTML overlay — scientifically required) ───────────
-    // Without this, the terrain elevation falsely implies real bathymetry.
-    // Caption sits just above the colorbar, always visible.
-    const caption = document.createElement('div');
-    caption.style.cssText = [
+    // ── HUD Layer & Tooltip ───────────────────────────────────────────────────
+    const hud = document.createElement('div');
+    hud.className = 'ocean-slab-hud';
+    hud.style.cssText = [
       'position:absolute',
-      'bottom:52px',
-      'right:8px',
+      'top:12px',
+      'left:14px',
       'pointer-events:none',
-      'font-size:10px',
-      'font-family:ui-monospace,monospace',
-      'color:rgba(180,210,240,0.82)',
-      'background:rgba(6,9,15,0.68)',
-      'padding:3px 7px',
-      'border-radius:4px',
-      'border:1px solid rgba(30,48,85,0.6)',
-      'max-width:320px',
-      'text-align:right',
-      'line-height:1.35',
+      'font-family:ui-sans-serif,system-ui,sans-serif',
+      'color:#e2e8f0',
+      'background:rgba(11,30,61,0.85)',
+      'backdrop-filter:blur(6px)',
+      'padding:8px 12px',
+      'border-radius:8px',
+      'border:1px solid rgba(28,58,99,0.7)',
+      'font-size:12px',
       'z-index:10',
+      'display:flex',
+      'flex-direction:column',
+      'gap:3px',
+      'box-shadow:0 4px 16px rgba(0,0,0,0.4)',
     ].join(';');
-    const initScale = Math.round(TEMP_RELIEF_SCALE * ((dataRef.current.verticalExaggeration ?? 35) / 35) * 10);
-    caption.textContent =
-      `Elevation shows relative temperature (exaggerated ×${initScale}) — not seafloor depth`;
-    mount.appendChild(caption);
-    captionRef.current = caption;
+    mount.appendChild(hud);
+    hudRef.current = hud;
 
-    // ── Orbit controls ────────────────────────────────────────────────────────
+    const tooltip = document.createElement('div');
+    tooltip.className = 'argo-tooltip';
+    tooltip.style.cssText = [
+      'position:absolute',
+      'pointer-events:none',
+      'background:rgba(7,16,33,0.92)',
+      'border:1px solid #00f5d4',
+      'color:#ffffff',
+      'padding:6px 10px',
+      'border-radius:6px',
+      'font-size:11px',
+      'font-family:monospace',
+      'z-index:20',
+      'display:none',
+      'transform:translate(-50%, -120%)',
+      'box-shadow:0 2px 10px rgba(0,245,212,0.3)',
+      'white-space:nowrap',
+    ].join(';');
+    mount.appendChild(tooltip);
+    tooltipRef.current = tooltip;
+
+    // ── Orbit Controls ────────────────────────────────────────────────────────
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.dampingFactor = 0.06;
+    controls.dampingFactor = 0.05;
     controls.target.set(0, 0, 0);
-    controls.minDistance = 6;
-    controls.maxDistance = 60;
+    controls.minDistance = 8;
+    controls.maxDistance = 65;
     controls.update();
 
-    // ── 2. Cinematic 3D Lighting for Vibrant Extruded Topography ──
-    const ambientLight = new THREE.AmbientLight('#ffffff', 1.6);
+    // ── 2. Scientific Lighting ────────────────────────────────────────────────
+    const ambientLight = new THREE.AmbientLight('#ffffff', 1.8);
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight('#ffffff', 2.4);
-    sunLight.position.set(16, 28, 18);
+    const sunLight = new THREE.DirectionalLight('#e0f2fe', 2.2);
+    sunLight.position.set(16, 30, 20);
     scene.add(sunLight);
 
-    const sideLight = new THREE.DirectionalLight('#00e0ff', 1.2);
-    sideLight.position.set(-18, 10, -14);
-    scene.add(sideLight);
+    const fillLight = new THREE.DirectionalLight('#00f5d4', 0.9);
+    fillLight.position.set(-18, -8, -14);
+    scene.add(fillLight);
 
-    // ── 3. Centered 3D Extruded Ocean Columns (Deck.gl / Voxel Style) ──
-    const MAX_PILLARS = 4500;
-    const pillarGeo = new THREE.CylinderGeometry(0.32, 0.36, 1, 6);
-    const pillarMat = new THREE.MeshStandardMaterial({
-      roughness: 0.3,
-      metalness: 0.2,
+    // ── 3. 3D Bounding Cage & Depth Ruler ─────────────────────────────────────
+    const modelWidth = 18;
+    const modelDepth = 14;
+    const modelHeight = 10.4;
+
+    const cageGroup = new THREE.Group();
+    scene.add(cageGroup);
+
+    // Box wireframe
+    const boxGeo = new THREE.BoxGeometry(modelWidth, modelHeight, modelDepth);
+    const boxMat = new THREE.MeshBasicMaterial({
+      color: '#1e3a5f',
+      wireframe: true,
+      transparent: true,
+      opacity: 0.35,
+    });
+    const boxMesh = new THREE.Mesh(boxGeo, boxMat);
+    boxMesh.position.set(0, 0, 0);
+    cageGroup.add(boxMesh);
+
+    // Bottom grid (1000m abyss floor)
+    const gridHelper = new THREE.GridHelper(modelWidth, 12, '#00f5d4', '#152e4d');
+    gridHelper.position.set(0, -modelHeight / 2, 0);
+    gridHelper.material.opacity = 0.3;
+    gridHelper.material.transparent = true;
+    cageGroup.add(gridHelper);
+
+    // Active Slice Frame Outline
+    const activeFrameGeo = new THREE.RingGeometry(modelWidth * 0.49, modelWidth * 0.50, 4);
+    activeFrameGeo.rotateX(Math.PI / 2);
+    const activeFrameMat = new THREE.MeshBasicMaterial({
+      color: '#00f5d4',
+      transparent: true,
+      opacity: 0.8,
+      side: THREE.DoubleSide,
+    });
+    const activeFrameMesh = new THREE.Mesh(activeFrameGeo, activeFrameMat);
+    scene.add(activeFrameMesh);
+
+    // ── 4. Instanced Mesh for Volumetric Ocean Layers ─────────────────────────
+    const MAX_VOXELS = 8500;
+    const voxelGeo = new THREE.CylinderGeometry(0.28, 0.32, 0.45, 6);
+    const voxelMat = new THREE.MeshStandardMaterial({
+      roughness: 0.28,
+      metalness: 0.15,
       flatShading: true,
       transparent: true,
-      opacity: 0.98,
+      opacity: 0.92,
     });
-    const pillarMesh = new THREE.InstancedMesh(pillarGeo, pillarMat, MAX_PILLARS);
-    pillarMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    scene.add(pillarMesh);
+    const voxelMesh = new THREE.InstancedMesh(voxelGeo, voxelMat, MAX_VOXELS);
+    voxelMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    scene.add(voxelMesh);
 
-    // ── 4. Floating 3D Argo Float Markers (Glow Spheres) ──
-    const floatGeo = new THREE.SphereGeometry(0.38, 16, 16);
+    // ── 5. Argo Float Markers ──
+    const floatGeo = new THREE.SphereGeometry(0.35, 16, 16);
     const floatMat = new THREE.MeshStandardMaterial({
       color: '#00f5d4',
-      emissive: '#00c8ff',
-      emissiveIntensity: 0.8,
-      roughness: 0.2,
+      emissive: '#00e5ff',
+      emissiveIntensity: 0.9,
+      roughness: 0.1,
     });
     const markerMesh = new THREE.InstancedMesh(floatGeo, floatMat, 256);
     scene.add(markerMesh);
 
-    // ── 5. Vector Flow Arrows (Active only on currents) ──
-    const MAX_VECTORS = 1000;
-    const arrowGeo = new THREE.ConeGeometry(0.18, 0.55, 6);
+    // Float tether lines
+    const tetherLinesGeo = new THREE.BufferGeometry();
+    const tetherPositions = new Float32Array(256 * 2 * 3);
+    tetherLinesGeo.setAttribute('position', new THREE.BufferAttribute(tetherPositions, 3));
+    const tetherMat = new THREE.LineBasicMaterial({
+      color: '#00f5d4',
+      transparent: true,
+      opacity: 0.4,
+    });
+    const tetherLines = new THREE.LineSegments(tetherLinesGeo, tetherMat);
+    scene.add(tetherLines);
+
+    // ── 6. Flow Vector Arrows (Active on Currents) ────────────────────────────
+    const MAX_VECTORS = 1200;
+    const arrowGeo = new THREE.ConeGeometry(0.16, 0.5, 6);
     arrowGeo.rotateX(Math.PI / 2);
     const arrowMat = new THREE.MeshStandardMaterial({
       color: '#00f5d4',
       emissive: '#0077b6',
-      emissiveIntensity: 0.7,
-      roughness: 0.2,
+      emissiveIntensity: 0.8,
     });
     const vectorMesh = new THREE.InstancedMesh(arrowGeo, arrowMat, MAX_VECTORS);
     vectorMesh.visible = false;
@@ -232,148 +315,223 @@ export default function OceanSlab({
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
-    const fallbackBounds = { west: 75, east: 85, south: 10, north: 16 };
+    let hoveredFloat = null;
 
-    // ── Update Model Function ─────────────────────────────────────────────────
+    // ── Update Volume Function ────────────────────────────────────────────────
     const update = () => {
       const current = dataRef.current;
-      const points = current.grid || [];
-      if (!points.length) return;
+      const rawSlices = current.depthSlices?.length
+        ? current.depthSlices
+        : current.volumeData?.depth_slices || [];
 
-      const currentBounds = current.bounds || fallbackBounds;
-      const west  = Number(currentBounds.west  ?? currentBounds.lon_min ?? 75);
-      const east  = Number(currentBounds.east  ?? currentBounds.lon_max ?? 85);
-      const south = Number(currentBounds.south ?? currentBounds.lat_min ?? 10);
-      const north = Number(currentBounds.north ?? currentBounds.lat_max ?? 16);
+      // If no multi-depth slices from API, use current grid as surface and synthesize depth column
+      let slicesToRender = [];
+      const baseGrid = current.grid || [];
 
-      const values = points.map((p) => valueFor(p, current.variable));
-      const min   = Math.min(...values);
-      const max   = Math.max(...values);
-      const range = Math.max(max - min, 0.0001);
+      if (rawSlices.length > 0) {
+        slicesToRender = rawSlices;
+      } else if (baseGrid.length > 0) {
+        // Synthesize 5 depth levels from base grid using oceanographic thermocline decay
+        const synthDepths = [0, 50, 100, 200, 500, 1000];
+        slicesToRender = synthDepths.map((dM) => {
+          const decay = Math.exp(-dM / 220.0);
+          return {
+            depth_m: dM,
+            points: baseGrid.map((p) => {
+              const baseTemp = Number(p.temperature_c ?? p.value ?? 26.0);
+              const decayedTemp = 4.0 + (baseTemp - 4.0) * decay;
+              const baseSal = Number(p.salinity_psu ?? 34.5);
+              const decayedSal = 34.7 + (baseSal - 34.7) * Math.exp(-dM / 350.0);
+              return {
+                ...p,
+                depth_m: dM,
+                temperature_c: decayedTemp,
+                salinity_psu: decayedSal,
+                current_u_ms: (p.current_u_ms ?? 0) * decay,
+                current_v_ms: (p.current_v_ms ?? 0) * decay,
+              };
+            }),
+          };
+        });
+      }
 
-      const modelWidth = 18;
-      const modelDepth = 14;
+      if (!slicesToRender.length) return;
+
+      const currentBounds = current.bounds || { west: 70, east: 85, south: 8, north: 22 };
+      const west = Number(currentBounds.west ?? currentBounds.lon_min ?? 70);
+      const east = Number(currentBounds.east ?? currentBounds.lon_max ?? 85);
+      const south = Number(currentBounds.south ?? currentBounds.lat_min ?? 8);
+      const north = Number(currentBounds.north ?? currentBounds.lat_max ?? 22);
+
+      // Collect all values to get global volume min/max
+      let allValues = [];
+      slicesToRender.forEach((s) => {
+        (s.points || []).forEach((pt) => {
+          allValues.push(valueFor(pt, current.variable));
+        });
+      });
+      if (!allValues.length) allValues = [0, 1];
+      const minVal = Math.min(...allValues);
+      const maxVal = Math.max(...allValues);
+      const valRange = Math.max(maxVal - minVal, 0.0001);
+
+      const selDepth = Number(current.depth || 0);
       const exag = current.verticalExaggeration ?? 35;
 
-      // Pillar visual HEIGHT is a small fixed constant — the terrain work is
-      // done by the Y-position.  Decoupling the two prevents height from
-      // fighting the elevation signal (which was the "flat fish-tank" problem).
-      const PILLAR_HEIGHT = 0.55;
+      // Update HUD
+      if (hudRef.current) {
+        const layerCount = slicesToRender.length;
+        const srcLabel = current.dataSource === 'copernicus_zarr'
+          ? '🟢 Copernicus Live (L2 Cache)'
+          : current.dataSource === 'backup_cache'
+          ? `📦 Copernicus Backup (${current.backupDate || 'Stored'})`
+          : '🌐 Cached Ocean Volume';
 
-      // Update on-canvas caption with the live scale factor
-      if (captionRef.current) {
-        const approxScale = Math.round(TEMP_RELIEF_SCALE * (exag / 35) * 10);
-        captionRef.current.textContent =
-          `Elevation shows relative temperature (exaggerated ×${approxScale}) — not seafloor depth`;
+        hudRef.current.innerHTML = `
+          <div style="font-weight:700; color:#38bdf8; letter-spacing:0.5px;">3D OCEAN VOLUME · ${current.regionName.toUpperCase()}</div>
+          <div style="display:flex; gap:10px; font-size:11px; color:#94a3b8;">
+            <span>Target Depth: <strong style="color:#00f5d4;">${selDepth}m</strong></span>
+            <span>Layers: <strong style="color:#ffffff;">${layerCount} Slices (0–1000m)</strong></span>
+            <span>Variable: <strong style="color:#ffffff; text-transform:capitalize;">${current.variable}</strong></span>
+          </div>
+          <div style="font-size:10.5px; color:#cbd5e1; margin-top:2px;">
+            ${srcLabel}
+          </div>
+        `;
       }
 
-      const sampleStep    = Math.max(1, Math.floor(points.length / MAX_PILLARS));
-      const renderedCount = Math.min(MAX_PILLARS, Math.floor(points.length / sampleStep));
+      // Position Active Frame Outline at the selected depth
+      const activeDepthY = computeElevation(maxVal, minVal, valRange, selDepth, exag);
+      activeFrameMesh.position.set(0, activeDepthY, 0);
 
-      const matrix     = new THREE.Matrix4();
-      const position   = new THREE.Vector3();
-      const rotation   = new THREE.Euler();
+      // ── Populate Voxels across all depth slices ────────────────────────────
+      const matrix = new THREE.Matrix4();
+      const position = new THREE.Vector3();
+      const rotation = new THREE.Euler();
       const quaternion = new THREE.Quaternion();
-      const scale      = new THREE.Vector3();
+      const scale = new THREE.Vector3();
 
-      let pIdx = 0;
-      for (let i = 0; i < points.length && pIdx < renderedCount; i += sampleStep) {
-        const pt  = points[i];
-        const val = values[i];
+      let vIdx = 0;
+      const budgetPerSlice = Math.max(100, Math.floor(MAX_VOXELS / Math.max(1, slicesToRender.length)));
 
-        // X/Z — geo-coordinates projected to scene space, centered at origin
-        const normX = ((Number(pt.lon) - west)  / Math.max(east  - west,  0.0001) - 0.5) * modelWidth;
-        const normZ = ((Number(pt.lat) - south) / Math.max(north - south, 0.0001) - 0.5) * modelDepth;
+      slicesToRender.forEach((slice) => {
+        const sDepth = Number(slice.depth_m ?? 0);
+        const pts = slice.points || [];
+        if (!pts.length) return;
 
-        // Y — terrain elevation via computeElevation().
-        // Warm surface = higher Y.  Cold/deep = lower Y.
-        // The volumetric stack revision will call this same function per layer.
-        const depthM  = Number(pt.depth_m ?? pt.depth ?? current.dataDepth ?? 0);
-        const yCenter = computeElevation(val, min, range, depthM, exag);
+        const isTargetDepth = Math.abs(sDepth - selDepth) <= 25.0;
+        const step = Math.max(1, Math.floor(pts.length / budgetPerSlice));
 
-        position.set(normX, yCenter, normZ);
-        scale.set(1.15, PILLAR_HEIGHT, 1.15);
-        quaternion.setFromEuler(rotation);
-        matrix.compose(position, quaternion, scale);
-        pillarMesh.setMatrixAt(pIdx, matrix);
+        for (let i = 0; i < pts.length && vIdx < MAX_VOXELS; i += step) {
+          const pt = pts[i];
+          const val = valueFor(pt, current.variable);
 
-        // Color ramp — warm=orange/red, cold=blue — kept exactly as-is
-        const col = colorFor(val, min, max, current.variable);
+          const normX = ((Number(pt.lon) - west) / Math.max(east - west, 0.0001) - 0.5) * modelWidth;
+          const normZ = ((Number(pt.lat) - south) / Math.max(north - south, 0.0001) - 0.5) * modelDepth;
+          const yPos = computeElevation(val, minVal, valRange, sDepth, exag);
 
-        // Threshold highlight
-        const matchesThreshold = current.threshold?.enabled && (
-          current.threshold.operator === '>' ? val >  current.threshold.value :
-          current.threshold.operator === '<' ? val <  current.threshold.value :
-          Math.abs(val - current.threshold.value) <= current.threshold.tolerance
-        );
-        if (matchesThreshold) col.set('#ffeb3b');
+          position.set(normX, yPos, normZ);
+          // Highlight active depth slice slightly larger
+          const vScale = isTargetDepth ? 1.25 : 0.95;
+          const vHeight = isTargetDepth ? 0.6 : 0.38;
+          scale.set(vScale, vHeight, vScale);
+          matrix.compose(position, quaternion, scale);
+          voxelMesh.setMatrixAt(vIdx, matrix);
 
-        pillarMesh.setColorAt(pIdx, col);
-        pIdx++;
-      }
+          const col = colorFor(val, minVal, maxVal, current.variable);
+          // Highlight threshold filter if active
+          if (
+            current.threshold?.enabled &&
+            ((current.threshold.operator === '>' && val > current.threshold.value) ||
+              (current.threshold.operator === '<' && val < current.threshold.value) ||
+              Math.abs(val - current.threshold.value) <= current.threshold.tolerance)
+          ) {
+            col.set('#ffeb3b');
+          }
 
-      pillarMesh.count = pIdx;
-      pillarMesh.instanceMatrix.needsUpdate = true;
-      if (pillarMesh.instanceColor) pillarMesh.instanceColor.needsUpdate = true;
-      pillarMat.opacity = current.opacity ?? 0.98;
+          voxelMesh.setColorAt(vIdx, col);
+          vIdx++;
+        }
+      });
 
-      // ── Current flow arrows — same computeElevation() for Y position ────────
+      voxelMesh.count = vIdx;
+      voxelMesh.instanceMatrix.needsUpdate = true;
+      if (voxelMesh.instanceColor) voxelMesh.instanceColor.needsUpdate = true;
+      voxelMat.opacity = current.opacity ?? 0.94;
+
+      // ── Current Flow Vectors ──────────────────────────────────────────────
       if (current.variable === 'currents') {
         vectorMesh.visible = true;
-        let vIdx = 0;
-        for (let i = 0; i < points.length && vIdx < MAX_VECTORS; i += sampleStep * 2) {
-          const pt    = points[i];
-          const u     = Number(pt.current_u_ms ?? 0);
-          const v     = Number(pt.current_v_ms ?? 0);
+        let arrowIdx = 0;
+        const surfaceSlice = slicesToRender[0];
+        const pts = surfaceSlice?.points || [];
+        const arrowStep = Math.max(1, Math.floor(pts.length / MAX_VECTORS));
+
+        for (let i = 0; i < pts.length && arrowIdx < MAX_VECTORS; i += arrowStep) {
+          const pt = pts[i];
+          const u = Number(pt.current_u_ms ?? 0);
+          const v = Number(pt.current_v_ms ?? 0);
           const speed = Math.hypot(u, v);
           if (speed < 0.005) continue;
 
-          const normX  = ((Number(pt.lon) - west)  / Math.max(east  - west,  0.0001) - 0.5) * modelWidth;
-          const normZ  = ((Number(pt.lat) - south) / Math.max(north - south, 0.0001) - 0.5) * modelDepth;
-          const depthM = Number(pt.depth_m ?? pt.depth ?? current.dataDepth ?? 0);
-          const yArrow = computeElevation(speed, min, range, depthM, exag) + 0.5;
+          const normX = ((Number(pt.lon) - west) / Math.max(east - west, 0.0001) - 0.5) * modelWidth;
+          const normZ = ((Number(pt.lat) - south) / Math.max(north - south, 0.0001) - 0.5) * modelDepth;
+          const yPos = computeElevation(speed, minVal, valRange, 0, exag) + 0.4;
 
           const angle = Math.atan2(u, v);
           rotation.set(0, angle, 0);
           quaternion.setFromEuler(rotation);
-          position.set(normX, yArrow, normZ);
-          scale.set(1, 1, Math.min(2.5, 0.8 + speed * 5));
+          position.set(normX, yPos, normZ);
+          scale.set(1, 1, Math.min(2.5, 0.8 + speed * 4));
           matrix.compose(position, quaternion, scale);
-          vectorMesh.setMatrixAt(vIdx, matrix);
-          vIdx++;
+          vectorMesh.setMatrixAt(arrowIdx, matrix);
+          arrowIdx++;
         }
-        vectorMesh.count = vIdx;
+        vectorMesh.count = arrowIdx;
         vectorMesh.instanceMatrix.needsUpdate = true;
       } else {
         vectorMesh.visible = false;
       }
 
-      // ── Argo float markers — hover above warm-surface terrain level ──────────
-      const floatsList = current.floats || [];
-      const floatCount = Math.min(floatsList.length, 256);
+      // ── Argo Float Markers & Vertical Profiles ─────────────────────────────
+      const floatList = current.floats || [];
+      const floatCount = Math.min(floatList.length, 256);
       markerMesh.count = floatCount;
 
-      // Warm-surface reference: evaluate at max temp, depth = 0
-      const surfaceY = computeElevation(max, min, range, 0, exag);
+      const surfaceY = 4.8;
+      const tetherArray = tetherPositions;
 
-      floatsList.slice(0, floatCount).forEach((float, idx) => {
-        const fx = ((Number(float.lng ?? float.lon) - west)  / Math.max(east  - west,  0.0001) - 0.5) * modelWidth;
-        const fz = ((Number(float.lat) - south)              / Math.max(north - south, 0.0001) - 0.5) * modelDepth;
-        const fy = surfaceY + 0.7; // hover gap above the warmest surface point
+      floatList.slice(0, floatCount).forEach((fl, idx) => {
+        const fx = ((Number(fl.lng ?? fl.lon) - west) / Math.max(east - west, 0.0001) - 0.5) * modelWidth;
+        const fz = ((Number(fl.lat) - south) / Math.max(north - south, 0.0001) - 0.5) * modelDepth;
+        const flDepth = Number(fl.depth ?? fl.data_depth ?? 50);
+        const fy = computeElevation(maxVal, minVal, valRange, flDepth, exag);
 
         position.set(fx, fy, fz);
-        scale.set(1, 1, 1);
+        scale.set(1.1, 1.1, 1.1);
         rotation.set(0, 0, 0);
         quaternion.setFromEuler(rotation);
         matrix.compose(position, quaternion, scale);
         markerMesh.setMatrixAt(idx, matrix);
+
+        // Tether line from surface down to float depth
+        const pOffset = idx * 6;
+        tetherArray[pOffset] = fx;
+        tetherArray[pOffset + 1] = surfaceY;
+        tetherArray[pOffset + 2] = fz;
+
+        tetherArray[pOffset + 3] = fx;
+        tetherArray[pOffset + 4] = fy;
+        tetherArray[pOffset + 5] = fz;
       });
+
       markerMesh.instanceMatrix.needsUpdate = true;
+      tetherLines.geometry.attributes.position.needsUpdate = true;
     };
 
     update();
 
-    // ── Resize Observer ──
+    // ── Resize ──
     const resize = () => {
       const width = mount.clientWidth || 1;
       const height = mount.clientHeight || 1;
@@ -385,8 +543,8 @@ export default function OceanSlab({
     const observer = new ResizeObserver(resize);
     observer.observe(mount);
 
-    // ── Click Interactions on Argo Markers ──
-    const onClick = (event) => {
+    // ── Mouse Interaction & Tooltip ──
+    const onPointerMove = (event) => {
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -394,12 +552,43 @@ export default function OceanSlab({
 
       const hit = raycaster.intersectObject(markerMesh)[0];
       if (hit && dataRef.current.floats[hit.instanceId]) {
-        onSelectMarker?.(dataRef.current.floats[hit.instanceId]);
+        const fl = dataRef.current.floats[hit.instanceId];
+        hoveredFloat = fl;
+        renderer.domElement.style.cursor = 'pointer';
+
+        if (tooltipRef.current) {
+          const wmo = fl.platform_number || fl.id || 'Argo';
+          const temp = fl.temperature != null ? `${Number(fl.temperature).toFixed(2)}°C` : '—';
+          const sal = fl.salinity != null ? `${Number(fl.salinity).toFixed(2)} PSU` : '—';
+          const d = fl.depth != null ? `${Math.round(fl.depth)}m` : '0m';
+
+          tooltipRef.current.style.display = 'block';
+          tooltipRef.current.style.left = `${event.clientX - rect.left}px`;
+          tooltipRef.current.style.top = `${event.clientY - rect.top}px`;
+          tooltipRef.current.innerHTML = `
+            <strong>Float #${wmo}</strong><br/>
+            Depth: ${d}<br/>
+            Temp: ${temp} | Sal: ${sal}<br/>
+            <span style="color:#38bdf8; font-size:10px;">Click to view full depth profile</span>
+          `;
+        }
+      } else {
+        hoveredFloat = null;
+        renderer.domElement.style.cursor = 'default';
+        if (tooltipRef.current) tooltipRef.current.style.display = 'none';
       }
     };
+
+    const onClick = () => {
+      if (hoveredFloat) {
+        onSelectMarker?.(hoveredFloat);
+      }
+    };
+
+    renderer.domElement.addEventListener('pointermove', onPointerMove);
     renderer.domElement.addEventListener('click', onClick);
 
-    // ── Render Loop ──
+    // ── Animation Loop ──
     let frame;
     const animate = () => {
       controls.update();
@@ -413,30 +602,55 @@ export default function OceanSlab({
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
+      renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('click', onClick);
       controls.dispose();
-      pillarGeo.dispose();
-      pillarMat.dispose();
+      voxelGeo.dispose();
+      voxelMat.dispose();
       arrowGeo.dispose();
       arrowMat.dispose();
       floatGeo.dispose();
       floatMat.dispose();
+      boxGeo.dispose();
+      boxMat.dispose();
+      activeFrameGeo.dispose();
+      activeFrameMat.dispose();
+      tetherLinesGeo.dispose();
+      tetherMat.dispose();
       renderer.dispose();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
-      if (mount.contains(caption)) mount.removeChild(caption);
-      captionRef.current = null;
+      if (mount.contains(hud)) mount.removeChild(hud);
+      if (mount.contains(tooltip)) mount.removeChild(tooltip);
+      hudRef.current = null;
+      tooltipRef.current = null;
     };
   }, [onSelectMarker]);
 
   useEffect(() => {
     sceneRef.current?.update();
-  }, [grid, floats, variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold]);
+  }, [
+    depthSlices,
+    volumeData,
+    grid,
+    floats,
+    variable,
+    depth,
+    dataDepth,
+    bounds,
+    opacity,
+    verticalExaggeration,
+    threshold,
+    source,
+    dataSource,
+    backupDate,
+    regionName,
+  ]);
 
   return (
     <div
       ref={mountRef}
-      className="ocean-slab-canvas w-full h-full relative"
-      aria-label="3D Terrain-Elevation Ocean Topography"
+      className="ocean-slab-canvas w-full h-full relative overflow-hidden"
+      aria-label="3D Ocean Volume Stack"
     />
   );
 }

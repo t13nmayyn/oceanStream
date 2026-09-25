@@ -15,7 +15,9 @@ PHY_ZARR_PATH = OUTPUT_DIR / "phy_data.zarr"
 
 BGC_ZARR_PATH = OUTPUT_DIR / "bgc_data.zarr"
 OCEAN_ZARR_PATH = OUTPUT_DIR / "ocean_data.zarr"
-AagyRGO_ZARR_PATH = OUTPUT_DIR / "argo_data.zarr"
+ARGO_ZARR_PATH = OUTPUT_DIR / "argo_data.zarr"
+BACKUP_PHY_ZARR_PATH = OUTPUT_DIR / "backup_phy.zarr"
+BACKUP_BGC_ZARR_PATH = OUTPUT_DIR / "backup_bgc.zarr"
 
 print("=" * 60)
 print("Generating High-Resolution Ocean Datasets for L2 Zarr Stores")
@@ -24,7 +26,7 @@ print("=" * 60)
 # 1. Grid Definition (covering North Indian Ocean, Bay of Bengal, Arabian Sea)
 lats = np.linspace(4.0, 26.0, 90)    # 0.25 deg resolution
 lons = np.linspace(62.0, 96.0, 136)  # 0.25 deg resolution
-depths = np.array([0.49, 2.0, 4.0, 6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 50.0], dtype=np.float32)
+depths = np.array([0.494, 10.0, 50.0, 100.0, 200.0, 500.0, 1000.0], dtype=np.float32)
 
 # Generate past 45 days including today and historical dates
 today = datetime.utcnow().date()
@@ -140,5 +142,17 @@ print("Writing ocean_data.zarr (legacy)...")
 if OCEAN_ZARR_PATH.exists(): shutil.rmtree(OCEAN_ZARR_PATH)
 ds_phy[["thetao"]].to_zarr(OCEAN_ZARR_PATH, mode="w")
 
-print(f"SUCCESS: Zarr stores written to {OUTPUT_DIR}")
+print("Writing backup_phy.zarr...")
+if BACKUP_PHY_ZARR_PATH.exists(): shutil.rmtree(BACKUP_PHY_ZARR_PATH)
+ds_phy_backup = ds_phy.copy()
+ds_phy_backup.attrs["backup_date"] = dates[-1].isoformat()
+ds_phy_backup.chunk({"time": -1, "depth": 1, "latitude": 45, "longitude": 68}).to_zarr(BACKUP_PHY_ZARR_PATH, mode="w")
+
+print("Writing backup_bgc.zarr...")
+if BACKUP_BGC_ZARR_PATH.exists(): shutil.rmtree(BACKUP_BGC_ZARR_PATH)
+ds_bgc_backup = ds_bgc.copy()
+ds_bgc_backup.attrs["backup_date"] = dates[-1].isoformat()
+ds_bgc_backup.chunk({"time": -1, "depth": 1, "latitude": 45, "longitude": 68}).to_zarr(BACKUP_BGC_ZARR_PATH, mode="w")
+
+print(f"SUCCESS: Zarr stores (L2 and Backup) written to {OUTPUT_DIR}")
 print("=" * 60)

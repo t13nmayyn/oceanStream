@@ -28,6 +28,7 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import { useApiHealth } from '../hooks/useApiHealth';
 import { useDateControls } from '../hooks/useDateControls';
 import { ArrowLeft } from 'lucide-react';
+import { PREDEFINED_OCEANS } from '../hooks/useOceanSnapshot';
 
 import AppNav from '../components/navigation/AppNav';
 import OceanWorkspace from '../components/ocean/OceanWorkspace';
@@ -58,8 +59,30 @@ export default function OceanDetailPage() {
   const initialDate  = location.state?.date ?? searchParams.get('date') ?? null;
   const initialBbox  = location.state?.bbox ?? null;
 
+  const [selectedOcean, setSelectedOcean] = useState(() => {
+    if (regionName) {
+      const lower = regionName.toLowerCase();
+      if (lower.includes('pacific')) return 'pacific';
+      if (lower.includes('atlantic')) return 'atlantic';
+      if (lower.includes('southern')) return 'southern';
+      if (lower.includes('arctic')) return 'arctic';
+      if (lower.includes('arabian')) return 'arabianSea';
+      if (lower.includes('bengal')) return 'bayOfBengal';
+      if (lower.includes('andaman')) return 'andamanSea';
+      if (lower.includes('lakshadweep')) return 'lakshadweepSea';
+      if (lower.includes('indian')) return 'indian';
+    }
+    return 'indian';
+  });
+
+  const [customBbox, setCustomBbox] = useState(null);
+
   const effectiveBbox = useMemo(() => {
+    if (customBbox) return customBbox;
     if (initialBbox) return initialBbox;
+    if (selectedOcean && PREDEFINED_OCEANS[selectedOcean]) {
+      return PREDEFINED_OCEANS[selectedOcean];
+    }
     if (initialLat != null && initialLon != null) {
       return {
         south: Math.max(-90, Number(initialLat) - 5),
@@ -68,8 +91,16 @@ export default function OceanDetailPage() {
         east: Math.min(180, Number(initialLon) + 5),
       };
     }
-    return null;
-  }, [initialBbox, initialLat, initialLon]);
+    return PREDEFINED_OCEANS.indianOcean;
+  }, [customBbox, initialBbox, selectedOcean, initialLat, initialLon]);
+
+  const handleRegionChange = useCallback((newKey) => {
+    setSelectedOcean(newKey);
+    const preset = PREDEFINED_OCEANS[newKey];
+    if (preset) {
+      setCustomBbox(preset);
+    }
+  }, []);
 
   // Seed AppContext with incoming depth + date + activePointQuery
   useEffect(() => {
@@ -159,8 +190,32 @@ export default function OceanDetailPage() {
 
         <div className="w-px h-4 bg-[#1C3A63] shrink-0" />
 
-        {/* Region / coordinates */}
-        <span className="text-[13px] font-semibold text-white truncate">{locationLabel}</span>
+        {/* Major Oceans & Regional Seas Selector */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <label htmlFor="ocean-select" className="text-[11px] font-semibold text-[#8EA4C8] uppercase tracking-wider">
+            Ocean:
+          </label>
+          <select
+            id="ocean-select"
+            value={selectedOcean}
+            onChange={(e) => handleRegionChange(e.target.value)}
+            className="bg-[#102A4E] text-white text-[12px] font-semibold border border-[#1C3A63] rounded-md px-2.5 py-1 outline-none cursor-pointer hover:border-teal-400 focus:border-teal-400 transition-colors"
+          >
+            <optgroup label="Major Oceans">
+              <option value="pacific">🌊 Pacific Ocean</option>
+              <option value="atlantic">🌊 Atlantic Ocean</option>
+              <option value="indian">🌊 Indian Ocean</option>
+              <option value="southern">🌊 Southern Ocean</option>
+              <option value="arctic">🌊 Arctic Ocean</option>
+            </optgroup>
+            <optgroup label="Regional Seas">
+              <option value="arabianSea">📍 Arabian Sea</option>
+              <option value="bayOfBengal">📍 Bay of Bengal</option>
+              <option value="andamanSea">📍 Andaman Sea</option>
+              <option value="lakshadweepSea">📍 Lakshadweep Sea</option>
+            </optgroup>
+          </select>
+        </div>
 
         <div className="w-px h-4 bg-[#1C3A63] shrink-0" />
 
@@ -183,7 +238,7 @@ export default function OceanDetailPage() {
             selectedPoint={activePointQuery}
             onPointClick={handlePointClick}
             bbox={effectiveBbox}
-            region={regionName}
+            region={selectedOcean || regionName}
           />
         </div>
 
@@ -191,7 +246,7 @@ export default function OceanDetailPage() {
         <div className="w-[40%] h-full overflow-hidden">
           <OceanIntelligencePanel
             point={effectivePoint}
-            region={regionName}
+            region={selectedOcean || regionName}
           />
         </div>
       </div>
