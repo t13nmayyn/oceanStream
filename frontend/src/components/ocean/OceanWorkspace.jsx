@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Info, SlidersHorizontal, FlaskConical } from 'lucide-react';
 import MapView from '../map/MapView';
 import OceanSlab, { DEPTH_BINS } from './OceanSlab';
@@ -9,6 +9,8 @@ import { useApp, useAppDispatch } from '../../context/AppContext';
 import useOceanSnapshot from '../../hooks/useOceanSnapshot';
 import useArgoFloats from '../../hooks/useArgoFloats';
 import { getOceanCoverage } from '../../services/oceanApi';
+import { API_BASE } from '../../config/api';
+
 
 const VARIABLES = [
   ['temperature', 'Water Temperature', '°C'], ['salinity', 'Ocean Saltiness', 'practical salinity'], ['currents', 'Current Vectors', 'metres per second'],
@@ -48,6 +50,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
     source: snapshotSource,
     backupDate,
     dataSource,
+    loading: snapshotLoading,
   } = useOceanSnapshot(activeRegion);
   const { floats: argoHookFloats } = useArgoFloats(200);
   const activeFloats = snapshotFloats && snapshotFloats.length > 0 ? snapshotFloats : argoHookFloats;
@@ -61,6 +64,13 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
   const [verticalExaggeration, setVerticalExaggeration] = useState(35);
   const [threshold, setThreshold] = useState({ enabled: false, operator: '>', value: 28, tolerance: 0.05 });
   const [anomalyOn, setAnomalyOn] = useState(false);
+
+  // Anomaly volume slices (fetched from /ocean/volume-anomaly when anomalyOn)
+  const [anomalySlices, setAnomalySlices] = useState([]);
+  const [anomalyLoading, setAnomalyLoading] = useState(false);
+  const [anomalyModelUsed, setAnomalyModelUsed] = useState(null);
+  const anomalyFetchRef = useRef(null);
+
   const viewport = useMemo(() => {
     if (snapshotData?.bbox) {
       return {
@@ -104,12 +114,75 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
     return () => clearTimeout(timeout);
   }, [selectedDepth, previousDepth, viewport]);
 
+  // ── Anomaly data fetch ─────────────────────────────────────────────────────
+  // When anomalyOn + viewport available, fetch /ocean/volume-anomaly.
+  // Uses debounce + abort so rapid toggles don't stack requests.
+  useEffect(() => {
+    if (!anomalyOn || !viewport) {
+      setAnomalySlices([]);
+      setAnomalyLoading(false);
+      return undefined;
+    }
+
+    // Cancel any in-flight fetch
+    if (anomalyFetchRef.current) {
+      anomalyFetchRef.current.abort();
+    }
+
+    const controller = new AbortController();
+    anomalyFetchRef.current = controller;
+
+    const timer = setTimeout(async () => {
+      setAnomalyLoading(true);
+      try {
+        const params = new URLSearchParams({
+          lat_min: viewport.south.toFixed(2),
+          lat_max: viewport.north.toFixed(2),
+          lon_min: viewport.west.toFixed(2),
+          lon_max: viewport.east.toFixed(2),
+          depths: '0,10,50,100,200,500,1000',
+          variable: selectedVariable,
+        });
+        const res = await fetch(`${API_BASE}/ocean/volume-anomaly?${params}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data?.depth_slices?.length > 0) {
+          setAnomalySlices(data.depth_slices);
+          setAnomalyModelUsed(data.model_used || null);
+        } else {
+          // Fallback: use normal slices but flag anomalyMode — OceanSlab will use statistical z-score
+          setAnomalySlices([]);
+          setAnomalyModelUsed('statistical_zscore');
+        }
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.warn('[OceanWorkspace] anomaly fetch error:', err.message);
+          setAnomalySlices([]); // OceanSlab falls back to z-score on normal slices
+          setAnomalyModelUsed('statistical_zscore');
+        }
+      } finally {
+        setAnomalyLoading(false);
+      }
+    }, 400); // 400ms debounce
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [anomalyOn, viewport, selectedVariable]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const selectVariable = (id) => dispatch({ type: 'SET_SELECTED_VARIABLE', payload: id });
   const setDepth = (value) => dispatch({ type: 'SET_DEPTH', payload: Number(value) });
   const selected = VARIABLES.find(([id]) => id === selectedVariable) || VARIABLES[0];
   const loadedValues = gridData.map((point) => selectedValue(point, selectedVariable)).filter(Number.isFinite);
   const valueMin = loadedValues.length ? Math.min(...loadedValues) : null;
   const valueMax = loadedValues.length ? Math.max(...loadedValues) : null;
+
+  // Choose which depth slices to pass to OceanSlab
+  const activeDepthSlices = anomalyOn && anomalySlices.length > 0 ? anomalySlices : depthSlices;
+  const isLoading = snapshotLoading || anomalyLoading;
 
   return <main className={`ocean-workspace ${!showMap ? '!flex !flex-col h-full bg-[#F8FAFC]' : ''}`}>
     {showMap && <section className="ocean-globe-pane"><MapView onPointClick={onPointClick} onSelectFloatForProfile={(id) => setProfile(id)} selectedPoint={selectedPoint} hideSidebar /></section>}
@@ -208,7 +281,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
         </div>
         <div className={`slab-frame flex-1 relative min-w-0 ${!showMap ? '!h-full' : ''}`}>
           <OceanSlab
-            depthSlices={depthSlices}
+            depthSlices={activeDepthSlices}
             volumeData={volumeData}
             grid={gridData}
             floats={activeFloats}
@@ -223,6 +296,9 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
             dataSource={dataSource}
             backupDate={backupDate}
             regionName={typeof region === 'string' ? region : 'Indian Ocean'}
+            anomalyMode={anomalyOn}
+            anomalyThreshold={2.0}
+            loading={isLoading}
             onSelectMarker={handleMarkerSelect}
           />
           <div className={`colorbar absolute !top-auto !bottom-4 !right-4 !w-[200px] ${!showMap ? '!bg-white/95 backdrop-blur-md !border-[#1C3A63]/30 !text-[#0B1E3D] rounded-lg shadow-sm' : ''}`}>

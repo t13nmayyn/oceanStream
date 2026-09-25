@@ -1,0 +1,19 @@
+[watchfiles]
+exclude_patterns = [
+  "output/**",
+  "data/**",
+  "cache/**",
+  "logs/**",
+  "*.zarr/**",
+  "*.zarr",
+  "*.nc",
+  "*.nc.tmp",
+  "*.zarr.tmp",
+  "*_tmp*",
+  "*_old*",
+  "*.zarray",
+  "*.zattrs",
+  "*.zgroup",
+  "__pycache__/**",
+  "*.pyc"
+]

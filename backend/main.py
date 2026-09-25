@@ -2392,7 +2392,7 @@ async def ocean_volume(
             if not grid and _backup_available:
                 grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
                     None,
-                    lambda _d=d: _read_phy_grid_backup(lat_min, lat_max, lon_min, lon_max, _d, date_str),
+                    lambda _d=d: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, _d, date_str, exact_date=False, use_backup=True),
                 )
                 if grid:
                     slice_src_tag = "backup_cache"
@@ -2435,16 +2435,23 @@ async def ocean_volume(
             "points": pts,
         })
 
-    # Fetch active Argo floats for bounding box
+    # Fetch active Argo floats for bounding box with non-blocking 2.5s timeout
     try:
         if lon_min <= lon_max:
-            floats_res = await _argo.fetch_active_floats(lat_min, lat_max, lon_min, lon_max, days=60, float_type="both")
+            floats_res = await asyncio.wait_for(
+                _argo.fetch_active_floats(lat_min, lat_max, lon_min, lon_max, days=60, float_type="both"),
+                timeout=2.5,
+            )
             raw_floats = floats_res.get("floats", []) if isinstance(floats_res, dict) else []
         else:
-            f1 = await _argo.fetch_active_floats(lat_min, lat_max, lon_min, 180.0, days=60, float_type="both")
-            f2 = await _argo.fetch_active_floats(lat_min, lat_max, -180.0, lon_max, days=60, float_type="both")
-            raw_floats = (f1.get("floats", []) if isinstance(f1, dict) else []) + (f2.get("floats", []) if isinstance(f2, dict) else [])
-    except Exception:
+            f1_task = _argo.fetch_active_floats(lat_min, lat_max, lon_min, 180.0, days=60, float_type="both")
+            f2_task = _argo.fetch_active_floats(lat_min, lat_max, -180.0, lon_max, days=60, float_type="both")
+            f1, f2 = await asyncio.wait_for(asyncio.gather(f1_task, f2_task, return_exceptions=True), timeout=2.5)
+            f1_list = f1.get("floats", []) if isinstance(f1, dict) else []
+            f2_list = f2.get("floats", []) if isinstance(f2, dict) else []
+            raw_floats = f1_list + f2_list
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.debug(f"[ocean_volume] Argo fetch skipped or timed out: {exc}")
         raw_floats = []
 
     enriched_floats = _enrich_floats_for_3d(raw_floats, lat_min, lat_max, lon_min, lon_max)
@@ -2489,6 +2496,107 @@ async def ocean_volume(
     }
     l1_set(cache_key, result)
     return result
+
+
+# ==============================================================================
+# /ocean/volume-anomaly — 3D volume with per-point anomaly scoring
+# ==============================================================================
+
+@app.get("/ocean/volume-anomaly")
+async def ocean_volume_anomaly(
+    lat_min: float = Query(...),
+    lat_max: float = Query(...),
+    lon_min: float = Query(...),
+    lon_max: float = Query(...),
+    depths: str = Query("0,10,50,100,200,500,1000"),
+    date: Optional[str] = Query(None),
+    variable: str = Query("temperature"),
+):
+    """
+    3D volume slices with per-point anomaly scoring.
+    For each point, computes anomaly_c = observed - AI_predicted temperature.
+    Uses the trained PyTorch Ocean067 model when available.
+    Falls back to statistical z-score when model is unavailable or coordinates are outside bounds.
+    """
+    vol_result = await ocean_volume(
+        lat_min=lat_min, lat_max=lat_max,
+        lon_min=lon_min, lon_max=lon_max,
+        depths=depths, date=date, variable=variable,
+    )
+
+    import ai_inference as _ai_mod
+    model_ready = getattr(_ai_mod, "_model", None) is not None
+    date_str = resolve_date_input(date)
+
+    anomaly_slices = []
+    total_anomalies = 0
+
+    for sl in vol_result.get("depth_slices", []):
+        pts = sl.get("points", [])
+        depth_m = float(sl.get("depth_m", 0))
+        pressure_dbar = depth_m
+
+        temps = [p.get("temperature_c") for p in pts if p.get("temperature_c") is not None]
+        layer_mean = (sum(temps) / len(temps)) if temps else 20.0
+        layer_std = math.sqrt(sum((t - layer_mean) ** 2 for t in temps) / len(temps)) if len(temps) > 1 else 1.0
+        layer_std = max(layer_std, 0.1)
+
+        preds = None
+        if model_ready and pts:
+            try:
+                lats = np.array([float(p["lat"]) for p in pts], dtype=np.float32)
+                lons = np.array([float(p["lon"]) for p in pts], dtype=np.float32)
+                sals = np.array([float(p.get("salinity_psu") or 35.0) for p in pts], dtype=np.float32)
+                preds = _ai_mod.predict_temperatures_batch(lats, lons, pressure_dbar, sals, date_str)
+            except Exception as exc:
+                logger.debug(f"[volume_anomaly] batch prediction fallback: {exc}")
+                preds = None
+
+        anomaly_pts = []
+        for i, p in enumerate(pts):
+            obs_temp = p.get("temperature_c")
+            if obs_temp is None:
+                anomaly_pts.append({**p, "anomaly_c": None, "anomaly_score": 0.0, "is_anomaly": False})
+                continue
+
+            if preds is not None:
+                predicted = float(preds[i])
+                anomaly_c = round(obs_temp - predicted, 4)
+                threshold = getattr(_ai_mod, "_anomaly_thr", 2.0)
+                anomaly_score = round(abs(anomaly_c) / max(threshold, 0.001), 4)
+                is_anomaly = abs(anomaly_c) >= threshold
+            else:
+                anomaly_c = round(obs_temp - layer_mean, 4)
+                anomaly_score = round(abs(anomaly_c) / layer_std, 4)
+                is_anomaly = anomaly_score >= 1.8
+
+            if is_anomaly:
+                total_anomalies += 1
+
+            anomaly_pts.append({
+                **p,
+                "anomaly_c": anomaly_c,
+                "anomaly_score": anomaly_score,
+                "is_anomaly": is_anomaly,
+                "direction": "warmer" if (anomaly_c and anomaly_c > 0) else ("colder" if (anomaly_c and anomaly_c < 0) else "normal"),
+            })
+
+        anomaly_slices.append({
+            **sl,
+            "points": anomaly_pts,
+            "layer_mean_temp": round(layer_mean, 3),
+            "layer_std_temp": round(layer_std, 3),
+            "model_used": "pytorch_ocean067" if model_ready else "statistical_zscore",
+        })
+
+    return {
+        **vol_result,
+        "depth_slices": anomaly_slices,
+        "anomaly_mode": True,
+        "total_anomalies_detected": total_anomalies,
+        "model_used": "pytorch_ocean067" if model_ready else "statistical_zscore",
+    }
+
 
 @app.get("/argo/nearest")
 async def argo_nearest(
@@ -3535,7 +3643,14 @@ if __name__ == "__main__":
         # noticing filesystem changes — it is NOT a Copernicus error.
         reload_excludes=[
             str(BASE_DIR / "output"),
+            str(BASE_DIR / "output" / "**"),
             str(BASE_DIR / "output" / "user_uploads"),
+            "data/**",
+            "data/zarr/**",
+            "data/backup_cache/**",
+            "cache/**",
+            "logs/**",
+            "*.zarr/**",
             "*.zarr",
             "*.nc",
             "*.nc.tmp",

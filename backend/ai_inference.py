@@ -204,6 +204,60 @@ def predict_temperature(
     return round(temp, 4)
 
 
+def predict_temperatures_batch(
+    lats: np.ndarray,
+    lons: np.ndarray,
+    pressure_dbar: float,
+    salinities: np.ndarray,
+    date_iso: str,
+) -> np.ndarray:
+    """Return array of predicted temperatures (°C) for a batch of points in one forward pass."""
+    if _model is None:
+        raise RuntimeError(f"Model not loaded: {_load_error}")
+
+    import torch
+
+    dt = datetime.fromisoformat(date_iso.replace("Z", "+00:00"))
+    lons_norm = ((lons + 180.0) % 360.0) - 180.0
+    p = max(float(pressure_dbar), 0.0)
+    log_p = math.log1p(p)
+    doy = float(dt.timetuple().tm_yday)
+    sin_doy = math.sin(2.0 * math.pi * doy / 365.25)
+    cos_doy = math.cos(2.0 * math.pi * doy / 365.25)
+    year = float(dt.year)
+    month = float(dt.month)
+
+    rad_lon = np.radians(lons_norm)
+    rad_lat = np.radians(lats)
+
+    N = len(lats)
+    X_raw = np.column_stack([
+        lats.astype(np.float32),
+        lons_norm.astype(np.float32),
+        np.full(N, p, dtype=np.float32),
+        np.full(N, log_p, dtype=np.float32),
+        salinities.astype(np.float32),
+        np.full(N, year, dtype=np.float32),
+        np.full(N, month, dtype=np.float32),
+        np.full(N, doy, dtype=np.float32),
+        np.full(N, sin_doy, dtype=np.float32),
+        np.full(N, cos_doy, dtype=np.float32),
+        np.sin(rad_lon).astype(np.float32),
+        np.cos(rad_lon).astype(np.float32),
+        np.sin(rad_lat).astype(np.float32),
+        np.cos(rad_lat).astype(np.float32),
+    ]).astype(np.float32)
+
+    X = _feat_scaler.transform(X_raw)
+
+    with torch.no_grad():
+        y_scaled = _model(
+            torch.tensor(X, dtype=torch.float32, device=_device)
+        ).cpu().numpy()
+
+    return _tgt_scaler.inverse_transform(y_scaled).ravel()
+
+
 # ---------------------------------------------------------------------------
 # FastAPI route definitions
 # ---------------------------------------------------------------------------
