@@ -6,7 +6,7 @@ import TimelineControl from '../scientist/TimelineControl';
 import ArgoProfilePanel from '../scientist/ArgoProfilePanel';
 import ScientificTimelineChart from '../scientist/ScientificTimelineChart';
 import { useApp, useAppDispatch } from '../../context/AppContext';
-import useOceanSnapshot from '../../hooks/useOceanSnapshot';
+import useOceanSnapshot, { PREDEFINED_OCEANS } from '../../hooks/useOceanSnapshot';
 import useArgoFloats from '../../hooks/useArgoFloats';
 import { getOceanCoverage } from '../../services/oceanApi';
 import { API_BASE } from '../../config/api';
@@ -81,8 +81,11 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
       };
     }
     if (bbox && bbox.south !== undefined) return bbox;
-    return null;
-  }, [snapshotData?.bbox, bbox]);
+    if (typeof region === 'string' && PREDEFINED_OCEANS[region]) {
+      return PREDEFINED_OCEANS[region];
+    }
+    return PREDEFINED_OCEANS.indianOcean;
+  }, [snapshotData?.bbox, bbox, region]);
   const handleMarkerSelect = useCallback((marker) => {
     setProfile(marker.id || marker.platform_number);
   }, []);
@@ -295,7 +298,11 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
             source={snapshotSource}
             dataSource={dataSource}
             backupDate={backupDate}
-            regionName={typeof region === 'string' ? region : 'Indian Ocean'}
+            regionName={
+              typeof region === 'string'
+                ? region
+                : (snapshotData?.region_name || bbox?.name || 'Ocean')
+            }
             anomalyMode={anomalyOn}
             anomalyThreshold={2.0}
             loading={isLoading}

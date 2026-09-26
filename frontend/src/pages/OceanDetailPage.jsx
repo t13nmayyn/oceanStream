@@ -196,8 +196,8 @@ export default function OceanDetailPage() {
       : 'Ocean Detail';
 
   const dateLabel = selectedDate
-    ? new Date(selectedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    : '—';
+    ? `Latest available: ${selectedDate}`
+    : 'Live data updating';
 
   return (
     <div className="flex flex-col w-screen h-screen overflow-hidden bg-[#0B1E3D] text-white">
@@ -257,13 +257,13 @@ export default function OceanDetailPage() {
         <div className="flex-1" />
       </div>
 
-      {/* ── Main content: 60 / 40 split ──────────────────────────────────── */}
+      {/* ── Main content: 72 / 28 split (3D ocean model dominates) ─────── */}
       <div
         className="flex flex-1 overflow-hidden"
         style={{ height: 'calc(100vh - 100px)' /* AppNav 56px + context bar 44px */ }}
       >
-        {/* Left 60% — OceanSlab + scientific controls, NO MapView/Globe */}
-        <div className="w-[60%] h-full overflow-hidden">
+        {/* Left 72% — OceanSlab 3D model + scientific controls, NO MapView/Globe */}
+        <div className="w-[72%] h-full overflow-hidden">
           <OceanWorkspace
             showMap={false}
             selectedPoint={activePointQuery}
@@ -273,8 +273,8 @@ export default function OceanDetailPage() {
           />
         </div>
 
-        {/* Right 40% — Ocean Intelligence Panel (Phase 3A: Point Data live) */}
-        <div className="w-[40%] h-full overflow-hidden">
+        {/* Right 28% — Supporting Ocean Intelligence Panel */}
+        <div className="w-[28%] h-full overflow-hidden">
           <OceanIntelligencePanel
             point={effectivePoint}
             region={selectedOcean || regionName}
