@@ -67,6 +67,7 @@ const DEFAULT_BOUNDS = PREDEFINED_OCEANS.indianOcean;
 const STANDARD_DEPTHS = '0,10,50,100,200,500,1000';
 
 
+
 function normalizeVolumePoint(point) {
   if (!point || typeof point !== 'object') return null;
 
@@ -83,7 +84,6 @@ function normalizeVolumePoint(point) {
     current_v_ms: point.current_v_ms ?? point.v_current ?? point.vo ?? 0,
   };
 }
-
 function normalizeVolumeSlices(data) {
   if (Array.isArray(data?.depth_slices)) {
     return data.depth_slices
@@ -163,6 +163,7 @@ export const LOADING_PHASES = {
   error:                 '⚠️ Unable to fetch this region. Showing available data.',
 };
 
+
 export default function useOceanSnapshot(region = null) {
   const { selectedVariable, selectedDepth, apiStatus } = useApp();
   const dispatch = useAppDispatch();
@@ -180,6 +181,7 @@ export default function useOceanSnapshot(region = null) {
   const lastFetchedKeyRef = useRef(null);
   const fetchInFlightRef = useRef(false);
   const pollTimerRef = useRef(null);     // NEW: poll timer for fetch_status=fetching
+  const fetchSnapshotRef = useRef(null);
 
   const regionKey = typeof region === 'object' && region !== null
     ? `${region.south ?? region.lat_min}_${region.north ?? region.lat_max}_${region.west ?? region.lon_min}_${region.east ?? region.lon_max}`
@@ -242,11 +244,13 @@ export default function useOceanSnapshot(region = null) {
     try {
       const vol = await getOceanVolume(bounds, STANDARD_DEPTHS, null, selectedVariable);
 
+      const fetchStatus = vol?.fetch_status || 'ready';
       const volumeSlices = normalizeVolumeSlices(vol);
       const fallbackSlices = volumeSlices.length >= 2
         ? []
         : await fetchSnapshotDepthSlices(bounds);
       const slices = fallbackSlices.length >= 2 ? fallbackSlices : volumeSlices;
+      let hasRenderableData = slices.length > 0;
 
       if (slices.length > 0) {
         const fetchStatus = vol?.fetch_status || 'ready';
@@ -313,22 +317,50 @@ export default function useOceanSnapshot(region = null) {
           },
         });
       } else {
-        // Fallback to 2D snapshot
+        // Fallback to 2D snapshot when volume returns no slices
         const snap = await getOceanSnapshot(bounds, 0, null);
         if (snap && snap.grid && snap.grid.length > 0) {
           const grid = snap.grid.map(normalizeVolumePoint).filter(Boolean);
+          setVolumeData(null);
           setSnapshotData({ ...snap, grid });
           setSource(snap.source || 'backup_cache');
           setDepthSlices([
             { depth_m: snap.depth || 0, points: grid, source: snap.source },
           ]);
+          setFloats([]);
+          setBackupDate(null);
           lastFetchedKeyRef.current = fetchKey;
-          setLoadingPhase('analytical_placeholder');
+          hasRenderableData = true;
         } else {
+          setVolumeData(null);
+          setSnapshotData(null);
+          setDepthSlices([]);
+          setFloats([]);
           setSource('reference');
+          setBackupDate(null);
           setLoadingPhase('error');
         }
       }
+
+      const isFetching = fetchStatus === 'fetching' || fetchStatus === 'analytical_placeholder';
+      setLoadingPhase(
+        fetchStatus === 'cache_hit'
+          ? 'cache_hit'
+          : isFetching
+            ? 'fetching'
+            : (hasRenderableData ? 'analytical_placeholder' : 'error')
+      );
+
+      if (isFetching) {
+        if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = setTimeout(() => {
+          fetchSnapshotRef.current?.(true);
+        }, 8000);
+      } else if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+
       setLoading(false);
     } catch (err) {
       console.warn('[useOceanSnapshot] fetch error:', err.message);
@@ -339,7 +371,11 @@ export default function useOceanSnapshot(region = null) {
     } finally {
       fetchInFlightRef.current = false;
     }
-  }, [apiStatus, bounds, selectedVariable, dispatch]); // NOTE: selectedDepth intentionally NOT in deps
+  }, [apiStatus, bounds, selectedVariable, dispatch, regionKey, volumeData, selectedDepth]);
+
+  useEffect(() => {
+    fetchSnapshotRef.current = fetchSnapshot;
+  }, [fetchSnapshot]);
 
   // Only fetch when the REGION (bounds) changes — NOT on depth/variable/date changes.
   useEffect(() => {

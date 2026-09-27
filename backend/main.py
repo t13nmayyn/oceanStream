@@ -2710,14 +2710,33 @@ def _read_phy_grid_all_depths(
     Each entry in slices_list is a dict with depth_m and points list.
     Missing data cells (NaN/masked) are omitted — NOT filled with synthetic values.
     """
-    global phy_dataset_xr
+    global phy_dataset_xr, backup_phy_dataset_xr
+    if backup_phy_dataset_xr is None and BACKUP_PHY_ZARR_PATH.exists():
+        try:
+            backup_phy_dataset_xr = xr.open_zarr(BACKUP_PHY_ZARR_PATH)
+        except Exception:
+            pass
+            
     if phy_dataset_xr is None and PHY_ZARR_PATH.exists():
         try:
             phy_dataset_xr = xr.open_zarr(PHY_ZARR_PATH)
         except Exception:
             pass
 
-    ds = phy_dataset_xr or ocean_dataset_xr
+    # Try backup first, then live, then baseline
+    ds = None
+    for candidate in [backup_phy_dataset_xr, phy_dataset_xr, ocean_dataset_xr]:
+        if candidate is None:
+            continue
+        try:
+            lc, lnc = _lat_coord(candidate), _lon_coord(candidate)
+            region = candidate.sel({lc: slice(lat_min, lat_max), lnc: slice(lon_min, lon_max)})
+            if len(region[lc]) > 0 and len(region[lnc]) > 0:
+                ds = candidate
+                break
+        except Exception:
+            pass
+
     if ds is None:
         return [], [], date_str
 

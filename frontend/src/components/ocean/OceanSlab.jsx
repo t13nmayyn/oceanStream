@@ -832,7 +832,7 @@ export default function OceanSlab({
         bathyMesh = null;
       }
 
-      const exag = cur.verticalExaggeration ?? 55;
+      // Bathymetry floor — uses effectiveMaxDepth so full-depth mode shows correct basin shape
       const bathyGeo = new THREE.PlaneGeometry(modelWidth, modelDepth, 40, 40);
       bathyGeo.rotateX(-Math.PI / 2);
       const bathyPositions = bathyGeo.attributes.position;
@@ -840,11 +840,13 @@ export default function OceanSlab({
         const x = bathyPositions.getX(i);
         const z = bathyPositions.getZ(i);
         const radialDist = Math.sqrt((x / modelWidth) ** 2 + (z / modelDepth) ** 2);
-        const bowlDepth = 900 + radialDist * 300;
-        const ridge = Math.sin(x * 0.8) * Math.cos(z * 0.6) * 80;
-        const seamount = Math.exp(-((x + 2) ** 2 + (z - 1) ** 2) / 3) * 200;
-        const finalDepth = bowlDepth - ridge - seamount;
-        bathyPositions.setY(i, depthToY(Math.min(finalDepth, 1000), exag));
+        // Scale bowl depth to actual dataset depth so it doesn't clip at 1000 m
+        const basinFraction = 0.85 + radialDist * 0.15;
+        const bowlDepth = effectiveMaxDepth * basinFraction;
+        const ridge = Math.sin(x * 0.8) * Math.cos(z * 0.6) * effectiveMaxDepth * 0.04;
+        const seamount = Math.exp(-((x + 2) ** 2 + (z - 1) ** 2) / 3) * effectiveMaxDepth * 0.1;
+        const finalDepth = Math.min(bowlDepth - ridge - seamount, effectiveMaxDepth);
+        bathyPositions.setY(i, depthToY(finalDepth, exag, effectiveMaxDepth));
       }
       bathyGeo.computeVertexNormals();
       const bathyMat = new THREE.MeshStandardMaterial({
