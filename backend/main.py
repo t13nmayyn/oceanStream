@@ -81,6 +81,8 @@ PHY_ZARR_PATH  = OUTPUT_DIR / "phy_data.zarr"
 BGC_ZARR_PATH  = OUTPUT_DIR / "bgc_data.zarr"
 OCEAN_ZARR_PATH = OUTPUT_DIR / "ocean_data.zarr"   # legacy compat
 ARGO_ZARR_PATH  = OUTPUT_DIR / "argo_data.zarr"
+# Copernicus static bathymetry (deptho) — written by fetcher.fetch_bathy_range()
+BATHY_ZARR_PATH = OUTPUT_DIR / "bathy_data.zarr"
 # Full-depth demo dataset and bathymetry (from download_full_depth.py)
 DEMO_FULL_DEPTH_PATH = OUTPUT_DIR / "demo_full_depth.zarr"
 DEMO_BATHYMETRY_PATH = OUTPUT_DIR / "demo_bathymetry.zarr"
@@ -170,6 +172,8 @@ phy_dataset_xr:    Optional[xr.Dataset] = None
 bgc_dataset_xr:    Optional[xr.Dataset] = None
 ocean_dataset_xr:  Optional[xr.Dataset] = None   # legacy fallback
 argo_dataset_xr:   Optional[xr.Dataset] = None
+# Copernicus static bathymetry dataset (deptho from bathy_data.zarr)
+bathy_dataset_xr:   Optional[xr.Dataset] = None
 # 50-level full depth and bathymetry datasets
 demo_full_depth_xr: Optional[xr.Dataset] = None
 demo_bathymetry_xr: Optional[xr.Dataset] = None
@@ -326,17 +330,25 @@ def _reload_bgc_zarr():
 def load_datasets():
     global phy_dataset_xr, bgc_dataset_xr, ocean_dataset_xr, argo_dataset_xr
     global backup_phy_dataset_xr, backup_bgc_dataset_xr, backup_date
-    global demo_full_depth_xr, demo_bathymetry_xr
+    global demo_full_depth_xr, demo_bathymetry_xr, bathy_dataset_xr
     logger.info("=" * 60)
     logger.info("Initialising L2 storage layer (Zarr)")
+
+    # Log credential status at startup so the operator knows immediately
+    # whether live Copernicus fetches (phy/bgc/bathy) will work.
+    cred_ok = _fetcher.credentials_present()
+    logger.info(
+        f"[STARTUP] credentials_present()={'TRUE — live Copernicus fetches enabled' if cred_ok else 'FALSE — all Copernicus fetches will be SKIPPED (phy/bgc/bathy)'}"
+    )
 
     for path, attr_name, label in [
         (DEMO_FULL_DEPTH_PATH, "demo_full_depth_xr", "Demo Full Depth (50 layers)"),
         (DEMO_BATHYMETRY_PATH, "demo_bathymetry_xr", "Demo Bathymetry"),
-        (PHY_ZARR_PATH,        "phy_dataset_xr",    "Physics"),
-        (BGC_ZARR_PATH,        "bgc_dataset_xr",    "BGC"),
-        (OCEAN_ZARR_PATH,      "ocean_dataset_xr",  "Legacy ocean"),
-        (ARGO_ZARR_PATH,       "argo_dataset_xr",   "Argo"),
+        (BATHY_ZARR_PATH,      "bathy_dataset_xr",   "Copernicus Bathymetry (deptho)"),
+        (PHY_ZARR_PATH,        "phy_dataset_xr",     "Physics"),
+        (BGC_ZARR_PATH,        "bgc_dataset_xr",     "BGC"),
+        (OCEAN_ZARR_PATH,      "ocean_dataset_xr",   "Legacy ocean"),
+        (ARGO_ZARR_PATH,       "argo_dataset_xr",    "Argo"),
     ]:
         if path.exists():
             try:
@@ -1234,6 +1246,42 @@ async def _prewarm_home_regions():
 
     for label, lat_min, lat_max, lon_min, lon_max in PREWARM_REGIONS:
         asyncio.create_task(_prewarm_region_task(label, lat_min, lat_max, lon_min, lon_max, date_str))
+
+    # Phase 2b — static bathymetry (deptho).
+    # Fetch once for the Indian Ocean home region.  The 1.5° pad in fetch_bathy_range()
+    # gives enough coverage for the default view.  Subsequent fetches for other regions
+    # should be triggered by their respective /ocean/volume-full calls if needed.
+    async def _prewarm_bathy_task():
+        global bathy_dataset_xr
+        try:
+            # Indian Ocean home region — match PREWARM_REGIONS tile + wider view
+            bathy_res = await asyncio.wait_for(
+                _fetcher.fetch_bathy_range(
+                    lat_min=6.0, lat_max=26.0,
+                    lon_min=58.0, lon_max=97.0,
+                ),
+                timeout=300.0,
+            )
+            status = bathy_res.get("status")
+            if status == "success":
+                # Reload the zarr handle so _read_phy_volume_full_data picks it up
+                try:
+                    bathy_dataset_xr = xr.open_zarr(
+                        _fetcher.BATHY_ZARR_PATH, consolidated=True
+                    )
+                    logger.info("[PRE-WARM BATHY] bathy_dataset_xr reloaded after fetch")
+                except Exception as _rle:
+                    logger.warning(f"[PRE-WARM BATHY] zarr reload failed: {_rle}")
+            elif status == "cached":
+                logger.info("[PRE-WARM BATHY] bbox already cached — no re-fetch needed")
+            else:
+                logger.warning(f"[PRE-WARM BATHY] fetch returned status={status}")
+        except asyncio.TimeoutError:
+            logger.warning("[PRE-WARM BATHY] timed out after 300s")
+        except Exception as _be:
+            logger.warning(f"[PRE-WARM BATHY] unexpected error: {_be}")
+
+    asyncio.create_task(_prewarm_bathy_task())
 
 
 def _get_placeholder_grid(
@@ -2757,7 +2805,7 @@ def _read_phy_volume_full_data(
     lon_min: float, lon_max: float,
     date_str: str,
 ) -> Dict[str, Any]:
-    global demo_full_depth_xr, demo_bathymetry_xr, phy_dataset_xr, backup_phy_dataset_xr, ocean_dataset_xr
+    global demo_full_depth_xr, demo_bathymetry_xr, bathy_dataset_xr, phy_dataset_xr, backup_phy_dataset_xr, ocean_dataset_xr
 
     if demo_full_depth_xr is None and DEMO_FULL_DEPTH_PATH.exists():
         try:
@@ -2770,6 +2818,20 @@ def _read_phy_volume_full_data(
             demo_bathymetry_xr = xr.open_zarr(DEMO_BATHYMETRY_PATH)
         except Exception:
             pass
+
+    # Lazy-load Copernicus bathymetry zarr if written by a previous run
+    if bathy_dataset_xr is None and BATHY_ZARR_PATH.exists():
+        try:
+            bathy_dataset_xr = xr.open_zarr(BATHY_ZARR_PATH, consolidated=True)
+            lc = _lat_coord(bathy_dataset_xr)
+            lnc = _lon_coord(bathy_dataset_xr)
+            logger.info(
+                f"[L2 OK] Copernicus bathy zarr loaded: "
+                f"lat={list(bathy_dataset_xr[lc].values[[0,-1]])}, "
+                f"lon={list(bathy_dataset_xr[lnc].values[[0,-1]])}"
+            )
+        except Exception as _be:
+            logger.warning(f"[BATHY] Could not open bathy_data.zarr: {_be}")
 
     # Select dataset
     ds = None
@@ -2849,16 +2911,52 @@ def _read_phy_volume_full_data(
                         var_arrays[dst] = arr.transpose(0, 2, 1)
 
         # Bathymetry grid
+        # Priority:
+        #   1. Copernicus deptho from bathy_data.zarr (fetch_bathy_range output)
+        #   2. Demo bathymetry from demo_bathymetry.zarr (download_full_depth.py output)
+        #   3. Infer from deepest valid temperature reading per column (last resort)
         bathy_grid = []
-        if demo_bathymetry_xr is not None and "seafloor_depth_m" in demo_bathymetry_xr:
+        bathy_max_depth: Optional[float] = None
+        bathy_tier_used = "none"
+
+        # 1. Copernicus deptho (preferred)
+        if bathy_dataset_xr is not None and "deptho" in bathy_dataset_xr:
+            try:
+                blc = _lat_coord(bathy_dataset_xr)
+                blnc = _lon_coord(bathy_dataset_xr)
+                b_reg = bathy_dataset_xr["deptho"].sel(
+                    {blc: lats, blnc: lons}, method="nearest"
+                ).values
+                bathy_grid = [
+                    [None if not np.isfinite(val) else round(float(val), 2) for val in row]
+                    for row in b_reg
+                ]
+                bathy_tier_used = "copernicus_deptho"
+                # Derive max depth from the actual fetched data
+                finite_vals = b_reg[np.isfinite(b_reg)]
+                if finite_vals.size > 0:
+                    bathy_max_depth = round(float(finite_vals.max()), 3)
+                    logger.info(
+                        f"[BATHY] Serving Copernicus deptho: "
+                        f"distinct={len(np.unique(np.round(finite_vals, 2)))} values, "
+                        f"min={float(finite_vals.min()):.1f}m, max={bathy_max_depth}m"
+                    )
+            except Exception as _bex:
+                logger.warning(f"[BATHY] deptho sel failed: {_bex}")
+                bathy_grid = []
+
+        # 2. Demo bathymetry fallback
+        if not bathy_grid and demo_bathymetry_xr is not None and "seafloor_depth_m" in demo_bathymetry_xr:
             try:
                 blc = _lat_coord(demo_bathymetry_xr)
                 blnc = _lon_coord(demo_bathymetry_xr)
                 b_reg = demo_bathymetry_xr["seafloor_depth_m"].sel({blc: lats, blnc: lons}, method="nearest").values
                 bathy_grid = [[None if not np.isfinite(val) else round(float(val), 2) for val in row] for row in b_reg]
+                bathy_tier_used = "demo_bathymetry"
             except Exception:
                 pass
 
+        # 3. Infer from deepest valid temperature per column
         if not bathy_grid or len(bathy_grid) != n_lats:
             temp_arr = var_arrays.get("temperature")
             bathy_grid = []
@@ -2873,6 +2971,7 @@ def _read_phy_volume_full_data(
                             deepest = round(float(depth_levels_m[valid[-1]]), 2)
                     row.append(deepest)
                 bathy_grid.append(row)
+            bathy_tier_used = "temperature_inference"
 
         depth_slices = []
         t_arr = var_arrays.get("temperature")
@@ -2912,7 +3011,18 @@ def _read_phy_volume_full_data(
                 "points": pts,
             })
 
-        max_d = round(float(depth_levels_m[-1]), 3) if depth_levels_m else 5727.917
+        # max_depth_m: prefer the real fetched bathy max, fall back to last depth level
+        max_d = bathy_max_depth if bathy_max_depth is not None else (
+            round(float(depth_levels_m[-1]), 3) if depth_levels_m else 5727.917
+        )
+
+        bathy_flat = [v for r in bathy_grid for v in r if v is not None]
+        distinct_bathy_vals = len(set(bathy_flat))
+        bathy_shape = (len(bathy_grid), len(bathy_grid[0]) if bathy_grid else 0)
+        logger.info(
+            f"[BATHY TIER DIAGNOSTIC] tier_used='{bathy_tier_used}', "
+            f"shape={bathy_shape}, distinct_values={distinct_bathy_vals}"
+        )
 
         return {
             "source": source,
@@ -2995,8 +3105,17 @@ async def ocean_volume_full(
     except Exception:
         pass
 
-    # Filter out synthetic floats
-    real_floats = [f for f in raw_floats if f.get("platform_number") != "SYNTHETIC_BGC_MODEL" and f.get("source_label") != "gridded_model"]
+    # Filter out ALL synthetic / model-generated floats.
+    # "SYNTHETIC_BGC_MODEL" platform_number  — from _bgc_argo_gridded_placeholder()
+    # source_label='gridded_model'           — same
+    # source='synthetic_model'               — from fetch_active_floats() fallback (hardcoded WMOs)
+    # Never show these as if they were live Copernicus data.
+    real_floats = [
+        f for f in raw_floats
+        if f.get("platform_number") != "SYNTHETIC_BGC_MODEL"
+        and f.get("source_label") != "gridded_model"
+        and f.get("source") != "synthetic_model"
+    ]
     enriched_floats = _enrich_floats_for_3d(real_floats, lat_min, lat_max, lon_min, lon_max)
 
     result = {

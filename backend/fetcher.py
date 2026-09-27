@@ -52,6 +52,11 @@ BGC_ZARR_PATH    = _OUTPUT_DIR / "bgc_data.zarr"
 # Backward-compat alias (thetao only)
 OCEAN_ZARR_PATH  = _OUTPUT_DIR / "ocean_data.zarr"
 ARGO_ZARR_PATH   = _OUTPUT_DIR / "argo_data.zarr"
+# Static bathymetry (Copernicus cmems_mod_glo_phy_my_0.083deg_static / deptho)
+BATHY_ZARR_PATH  = _OUTPUT_DIR / "bathy_data.zarr"
+
+# Registry of already-fetched bathy bboxes  →  skip re-fetch within same process
+_BATHY_FETCHED_REGIONS: list = []
 
 # Safety cap: max depth span per single fetch request — full ocean water column
 MAX_FETCH_DEPTH_SPAN = 6000.0
@@ -108,10 +113,25 @@ except Exception:
 
 
 def credentials_present() -> bool:
-    return bool(
-        os.environ.get("COPERNICUSMARINE_SERVICE_USERNAME")
-        and os.environ.get("COPERNICUSMARINE_SERVICE_PASSWORD")
-    )
+    """Return True when Copernicus Marine credentials are available.
+
+    DEPLOYMENT NOTE: this checks env vars loaded at import time.
+    If phy/bgc fetches have returned {"status": "skipped", "reason": "no_credentials"}
+    it means COPERNICUSMARINE_SERVICE_USERNAME and/or PASSWORD were absent from the
+    environment when the backend process started.  Set them in the .env file at
+    the project root (parent of backend/) and restart the server.
+    """
+    user = os.environ.get("COPERNICUSMARINE_SERVICE_USERNAME", "")
+    pw   = os.environ.get("COPERNICUSMARINE_SERVICE_PASSWORD", "")
+    ok   = bool(user and pw)
+    if not ok:
+        logger.warning(
+            "[CREDENTIALS] credentials_present()=False — "
+            "COPERNICUSMARINE_SERVICE_USERNAME or PASSWORD not set in environment. "
+            "All Copernicus fetches (phy, bgc, bathy) will be skipped. "
+            "Set them in <project_root>/.env and restart the backend."
+        )
+    return ok
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +584,204 @@ async def fetch_bgc_range(
         "merge_ms": merge_ms,
         "total_ms": total_ms,
         "pages_updated": len(missing_pages) if missing_pages else 0,
+        "zarr_size_bytes": zarr_size,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Bathymetry fetch  (static — no time/depth dimension)
+# ---------------------------------------------------------------------------
+
+# Padding applied to the requested bbox before calling Copernicus.
+_BATHY_PAD_DEG: float = 1.5
+
+# Dataset / part / variable identifiers for the static bathymetry product.
+_BATHY_DATASET_ID   = "cmems_mod_glo_phy_my_0.083deg_static"
+_BATHY_DATASET_PART = "bathy"
+_BATHY_VARIABLE     = "deptho"
+
+
+def _bathy_bbox_key(lat_min: float, lat_max: float, lon_min: float, lon_max: float) -> str:
+    """Stable string key for the padded bathy bbox."""
+    return f"{lat_min:.3f}:{lat_max:.3f}:{lon_min:.3f}:{lon_max:.3f}"
+
+
+async def fetch_bathy_range(
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+) -> Dict[str, Any]:
+    """
+    Fetch the static seafloor depth (``deptho``) from
+    ``cmems_mod_glo_phy_my_0.083deg_static`` for the given bounding box and
+    merge into ``bathy_data.zarr``.
+
+    Key differences from fetch_phy_range / fetch_bgc_range:
+    - No time or depth dimensions → pass no datetime / depth args.
+    - Padded 1.5° on each side so the viz geometry has full coverage.
+    - Cached indefinitely within a process run: if the same (padded) bbox
+      was already fetched, we return immediately without hitting Copernicus.
+
+    After a successful fetch the function logs:
+    - Number of DISTINCT depth values in the returned grid
+    - Min and max of those values
+    This is the Step-3 diagnostic the caller should inspect before wiring
+    the data into the frontend.
+    """
+    import copernicusmarine
+
+    if not credentials_present():
+        logger.warning("[BATHY] Copernicus credentials not found — skipping bathy fetch")
+        return {"status": "skipped", "reason": "no_credentials"}
+
+    # Pad bbox
+    blat_min = max(-90.0,  lat_min - _BATHY_PAD_DEG)
+    blat_max = min( 90.0,  lat_max + _BATHY_PAD_DEG)
+    blon_min = max(-180.0, lon_min - _BATHY_PAD_DEG)
+    blon_max = min( 180.0, lon_max + _BATHY_PAD_DEG)
+
+    bbox_key = _bathy_bbox_key(blat_min, blat_max, blon_min, blon_max)
+
+    # Skip if already fetched this process lifetime
+    if bbox_key in _BATHY_FETCHED_REGIONS and BATHY_ZARR_PATH.exists():
+        logger.info(f"[BATHY] bbox {bbox_key} already cached — skipping re-fetch")
+        return {"status": "cached", "bbox_key": bbox_key}
+
+    logger.info(
+        f"[BATHY] Fetching deptho for lat=[{blat_min},{blat_max}] "
+        f"lon=[{blon_min},{blon_max}] (padded 1.5°) …"
+    )
+    t0 = time.perf_counter()
+
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="ocean_bathy_") as tmpdir:
+        tmp_nc = Path(tmpdir) / "bathy.nc"
+        sem = _get_copernicus_sem()
+        try:
+            async with sem:
+                loop = asyncio.get_event_loop()
+                await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: copernicusmarine.subset(
+                            dataset_id=_BATHY_DATASET_ID,
+                            dataset_part=_BATHY_DATASET_PART,
+                            variables=[_BATHY_VARIABLE],
+                            minimum_longitude=blon_min,
+                            maximum_longitude=blon_max,
+                            minimum_latitude=blat_min,
+                            maximum_latitude=blat_max,
+                            output_filename=tmp_nc.name,
+                            output_directory=tmpdir,
+                            overwrite=True,
+                        ),
+                    ),
+                    timeout=FETCH_TIMEOUT_SECONDS,
+                )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[BATHY TIMEOUT] exceeded {FETCH_TIMEOUT_SECONDS:.0f}s — "
+                "check credentials and Copernicus service availability"
+            )
+            return {"status": "error", "error": "timeout"}
+        except Exception as e:
+            logger.error(f"[BATHY FETCH ERROR] {e}")
+            return {"status": "error", "error": str(e)}
+
+        if not tmp_nc.exists():
+            logger.error("[BATHY] Downloaded file not found after copernicusmarine.subset()")
+            return {"status": "error", "error": "no_output_file"}
+
+        ds = xr.open_dataset(str(tmp_nc)).load()
+
+    # ── Step-3 diagnostic: log distinct deptho values before wiring frontend ──
+    if _BATHY_VARIABLE in ds:
+        raw_vals = ds[_BATHY_VARIABLE].values.ravel()
+        finite_vals = raw_vals[np.isfinite(raw_vals)]
+        if finite_vals.size > 0:
+            distinct_vals = np.unique(np.round(finite_vals, 2))
+            logger.info(
+                f"[BATHY DIAGNOSTIC] deptho grid: "
+                f"shape={ds[_BATHY_VARIABLE].shape}, "
+                f"distinct_values={len(distinct_vals)}, "
+                f"min={float(finite_vals.min()):.2f}m, "
+                f"max={float(finite_vals.max()):.2f}m"
+            )
+            if len(distinct_vals) <= 3:
+                logger.warning(
+                    f"[BATHY DIAGNOSTIC] Only {len(distinct_vals)} distinct depth values — "
+                    "the fetched grid is suspiciously flat. "
+                    "Do NOT wire into frontend until this shows a real spread (>10 distinct values). "
+                    "Check dataset_id, dataset_part, and bbox."
+                )
+        else:
+            logger.warning("[BATHY DIAGNOSTIC] deptho array has no finite values — all NaN or land")
+    else:
+        logger.warning(f"[BATHY] Variable '{_BATHY_VARIABLE}' not found in downloaded dataset. "
+                       f"Available variables: {list(ds.data_vars)}")
+
+    # Write into bathy_data.zarr (merge if exists)
+    loop = asyncio.get_event_loop()
+
+    def _write_bathy(ds_new: xr.Dataset) -> int:
+        """Write bathy zarr without the time-chunking that _write_to_zarr enforces."""
+        chunks: Dict[str, int] = {}
+        for lat_col in ("latitude", "lat"):
+            if lat_col in ds_new.dims:
+                chunks[lat_col] = min(50, ds_new.sizes[lat_col])
+        for lon_col in ("longitude", "lon"):
+            if lon_col in ds_new.dims:
+                chunks[lon_col] = min(50, ds_new.sizes[lon_col])
+        ds_chunked = ds_new.chunk(chunks) if chunks else ds_new
+
+        import shutil as _shutil
+        tmp_zarr = BATHY_ZARR_PATH.parent / f"_{BATHY_ZARR_PATH.name}_tmp"
+        if tmp_zarr.exists():
+            _shutil.rmtree(tmp_zarr)
+
+        if BATHY_ZARR_PATH.exists():
+            try:
+                ds_existing = xr.open_zarr(BATHY_ZARR_PATH, consolidated=True)
+                ds_combined = xr.merge([ds_existing, ds_chunked], compat="override", join="outer")
+                for dim in ("latitude", "longitude", "lat", "lon"):
+                    if dim in ds_combined.dims and dim in ds_combined.coords:
+                        try:
+                            _, idx = np.unique(ds_combined[dim].values, return_index=True)
+                            if len(idx) < ds_combined.sizes[dim]:
+                                ds_combined = ds_combined.isel({dim: np.sort(idx)})
+                        except Exception:
+                            pass
+                ds_combined = ds_combined.chunk(chunks) if chunks else ds_combined
+                ds_existing.close()
+            except Exception as merge_err:
+                logger.warning(f"[BATHY] Zarr merge failed ({merge_err}), writing fresh store")
+                ds_combined = ds_chunked
+
+            ds_combined.to_zarr(tmp_zarr, mode="w", consolidated=True)
+            ds_combined.close()
+            old_zarr = BATHY_ZARR_PATH.parent / f"_{BATHY_ZARR_PATH.name}_old"
+            if BATHY_ZARR_PATH.exists():
+                BATHY_ZARR_PATH.rename(old_zarr)
+            tmp_zarr.rename(BATHY_ZARR_PATH)
+            if old_zarr.exists():
+                _shutil.rmtree(old_zarr)
+        else:
+            ds_chunked.to_zarr(BATHY_ZARR_PATH, mode="w", consolidated=True)
+
+        return sum(f.stat().st_size for f in BATHY_ZARR_PATH.rglob("*") if f.is_file())
+
+    zarr_size = await loop.run_in_executor(None, _write_bathy, ds)
+    ds.close()
+
+    _BATHY_FETCHED_REGIONS.append(bbox_key)
+    fetch_ms = round((time.perf_counter() - t0) * 1000, 1)
+    logger.info(f"[BATHY] Complete in {fetch_ms}ms — zarr size {zarr_size // 1024}KB at {BATHY_ZARR_PATH}")
+
+    return {
+        "status": "success",
+        "bbox_key": bbox_key,
+        "fetch_ms": fetch_ms,
         "zarr_size_bytes": zarr_size,
     }
 

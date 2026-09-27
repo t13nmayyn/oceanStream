@@ -9,9 +9,11 @@ export default function FloatList({ floats = [], selectedId, onSelectFloat, load
     (f) =>
       f.source_label !== 'synthetic_bgc_model' &&
       f.source_label !== 'gridded_model' &&
+      f.source !== 'synthetic_model' &&
       f.data_type !== 'SYNTHETIC_BGC_MODEL' &&
       f.platform_number !== 'SYNTHETIC_BGC_MODEL'
   );
+
 
   if (!validFloats.length) {
     return (

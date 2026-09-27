@@ -1046,6 +1046,7 @@ async def fetch_active_floats(
     lon_min: float,
     lon_max: float,
     days: int = 30,
+    float_type: str = "both",   # "core" | "bgc" | "both" — accepted but not yet filtered below
 ) -> Dict[str, Any]:
     """
     Returns all floats that have reported within the last N days in a bounding box,
@@ -1186,47 +1187,20 @@ async def fetch_active_floats(
             }
 
     # 3. Fallback active floats in bounding box
-    synth_floats = []
-    lat_center = (lat_min + lat_max) / 2.0
-    lon_center = (lon_min + lon_max) / 2.0
-    offsets = [(-0.8, -1.2, "2902765", "Core"), (0.5, 0.8, "2902772", "BGC"), (-0.3, 1.5, "5907082", "Deep")]
-    for dla, dlo, pnum, ftype in offsets:
-        la = round(lat_center + dla, 4)
-        lo = round(lon_center + dlo, 4)
-        is_b = (ftype == "BGC")
-        vars_list = ["temperature", "salinity", "pressure"]
-        if is_b:
-            vars_list.extend(["oxygen", "chlorophyll", "nitrate", "ph"])
-        v_d, s_d = make_14_variables_dict(
-            temperature=28.2, salinity=34.4, pressure=5.0,
-            chlorophyll=0.24 if is_b else None,
-            dissolved_oxygen=192.0 if is_b else None,
-            nitrate=1.1 if is_b else None,
-            ph=8.12 if is_b else None,
-            default_source="synthetic_model"
-        )
-        synth_floats.append({
-            "platform_number": pnum,
-            "lat": la,
-            "lon": lo,
-            "last_date": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "float_type": ftype,
-            "available_variables": vars_list,
-            "available_sensor_types": vars_list,
-            "institution": "INCOIS / Argo India",
-            "profiler": "Autonomous Profiling Float",
-            "source": "synthetic_model",
-            **v_d,
-            "sources": s_d,
-        })
-
+    # These are SYNTHETIC PLACEHOLDERS — not real Argo observations.
+    # Clearly labelled as source='synthetic_model' / source_label='synthetic_model'
+    # so the /ocean/volume-full filter strips them before sending to the frontend.
+    logger.info(
+        "[ActiveFloats] No real Argo data available for this region/date range. "
+        "Returning empty list (synthetic placeholders suppressed)."
+    )
     return {
         "status": "ok",
         "bbox": {"lat_min": lat_min, "lat_max": lat_max, "lon_min": lon_min, "lon_max": lon_max},
         "days": days,
-        "total_floats": len(synth_floats),
-        "source": "synthetic_model",
-        "floats": synth_floats,
+        "total_floats": 0,
+        "source": "no_data",
+        "floats": [],
     }
 
 

@@ -285,6 +285,17 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
   const bathyLats = current.bathyLats || current.volumeData?.bathymetry_lats;
   const bathyLons = current.bathyLons || current.volumeData?.bathymetry_lons;
 
+  console.log('[OceanSlab buildOceanGeometry DIAGNOSTIC]', {
+    currentBathyGridIsArray: Array.isArray(current.bathyGrid),
+    currentBathyGridLength: current.bathyGrid?.length,
+    volumeDataBathymetryLength: current.volumeData?.bathymetry?.length,
+    effectiveBathyGridLength: bathyGrid?.length,
+    sampleDepth1: getSeafloorDepth(10, 70, bathyGrid, bathyLats, bathyLons),
+    sampleDepth2: getSeafloorDepth(15, 75, bathyGrid, bathyLats, bathyLons),
+    sampleDepth3: getSeafloorDepth(20, 80, bathyGrid, bathyLats, bathyLons),
+    sampleDepth4: getSeafloorDepth(12, 85, bathyGrid, bathyLats, bathyLons),
+  });
+
   const latSet = new Set();
   const lonSet = new Set();
   sorted.forEach((s) => {

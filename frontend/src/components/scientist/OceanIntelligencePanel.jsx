@@ -370,10 +370,12 @@ function ArgoObservationsSection({ lat, lon }) {
     (f) =>
       f.source_label !== 'synthetic_bgc_model' &&
       f.source_label !== 'gridded_model' &&
+      f.source !== 'synthetic_model' &&
       f.data_type !== 'SYNTHETIC_BGC_MODEL' &&
       f.platform_number !== 'SYNTHETIC_BGC_MODEL'
   );
   const display = validFloats.slice(0, 5);
+
 
   return (
     <div className="rounded-xl border border-[#1C3A63]/12 bg-white shadow-sm overflow-hidden">

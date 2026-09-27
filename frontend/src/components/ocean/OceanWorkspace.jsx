@@ -225,6 +225,14 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
 
     getOceanVolumeFull(viewport, selectedDate, selectedVariable)
       .then((data) => {
+        console.log('[OceanWorkspace HOP 1: API Response]', {
+          hasData: !!data,
+          bathymetryIsArray: Array.isArray(data?.bathymetry),
+          bathymetryLength: data?.bathymetry?.length,
+          bathymetrySampleRow: data?.bathymetry?.[0]?.slice?.(0, 5),
+          bathymetryLatsLength: data?.bathymetry_lats?.length,
+          bathymetryLonsLength: data?.bathymetry_lons?.length,
+        });
         if (data && (data.depth_slices?.length > 0 || data.layers?.length > 0)) {
           setFullVolumeData(data);
         } else {
@@ -621,6 +629,20 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
               </div>
             </div>
           )}
+          {(() => {
+            const slabBathyGrid = isFullMode ? fullVolumeData?.bathymetry : volumeData?.bathymetry;
+            const slabBathyLats = isFullMode ? fullVolumeData?.bathymetry_lats : volumeData?.bathymetry_lats;
+            const slabBathyLons = isFullMode ? fullVolumeData?.bathymetry_lons : volumeData?.bathymetry_lons;
+            console.log('[OceanWorkspace HOP 2: Props passed to OceanSlab]', {
+              isFullMode,
+              slabBathyGridIsArray: Array.isArray(slabBathyGrid),
+              slabBathyGridLength: slabBathyGrid?.length,
+              slabBathyGridSample: slabBathyGrid?.[0]?.slice?.(0, 5),
+              slabBathyLatsLength: slabBathyLats?.length,
+              slabBathyLonsLength: slabBathyLons?.length,
+            });
+            return null;
+          })()}
           <OceanSlab
             depthSlices={activeDepthSlices}
             volumeData={isFullMode ? fullVolumeData : volumeData}
