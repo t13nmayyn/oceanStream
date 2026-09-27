@@ -5,17 +5,25 @@ export default function FloatList({ floats = [], selectedId, onSelectFloat, load
     return <div className="text-muted text-xs p-2">Searching for nearby floats…</div>;
   }
 
-  if (!floats.length) {
+  const validFloats = floats.filter(
+    (f) =>
+      f.source_label !== 'synthetic_bgc_model' &&
+      f.source_label !== 'gridded_model' &&
+      f.data_type !== 'SYNTHETIC_BGC_MODEL' &&
+      f.platform_number !== 'SYNTHETIC_BGC_MODEL'
+  );
+
+  if (!validFloats.length) {
     return (
       <div className="text-muted text-xs p-2">
-        Click 'Search Nearest Floats' to find nearby Argo floats and AODN CTD moorings.
+        No BGC floats in range
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-2 max-h-[280px] overflow-y-auto">
-      {floats.map((f, idx) => {
+      {validFloats.map((f, idx) => {
         const id = f.platform_number || f.name || `float-${idx}`;
         const isSelected = selectedId === id;
 
@@ -30,7 +38,7 @@ export default function FloatList({ floats = [], selectedId, onSelectFloat, load
             }`}
           >
             <div className="flex justify-between items-center mb-1">
-              <strong className="text-white font-mono">{f.source_label === 'gridded_model' ? 'Model fallback' : `Platform #${id}`}</strong>
+              <strong className="text-white font-mono">{`Platform #${id}`}</strong>
               <Badge className="bg-accent-2/20 text-accent-2 border-accent-2/30">
                 {f.type || 'Core'}
               </Badge>
@@ -45,3 +53,4 @@ export default function FloatList({ floats = [], selectedId, onSelectFloat, load
     </div>
   );
 }
+

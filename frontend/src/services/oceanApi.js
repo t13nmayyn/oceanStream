@@ -119,6 +119,20 @@ export async function getOceanVolumeFull(bounds, date = null, variable = 'temper
   }
 }
 
+/**
+ * Fetch native depth levels and max depth from available Zarr
+ */
+export async function getOceanDepthLevels() {
+  try {
+    const res = await fetch(`${API_BASE}/ocean/depth-levels`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('[oceanApi] getOceanDepthLevels error:', err.message);
+    return null;
+  }
+}
+
 
 export async function getOceanCoverage(bounds) {
   const params = new URLSearchParams({

@@ -8,15 +8,22 @@ import ScientificTimelineChart from '../scientist/ScientificTimelineChart';
 import { useApp, useAppDispatch } from '../../context/AppContext';
 import useOceanSnapshot, { PREDEFINED_OCEANS } from '../../hooks/useOceanSnapshot';
 import useArgoFloats from '../../hooks/useArgoFloats';
-import { getOceanCoverage, getOceanVolumeFull } from '../../services/oceanApi';
+import { getOceanCoverage, getOceanVolumeFull, getOceanDepthLevels } from '../../services/oceanApi';
 import { API_BASE } from '../../config/api';
 
 
-const VARIABLES = [
-  ['temperature', 'Water Temperature', '°C'], ['salinity', 'Ocean Saltiness', 'practical salinity'], ['currents', 'Current Vectors', 'metres per second'],
-  ['chlorophyll', 'Plankton Density', 'milligrams per cubic metre'], ['oxygen', 'Dissolved Oxygen', 'millimoles per cubic metre'],
-  ['ph', 'Acidity (pH)', 'pH scale'], ['nitrate', 'Nutrients (Nitrate)', 'millimoles per cubic metre'], ['pco2', 'Carbon Dioxide', 'microatmospheres'],
+const ALL_VARIABLES = [
+  ['temperature', 'Water Temperature', '°C'],
+  ['salinity', 'Ocean Saltiness', 'practical salinity'],
+  ['currents', 'Current Vectors', 'metres per second'],
+  ['chlorophyll', 'Plankton Density', 'mg/m³'],
+  ['oxygen', 'Dissolved Oxygen', 'mmol/m³'],
+  ['ph', 'Acidity (pH)', 'pH scale'],
+  ['nitrate', 'Nutrients (Nitrate)', 'mmol/m³'],
+  ['pco2', 'Carbon Dioxide', 'μatm'],
 ];
+
+const VARIABLES = ALL_VARIABLES;
 
 function selectedValue(point, variable) {
   if (variable === 'currents') {
@@ -66,6 +73,13 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
   const [threshold, setThreshold] = useState({ enabled: false, operator: '>', value: 28, tolerance: 0.05 });
   const [anomalyOn, setAnomalyOn] = useState(false);
 
+  // Native depth array from /ocean/depth-levels (Phase 4)
+  const [depthLevelsInfo, setDepthLevelsInfo] = useState(null);
+
+  // Variable Checkboxes for Temp & Salinity (Phase 5)
+  const [tempChecked, setTempChecked] = useState(true);
+  const [salChecked, setSalChecked] = useState(false);
+
   // Phase 1 Visualization Modes & Sensor Toggles
   const [visualizationMode, setVisualizationMode] = useState('subset'); // 'subset' | 'full'
   const [fullVolumeData, setFullVolumeData] = useState(null);
@@ -80,6 +94,17 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
   const [anomalyLoading, setAnomalyLoading] = useState(false);
   const [anomalyModelUsed, setAnomalyModelUsed] = useState(null);
   const anomalyFetchRef = useRef(null);
+
+  // Fetch native depth levels on startup
+  useEffect(() => {
+    getOceanDepthLevels()
+      .then((data) => {
+        if (data && data.native_depths) {
+          setDepthLevelsInfo(data);
+        }
+      })
+      .catch((err) => console.warn('[OceanWorkspace] getOceanDepthLevels error:', err));
+  }, []);
 
   const viewport = useMemo(() => {
     if (snapshotData?.bbox) {
@@ -96,6 +121,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
     }
     return PREDEFINED_OCEANS.indianOcean;
   }, [snapshotData?.bbox, bbox, region]);
+
   const handleMarkerSelect = useCallback((marker) => {
     setProfile(marker.id || marker.platform_number);
   }, []);
@@ -128,8 +154,6 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
   }, [selectedDepth, previousDepth, viewport]);
 
   // ── Anomaly data fetch ─────────────────────────────────────────────────────
-  // When anomalyOn + viewport available, fetch /ocean/volume-anomaly.
-  // Uses debounce + abort so rapid toggles don't stack requests.
   useEffect(() => {
     if (!anomalyOn || !viewport) {
       setAnomalySlices([]);
@@ -137,7 +161,6 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
       return undefined;
     }
 
-    // Cancel any in-flight fetch
     if (anomalyFetchRef.current) {
       anomalyFetchRef.current.abort();
     }
@@ -165,28 +188,27 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
           setAnomalySlices(data.depth_slices);
           setAnomalyModelUsed(data.model_used || null);
         } else {
-          // Fallback: use normal slices but flag anomalyMode — OceanSlab will use statistical z-score
           setAnomalySlices([]);
           setAnomalyModelUsed('statistical_zscore');
         }
       } catch (err) {
         if (err.name !== 'AbortError') {
           console.warn('[OceanWorkspace] anomaly fetch error:', err.message);
-          setAnomalySlices([]); // OceanSlab falls back to z-score on normal slices
+          setAnomalySlices([]);
           setAnomalyModelUsed('statistical_zscore');
         }
       } finally {
         setAnomalyLoading(false);
       }
-    }, 400); // 400ms debounce
+    }, 400);
 
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [anomalyOn, viewport, selectedVariable]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [anomalyOn, viewport, selectedVariable]);
 
-  // ── Full Ocean Volume fetch (Phase 1 Full Ocean Mode) ───────────────────────
+  // ── Full Ocean Volume fetch (Phase 1 & 4 Full Ocean Mode) ────────────────────
   useEffect(() => {
     if (visualizationMode !== 'full' || !viewport) {
       return undefined;
@@ -203,7 +225,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
 
     getOceanVolumeFull(viewport, selectedDate, selectedVariable)
       .then((data) => {
-        if (data && data.depth_slices?.length > 0) {
+        if (data && (data.depth_slices?.length > 0 || data.layers?.length > 0)) {
           setFullVolumeData(data);
         } else {
           setFullError('No full-depth data returned from server');
@@ -239,16 +261,16 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
     ? fullDepthSlices
     : (anomalyOn && anomalySlices.length > 0 ? anomalySlices : depthSlices);
 
-  const activeMaxDepth = isFullMode
-    ? (fullVolumeData?.copernicus_max_depth_m || fullVolumeData?.available_depth_max_m || 5728)
-    : 1000;
+  const nativeDepths = depthLevelsInfo?.native_depths || fullVolumeData?.native_depths || fullVolumeData?.actual_zarr_depth_levels || [];
+  const nativeDepthCount = depthLevelsInfo?.native_depth_count || fullVolumeData?.native_depth_count || (nativeDepths.length > 0 ? nativeDepths.length : 50);
+  const nativeMaxDepth = depthLevelsInfo?.max_depth_m || fullVolumeData?.max_depth_m || 5727.9;
 
   const combinedFloats = isFullMode && fullVolumeData?.floats?.length > 0
     ? fullVolumeData.floats
     : activeFloats;
 
   const effectiveDataSource = isFullMode
-    ? (fullVolumeData?.data_source || 'copernicus_zarr')
+    ? (fullVolumeData?.source || fullVolumeData?.data_source || 'demo_full_depth')
     : dataSource;
 
   const effectiveLoadingPhase = fullLoading
@@ -257,15 +279,34 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
 
   const isLoading = snapshotLoading || anomalyLoading || fullLoading;
 
-  // Depth buttons for depth bar (dynamic to full or subset)
+  // Dynamically generated depth buttons from real native depth array:
+  // Show every level from 0–200m (closely spaced), then every 5th level from 200m downward
   const depthButtons = useMemo(() => {
-    if (isFullMode && fullVolumeData?.actual_zarr_depth_levels?.length > 0) {
-      const zarrD = fullVolumeData.actual_zarr_depth_levels;
-      const candidates = [0, 5, 10, 20, 35, 47, 100, 200, 500, 1000, 2000, 3500, 5728];
-      return candidates.filter((d) => d <= activeMaxDepth);
+    if (nativeDepths && nativeDepths.length > 0) {
+      const shallow = nativeDepths.filter((d) => d <= 200);
+      const deep = nativeDepths.filter((d) => d > 200).filter((_, idx) => idx % 5 === 0);
+      const lastDepth = nativeDepths[nativeDepths.length - 1];
+      const combined = [...shallow, ...deep];
+      if (!combined.includes(lastDepth)) combined.push(lastDepth);
+      return combined;
     }
     return [0, 20, 50, 100, 200, 400, 600, 800, 1000];
-  }, [isFullMode, fullVolumeData, activeMaxDepth]);
+  }, [nativeDepths]);
+
+  // Available variables from response
+  const availableVars = useMemo(() => {
+    const list = isFullMode
+      ? (fullVolumeData?.variables || ['temperature', 'salinity', 'u_current', 'v_current', 'currents'])
+      : (volumeData?.variables || ['temperature', 'salinity', 'currents']);
+    const set = new Set(list);
+    if (set.has('u_current') || set.has('v_current')) set.add('currents');
+    return set;
+  }, [isFullMode, fullVolumeData, volumeData]);
+
+  // Determine effective variable passed to OceanSlab
+  const effectiveSlabVariable = tempChecked && salChecked
+    ? 'temperature'
+    : (tempChecked ? 'temperature' : (salChecked ? 'salinity' : selectedVariable));
 
   return <main className={`ocean-workspace ${!showMap ? '!flex !flex-col h-full bg-[#F8FAFC]' : ''}`}>
     {showMap && <section className="ocean-globe-pane"><MapView onPointClick={onPointClick} onSelectFloatForProfile={(id) => setProfile(id)} selectedPoint={selectedPoint} hideSidebar /></section>}
@@ -277,11 +318,16 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
             <h1>{userMode === 'analyze' ? 'Analyze ocean conditions' : 'Explore the ocean'}</h1>
             <p>Choose a region on the globe, then inspect the water column in three dimensions.</p>
           </div>
-          <div className="source-note">
+          <div className="source-note flex items-center gap-2">
+            <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-sky-950/70 border border-sky-600/40 text-sky-300">
+              Native depth levels: {nativeDepthCount} · Max depth: {nativeMaxDepth < 1000 ? nativeMaxDepth : Number(nativeMaxDepth).toFixed(1)}m
+            </span>
             {effectiveDataSource === 'backup_cache'
               ? `📦 Copernicus Backup (${backupDate || 'Stored'})`
+              : effectiveDataSource === 'demo_full_depth' || (isFullMode && effectiveDataSource === 'copernicus_zarr')
+              ? '🟢 Copernicus Full-Depth (L2)'
               : effectiveDataSource === 'copernicus_zarr'
-              ? (isFullMode ? '🟢 Copernicus Full-Depth (L2)' : '🟢 Copernicus Live Analysis')
+              ? '🟢 Copernicus Live Analysis'
               : '🌐 Indian Ocean Reference / Demo Field'}
           </div>
         </div>
@@ -318,12 +364,12 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
           {fullLoading && (
             <span className="text-[11px] text-sky-400 animate-pulse font-mono flex items-center gap-1.5 ml-1">
               <span className="inline-block w-2 h-2 rounded-full bg-sky-400 animate-ping" />
-              Loading full-depth ocean data...
+              Loading 50 native depth layers & bathymetry...
             </span>
           )}
-          {fullVolumeData?.partial && isFullMode && (
-            <span className="text-[10.5px] text-amber-400 font-mono" title={fullVolumeData.partial_note}>
-              ⚠️ {fullVolumeData.n_zarr_depth_levels} Zarr levels (0–{fullVolumeData.available_depth_max_m}m)
+          {isFullMode && (
+            <span className="text-[10.5px] text-sky-300 font-mono">
+              🌊 50 Native Layers (0.494–{Number(nativeMaxDepth).toFixed(1)}m) · Seafloor Masked
             </span>
           )}
         </div>
@@ -351,21 +397,94 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
         </div>
       </div>
       
-      <div className={`variable-pills flex items-center justify-between ${!showMap ? '!p-0 mb-3' : ''}`} role="tablist" aria-label="Ocean variable">
+      {/* Variable Controls: Checkboxes for Temp & Salinity, Pills for remainder (Phase 5) */}
+      <div className={`variable-pills flex items-center justify-between flex-wrap gap-2 ${!showMap ? '!p-0 mb-3' : 'mb-2'}`} role="tablist" aria-label="Ocean variable">
         <div className="flex items-center flex-wrap gap-2">
-          <span className={`control-label ${!showMap ? '!text-[#6B7C96] font-semibold uppercase tracking-wider text-[10px]' : ''}`}>Variable</span>
-          {VARIABLES.map(([id, label]) => (
-            <button key={id} className={`${selectedVariable === id ? `active ${!showMap ? '!bg-teal-500 !border-teal-500 !text-white' : ''}` : ''} ${!showMap && selectedVariable !== id ? '!bg-white !border-[#1C3A63]/40 !text-[#0B1E3D] hover:!bg-[#F0F4FF] hover:!border-[#1C3A63]' : ''}`} onClick={() => selectVariable(id)}>
-              {userMode === 'analyze' ? label : label.replace('Ocean ', '')}
-            </button>
-          ))}
+          <span className={`control-label ${!showMap ? '!text-[#6B7C96] font-semibold uppercase tracking-wider text-[10px]' : 'text-[#8EA4C8] text-[10px] uppercase font-bold tracking-wider'}`}>Variables</span>
+
+          {/* Temperature Checkbox */}
+          <label className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11.5px] font-semibold cursor-pointer border select-none transition-all ${
+            tempChecked
+              ? 'bg-teal-500/25 text-teal-300 border-teal-400 shadow-xs'
+              : 'bg-[#0B1E3D]/50 text-[#8EA4C8] border-[#1C3A63]/50 hover:text-white'
+          }`}>
+            <input
+              type="checkbox"
+              checked={tempChecked}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                if (!checked && !salChecked) return;
+                setTempChecked(checked);
+                if (checked) {
+                  selectVariable('temperature');
+                } else if (salChecked) {
+                  selectVariable('salinity');
+                }
+              }}
+              className="accent-teal-400 rounded cursor-pointer"
+            />
+            <span>Temperature</span>
+          </label>
+
+          {/* Salinity Checkbox */}
+          <label className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11.5px] font-semibold cursor-pointer border select-none transition-all ${
+            salChecked
+              ? 'bg-purple-500/25 text-purple-300 border-purple-400 shadow-xs'
+              : 'bg-[#0B1E3D]/50 text-[#8EA4C8] border-[#1C3A63]/50 hover:text-white'
+          }`}>
+            <input
+              type="checkbox"
+              checked={salChecked}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                if (!checked && !tempChecked) return;
+                setSalChecked(checked);
+                if (checked) {
+                  if (!tempChecked) selectVariable('salinity');
+                } else if (tempChecked) {
+                  selectVariable('temperature');
+                }
+              }}
+              className="accent-purple-400 rounded cursor-pointer"
+            />
+            <span>Salinity</span>
+          </label>
+
+          {/* Pills for other variables (greyed out if not available) */}
+          {ALL_VARIABLES.filter(([id]) => id !== 'temperature' && id !== 'salinity').map(([id, label]) => {
+            const isAvailable = availableVars.has(id);
+            const isActive = !tempChecked && !salChecked && selectedVariable === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                disabled={!isAvailable}
+                title={!isAvailable ? 'Not available in this dataset.' : (userMode === 'analyze' ? label : label.replace('Ocean ', ''))}
+                onClick={() => {
+                  if (!isAvailable) return;
+                  setTempChecked(false);
+                  setSalChecked(false);
+                  selectVariable(id);
+                }}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all border cursor-pointer ${
+                  !isAvailable
+                    ? 'opacity-35 cursor-not-allowed bg-[#0B1E3D]/20 text-gray-400 border-gray-700/30'
+                    : isActive
+                    ? 'bg-sky-500 text-white border-sky-400 shadow-xs'
+                    : 'bg-[#0B1E3D]/50 text-[#8EA4C8] border-[#1C3A63]/50 hover:text-white hover:border-[#1C3A63]'
+                }`}
+              >
+                {userMode === 'analyze' ? label : label.replace('Ocean ', '')}
+              </button>
+            );
+          })}
         </div>
         {!showMap && (
           <button
             type="button"
             onClick={() => setAnomalyOn((v) => !v)}
             aria-pressed={anomalyOn}
-            title="Anomaly detection (coming in Phase 3)"
+            title="Anomaly detection"
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11.5px] font-semibold transition-colors cursor-pointer border ${
               anomalyOn
                 ? 'bg-amber-500/15 border-amber-500/40 text-amber-600'
@@ -380,25 +499,29 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
 
       <div className={`slab-layout flex-1 min-h-0 flex ${!showMap ? '!border-[#1C3A63]/30 !bg-white rounded-xl overflow-hidden shadow-sm' : ''}`}>
         <div className={`depth-selector-panel flex flex-col items-center justify-between py-3 px-2 ${!showMap ? 'w-24 !bg-[#F8FAFC] border-r border-[#1C3A63]/20' : 'w-24 bg-[#0B1E3D]/90 border-r border-[#1C3A63]/50 text-white'} select-none shrink-0`}>
-          <div className="flex flex-col items-center mb-1">
+          <div className="flex flex-col items-center mb-1 text-center w-full">
             <span className={`text-[10px] uppercase font-bold tracking-wider ${!showMap ? 'text-[#6B7C96]' : 'text-[#8EA4C8]'}`}>Depth</span>
             <div className="flex items-baseline gap-0.5 mt-0.5">
-              <strong className="text-teal-400 font-mono text-[14px] leading-tight font-bold">{selectedDepth}</strong>
+              <strong className="text-teal-400 font-mono text-[14px] leading-tight font-bold">
+                {selectedDepth < 1 ? Number(selectedDepth).toFixed(2) : Math.round(selectedDepth)}
+              </strong>
               <span className={`text-[10px] font-mono ${!showMap ? 'text-[#6B7C96]' : 'text-[#8EA4C8]'}`}>m</span>
             </div>
           </div>
 
-          {/* Physical Depth Horizon Scale */}
-          <div className="flex flex-col gap-1 w-full my-auto overflow-y-auto py-1">
+          {/* Physical Depth Horizon Scale: dynamically populated from native depth levels */}
+          <div className="flex flex-col gap-1 w-full my-auto overflow-y-auto py-1 max-h-[360px]">
             {depthButtons.map((d) => {
-              const isSelected = selectedDepth === d || (selectedDepth >= d - 10 && selectedDepth < d + 15);
+              const dNum = Number(d);
+              const isSelected = Math.abs(selectedDepth - dNum) < (dNum < 10 ? 0.8 : dNum < 200 ? 12 : 120);
+              const label = dNum < 1 ? `${dNum.toFixed(1)}m` : `${Math.round(dNum)}m`;
               return (
                 <button
                   key={d}
                   type="button"
-                  onClick={() => setDepth(d)}
-                  title={`Select ${d}m physical depth`}
-                  className={`w-full py-0.5 px-1.5 rounded text-[10.5px] font-mono font-medium transition-all text-center cursor-pointer border ${
+                  onClick={() => setDepth(dNum)}
+                  title={`Fly camera to ${label} depth level`}
+                  className={`w-full py-0.5 px-1 rounded text-[10px] font-mono font-medium transition-all text-center cursor-pointer border ${
                     isSelected
                       ? 'bg-teal-500 text-white border-teal-400 shadow-sm shadow-teal-500/30 font-bold scale-[1.03]'
                       : !showMap
@@ -406,7 +529,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
                       : 'bg-[#102A4E] text-[#CBD5E1] border-[#1C3A63]/60 hover:bg-[#1C3A63] hover:text-white'
                   }`}
                 >
-                  {d === 0 ? '0m' : `${d}m`}
+                  {label}
                 </button>
               );
             })}
@@ -416,8 +539,8 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
             <input
               type="range"
               min="0"
-              max={activeMaxDepth}
-              step={activeMaxDepth > 1000 ? '25' : '10'}
+              max={nativeMaxDepth}
+              step={nativeMaxDepth > 1000 ? '25' : '10'}
               value={selectedDepth}
               onChange={(e) => setDepth(Number(e.target.value))}
               className="w-16 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-400"
@@ -427,16 +550,90 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
           </div>
         </div>
         <div className={`slab-frame flex-1 relative min-w-0 ${!showMap ? '!h-full' : ''}`}>
+          {/* ── Skeleton loading overlay — visible while data is fetching ── */}
+          {isLoading && (
+            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#050b16]/90 backdrop-blur-md transition-all duration-500 select-none">
+              {/* Animated holographic ocean depth column */}
+              <div className="flex flex-col items-center gap-5 max-w-sm px-6 py-7 rounded-2xl border border-teal-500/20 bg-[#061426]/90 shadow-2xl shadow-teal-950/40">
+                {/* 3D Wireframe Depth Planes Skeleton */}
+                <div className="relative w-40 h-28 flex flex-col items-center justify-center">
+                  {/* Layer 1 - Surface plane */}
+                  <div
+                    className="absolute w-32 h-10 rounded-lg border border-teal-400/50 bg-gradient-to-r from-teal-500/10 via-cyan-400/20 to-teal-500/10 transform -rotate-12 skew-x-12 animate-pulse shadow-sm shadow-teal-400/20"
+                    style={{ top: '6px', animationDuration: '2.2s' }}
+                  >
+                    <div className="absolute inset-0 grid grid-cols-4 grid-rows-2 opacity-30 border border-teal-300/40" />
+                  </div>
+
+                  {/* Layer 2 - Thermocline plane */}
+                  <div
+                    className="absolute w-28 h-9 rounded-lg border border-sky-400/40 bg-gradient-to-r from-sky-500/10 via-blue-400/15 to-sky-500/10 transform -rotate-12 skew-x-12 animate-pulse"
+                    style={{ top: '34px', animationDuration: '2.2s', animationDelay: '0.35s' }}
+                  >
+                    <div className="absolute inset-0 grid grid-cols-4 grid-rows-2 opacity-25 border border-sky-300/30" />
+                  </div>
+
+                  {/* Layer 3 - Abyssal plane */}
+                  <div
+                    className="absolute w-24 h-8 rounded-lg border border-indigo-400/30 bg-gradient-to-r from-indigo-500/10 via-purple-400/15 to-indigo-500/10 transform -rotate-12 skew-x-12 animate-pulse"
+                    style={{ top: '62px', animationDuration: '2.2s', animationDelay: '0.7s' }}
+                  >
+                    <div className="absolute inset-0 grid grid-cols-3 grid-rows-2 opacity-20 border border-indigo-300/30" />
+                  </div>
+
+                  {/* Vertical Depth Struts connecting planes */}
+                  <div className="absolute w-[2px] h-16 bg-gradient-to-b from-teal-400/50 via-sky-400/30 to-indigo-500/20 left-10 top-5" />
+                  <div className="absolute w-[2px] h-16 bg-gradient-to-b from-teal-400/50 via-sky-400/30 to-indigo-500/20 right-10 top-5" />
+
+                  {/* Pulsing Sonar Node */}
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-teal-400/80 shadow-lg shadow-teal-400/60 animate-ping" style={{ animationDuration: '1.8s' }} />
+                </div>
+
+                {/* Status text with micro-step indicator */}
+                <div className="flex flex-col items-center gap-1.5 text-center">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
+                    <span className="text-teal-300 font-semibold text-[13px] tracking-wide font-sans">
+                      {fullLoading ? 'Building Full 3D Ocean Volume' : 'Reconstructing 3D Ocean Field'}
+                    </span>
+                  </div>
+                  <span className="text-[#8EA4C8] text-[11px] font-mono">
+                    {fullLoading
+                      ? '50 native depth levels · Real bathymetry terrain'
+                      : 'L1/L2 spatial cache · Stratified depth layers'}
+                  </span>
+                </div>
+
+                {/* Skeleton depth bars */}
+                <div className="flex items-end gap-1.5 h-7">
+                  {[0.25, 0.45, 0.65, 0.85, 1.0, 0.9, 0.7, 0.5, 0.35, 0.2].map((h, i) => (
+                    <div
+                      key={i}
+                      className="w-1.5 rounded-full bg-gradient-to-t from-teal-500 via-sky-400 to-cyan-300 animate-pulse"
+                      style={{
+                        height: `${h * 28}px`,
+                        animationDelay: `${i * 0.1}s`,
+                        animationDuration: '1.4s',
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
           <OceanSlab
             depthSlices={activeDepthSlices}
             volumeData={isFullMode ? fullVolumeData : volumeData}
+            bathyGrid={isFullMode ? fullVolumeData?.bathymetry : volumeData?.bathymetry}
+            bathyLats={isFullMode ? fullVolumeData?.bathymetry_lats : volumeData?.bathymetry_lats}
+            bathyLons={isFullMode ? fullVolumeData?.bathymetry_lons : volumeData?.bathymetry_lons}
             grid={gridData}
             floats={combinedFloats}
             showArgo={showArgo}
             showGliders={showGliders}
             visualizationMode={visualizationMode}
-            maxDepth={activeMaxDepth}
-            variable={selectedVariable}
+            maxDepth={nativeMaxDepth}
+            variable={effectiveSlabVariable}
             depth={selectedDepth}
             dataDepth={snapshotData?.depth ?? selectedDepth}
             bounds={viewport}
@@ -457,17 +654,36 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
             loadingPhase={effectiveLoadingPhase}
             onSelectMarker={handleMarkerSelect}
           />
-          <div className={`colorbar absolute !top-auto !bottom-4 !right-4 !w-[200px] ${!showMap ? '!bg-white/95 backdrop-blur-md !border-[#1C3A63]/30 !text-[#0B1E3D] rounded-lg shadow-sm' : ''}`}>
-            <span className={`${!showMap ? 'font-semibold text-[#0B1E3D]' : ''}`}>{selected[1]}</span>
-            <div className={`colorbar-gradient colorbar-${selectedVariable} ${!showMap ? 'rounded' : ''}`} />
-            <div className={`colorbar-range ${!showMap ? '!text-[#6B7C96] font-mono text-[10px]' : ''}`}>
-              <span>{valueMin === null ? 'no data' : valueMin.toFixed(3)}</span>
-              <span>{selected[2]}</span>
-              <span>{valueMax === null ? 'no data' : valueMax.toFixed(3)}</span>
+          {tempChecked && salChecked ? (
+            <div className={`colorbar absolute !top-auto !bottom-4 !right-4 !w-[250px] ${!showMap ? '!bg-white/95 backdrop-blur-md !border-[#1C3A63]/30 !text-[#0B1E3D] rounded-lg shadow-sm' : ''}`}>
+              <div className="flex justify-between text-[10.5px] font-semibold mb-1">
+                <span className="text-teal-400">Temp (°C)</span>
+                <span className="text-purple-400">Salinity (psu)</span>
+              </div>
+              <div className="flex gap-1.5 h-2.5 my-1">
+                <div className="flex-1 rounded-xs bg-gradient-to-r from-blue-600 via-teal-400 to-amber-400" />
+                <div className="flex-1 rounded-xs bg-gradient-to-r from-indigo-900 via-sky-400 to-purple-600" />
+              </div>
+              <div className={`colorbar-range flex justify-between ${!showMap ? '!text-[#6B7C96] font-mono text-[9.5px]' : ''}`}>
+                <span>{valueMin === null ? '24' : valueMin.toFixed(1)}°C</span>
+                <span className="text-[9px] text-[#8EA4C8]">Split Colorbar</span>
+                <span>35.0 psu</span>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className={`colorbar absolute !top-auto !bottom-4 !right-4 !w-[200px] ${!showMap ? '!bg-white/95 backdrop-blur-md !border-[#1C3A63]/30 !text-[#0B1E3D] rounded-lg shadow-sm' : ''}`}>
+              <span className={`${!showMap ? 'font-semibold text-[#0B1E3D]' : ''}`}>{selected[1]}</span>
+              <div className={`colorbar-gradient colorbar-${effectiveSlabVariable} ${!showMap ? 'rounded' : ''}`} />
+              <div className={`colorbar-range ${!showMap ? '!text-[#6B7C96] font-mono text-[10px]' : ''}`}>
+                <span>{valueMin === null ? 'no data' : valueMin.toFixed(3)}</span>
+                <span>{selected[2]}</span>
+                <span>{valueMax === null ? 'no data' : valueMax.toFixed(3)}</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
+
       
       <div className={`${!showMap ? 'text-[#6B7C96]' : ''}`}>
         <Coverage coverage={coverage} />

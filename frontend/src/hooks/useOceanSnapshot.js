@@ -172,15 +172,15 @@ export default function useOceanSnapshot(region = null) {
   const [snapshotData, setSnapshotData] = useState(null);
   const [depthSlices, setDepthSlices] = useState([]);
   const [floats, setFloats] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [loadingPhase, setLoadingPhase] = useState(null);   // NEW: granular phase
+  const [loading, setLoading] = useState(true);
+  const [loadingPhase, setLoadingPhase] = useState('processing');
   const [error, setError] = useState(null);
   const [source, setSource] = useState('reference');
   const [backupDate, setBackupDate] = useState(null);
 
   const lastFetchedKeyRef = useRef(null);
   const fetchInFlightRef = useRef(false);
-  const pollTimerRef = useRef(null);     // NEW: poll timer for fetch_status=fetching
+  const pollTimerRef = useRef(null);
   const fetchSnapshotRef = useRef(null);
 
   const regionKey = typeof region === 'object' && region !== null
@@ -218,19 +218,18 @@ export default function useOceanSnapshot(region = null) {
    * Fetch the ocean volume for the current bounds.
    * GLOBAL: works for Pacific, Atlantic, Arctic, Southern Ocean, Indian Ocean.
    * Non-blocking: previous ocean remains visible while new one loads.
-   * Polls if backend is still fetching data.
-   *
-   * @param {boolean} isPoll - true when this is a background poll (don't show loading overlay)
    */
   const fetchSnapshot = useCallback(async (isPoll = false) => {
     if (apiStatus === 'offline') {
       setSource('reference');
+      setLoading(false);
       return;
     }
     if (fetchInFlightRef.current && !isPoll) return;
 
     const fetchKey = `${regionKey}`;
-    if (lastFetchedKeyRef.current === fetchKey && volumeData !== null && !isPoll) {
+    if (lastFetchedKeyRef.current === fetchKey && lastFetchedKeyRef.current !== null && !isPoll) {
+      setLoading(false);
       return;
     }
 
@@ -250,10 +249,8 @@ export default function useOceanSnapshot(region = null) {
         ? []
         : await fetchSnapshotDepthSlices(bounds);
       const slices = fallbackSlices.length >= 2 ? fallbackSlices : volumeSlices;
-      let hasRenderableData = slices.length > 0;
 
       if (slices.length > 0) {
-        const fetchStatus = vol?.fetch_status || 'ready';
         const normalizedVolume = {
           ...(vol || {}),
           bbox: vol?.bbox || {
@@ -285,35 +282,24 @@ export default function useOceanSnapshot(region = null) {
         });
 
         lastFetchedKeyRef.current = fetchKey;
+        setLoadingPhase('ready');
 
-        // Determine loading phase from backend fetch_status
-        if (fetchStatus === 'cache_hit') {
-          setLoadingPhase('cache_hit');
-        } else if (fetchStatus === 'fetching') {
-          setLoadingPhase('fetching');
-        } else {
-          setLoadingPhase('analytical_placeholder');
-        }
-
-        // If backend is still fetching real data, poll every 8s for updates
-        if (fetchStatus === 'fetching' || fetchStatus === 'analytical_placeholder') {
+        // Only poll if the backend is actively fetching fresh data from Copernicus
+        if (fetchStatus === 'fetching') {
           if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
           pollTimerRef.current = setTimeout(() => {
-            fetchSnapshot(true);  // background poll
+            fetchSnapshotRef.current?.(true); // background poll
           }, 8000);
-        } else {
-          // Real data arrived — clear any pending poll
-          if (pollTimerRef.current) {
-            clearTimeout(pollTimerRef.current);
-            pollTimerRef.current = null;
-          }
+        } else if (pollTimerRef.current) {
+          clearTimeout(pollTimerRef.current);
+          pollTimerRef.current = null;
         }
 
         dispatch({
           type: 'ADD_LOG',
           payload: {
             type: 'info',
-            text: `${new Date().toISOString().slice(11, 19)} [VOLUME 3D] ${slices.length} depth layers loaded (${dataSourceValue}) fetch_status=${fetchStatus}`,
+            text: `${new Date().toISOString().slice(11, 19)} [VOLUME 3D] ${slices.length} depth layers loaded (${dataSourceValue})`,
           },
         });
       } else {
@@ -330,7 +316,7 @@ export default function useOceanSnapshot(region = null) {
           setFloats([]);
           setBackupDate(null);
           lastFetchedKeyRef.current = fetchKey;
-          hasRenderableData = true;
+          setLoadingPhase('ready');
         } else {
           setVolumeData(null);
           setSnapshotData(null);
@@ -340,25 +326,6 @@ export default function useOceanSnapshot(region = null) {
           setBackupDate(null);
           setLoadingPhase('error');
         }
-      }
-
-      const isFetching = fetchStatus === 'fetching' || fetchStatus === 'analytical_placeholder';
-      setLoadingPhase(
-        fetchStatus === 'cache_hit'
-          ? 'cache_hit'
-          : isFetching
-            ? 'fetching'
-            : (hasRenderableData ? 'analytical_placeholder' : 'error')
-      );
-
-      if (isFetching) {
-        if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-        pollTimerRef.current = setTimeout(() => {
-          fetchSnapshotRef.current?.(true);
-        }, 8000);
-      } else if (pollTimerRef.current) {
-        clearTimeout(pollTimerRef.current);
-        pollTimerRef.current = null;
       }
 
       setLoading(false);
@@ -371,7 +338,7 @@ export default function useOceanSnapshot(region = null) {
     } finally {
       fetchInFlightRef.current = false;
     }
-  }, [apiStatus, bounds, selectedVariable, dispatch, regionKey, volumeData, selectedDepth]);
+  }, [apiStatus, bounds, selectedVariable, dispatch, regionKey, selectedDepth]);
 
   useEffect(() => {
     fetchSnapshotRef.current = fetchSnapshot;

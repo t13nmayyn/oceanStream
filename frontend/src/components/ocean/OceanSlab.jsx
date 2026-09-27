@@ -193,21 +193,29 @@ function normalizeLon(lon, west, isAntimeridian) {
   return l;
 }
 
+// For each lat/lon cell, find its real seafloor depth
+export function getSeafloorDepth(lat, lon, bathyGrid, bathyLats, bathyLons) {
+  if (!bathyGrid || !bathyLats || !bathyLons || !bathyLats.length || !bathyLons.length) return 1000;
+  let li = 0;
+  let minLatDiff = Infinity;
+  for (let i = 0; i < bathyLats.length; i++) {
+    const diff = Math.abs(bathyLats[i] - lat);
+    if (diff < minLatDiff) { minLatDiff = diff; li = i; }
+  }
+  let lj = 0;
+  let minLonDiff = Infinity;
+  for (let j = 0; j < bathyLons.length; j++) {
+    const diff = Math.abs(bathyLons[j] - lon);
+    if (diff < minLonDiff) { minLonDiff = diff; lj = j; }
+  }
+  const d = bathyGrid[li]?.[lj];
+  return Number.isFinite(d) ? d : null; // null = land, skip entirely
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // buildOceanGeometry:
-//   Constructs a single continuous volumetric ocean field:
-//   - Follows actual latitude × longitude grid and available scientific values.
-//   - Surface is an irregular natural ocean terrain matching real coastlines.
-//   - Depth layers descend according to physical Copernicus depths.
-//   - Adjacent depth samples are connected vertically ONLY at genuine internal
-//     data gaps (e.g. an island / masked coastal cell inside the query domain).
-//     The outer edge of the sampled lat/lon array is the edge of the query
-//     bounding box, NOT a coastline — walling that off is what previously
-//     produced the "fish tank" box, so it is intentionally left open.
-//   - No bounding box / cage wireframe.
-//   - No spiky artificial mountains.
-//   - Missing / land / NaN regions remain completely transparent / empty.
-//   - Works across all 5 oceans (Pacific antimeridian wrapping handled cleanly).
+//   Constructs a single continuous volumetric ocean field with real seafloor
+//   bathymetry masking (continental shelves, slopes, and deep ocean trenches).
 // ─────────────────────────────────────────────────────────────────────────────
 function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
   const bounds = current.bounds || { west: 70, east: 85, south: 8, north: 22 };
@@ -222,31 +230,60 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
     : Math.max(east - west, 0.0001);
   const latSpan = Math.max(north - south, 0.0001);
 
-  // Sort slices shallow → deep
-  const sorted = [...slicesToRender].sort((a, b) => (a.depth_m ?? 0) - (b.depth_m ?? 0));
+  // Sort slices shallow -> deep, drop empty layers
+  let sorted = [...slicesToRender]
+    .filter((s) => (s.points || []).length > 0)
+    .sort((a, b) => (a.depth_m ?? 0) - (b.depth_m ?? 0));
   if (sorted.length === 0) return null;
 
-  // Collect all valid values for global color normalization
-  const allValues = [];
-  sorted.forEach((s) => {
-    (s.points || []).forEach((pt) => {
-      const v = valueFor(pt, current.variable);
-      if (Number.isFinite(v)) allValues.push(v);
-    });
-  });
-  const minVal = allValues.length ? Math.min(...allValues) : 0;
-  const maxVal = allValues.length ? Math.max(...allValues) : 1;
+  // ── Layer decimation: cap at ~18 rendered layers for smooth frame rates ──
+  const MAX_RENDER_LAYERS = 18;
+  if (sorted.length > MAX_RENDER_LAYERS) {
+    const shallow = sorted.filter((s) => (s.depth_m ?? 0) <= 200);
+    const deep = sorted.filter((s) => (s.depth_m ?? 0) > 200);
+    const deepBudget = Math.max(4, MAX_RENDER_LAYERS - shallow.length);
+    const deepStep = Math.max(1, Math.ceil(deep.length / deepBudget));
+    const sampledDeep = deep.filter((_, idx) => idx % deepStep === 0);
+    // Always include the deepest layer with data
+    if (sampledDeep.length > 0 && deep.length > 0 && sampledDeep[sampledDeep.length - 1] !== deep[deep.length - 1]) {
+      sampledDeep.push(deep[deep.length - 1]);
+    }
+    sorted = [...shallow, ...sampledDeep];
+  }
+
+  // ── Loop-based min/max ──
+  let minVal = Infinity;
+  let maxVal = -Infinity;
+  let valueCount = 0;
+  for (let si = 0; si < sorted.length; si++) {
+    const pts = sorted[si].points || [];
+    for (let pi = 0; pi < pts.length; pi++) {
+      const v = valueFor(pts[pi], current.variable);
+      if (Number.isFinite(v)) {
+        if (v < minVal) minVal = v;
+        if (v > maxVal) maxVal = v;
+        valueCount++;
+      }
+    }
+  }
+  if (valueCount === 0) { minVal = 0; maxVal = 1; }
   const valRange = Math.max(maxVal - minVal, 0.0001);
   const anomalyThr = current.anomalyThreshold || 2.0;
   const anomalyMode = current.anomalyMode ?? false;
   const exag = current.verticalExaggeration ?? 35;
 
-  // Determine the actual maximum depth from this dataset — NEVER hardcode to 1000m.
-  // If depthRange is provided (from /ocean/volume-full), use it; else derive from slices.
+  // Determine the actual maximum depth from this dataset
   const providedMaxDepth = current.depthRange?.max;
-  const sliceMaxDepth = Math.max(...sorted.map((s) => s.depth_m ?? 0));
+  let sliceMaxDepth = 0;
+  for (let si = 0; si < sorted.length; si++) {
+    const d = sorted[si].depth_m ?? 0;
+    if (d > sliceMaxDepth) sliceMaxDepth = d;
+  }
   const maxDepth = Math.max(providedMaxDepth ?? sliceMaxDepth, sliceMaxDepth, 100);
 
+  const bathyGrid = current.bathyGrid || current.volumeData?.bathymetry;
+  const bathyLats = current.bathyLats || current.volumeData?.bathymetry_lats;
+  const bathyLons = current.bathyLons || current.volumeData?.bathymetry_lons;
 
   const latSet = new Set();
   const lonSet = new Set();
@@ -262,9 +299,9 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
   const rawNormLons = [...lonSet].sort((a, b) => a - b);
   if (rawLats.length === 0 || rawNormLons.length === 0) return null;
 
-  // Adaptive subsampling so rendering stays smooth and interactive
-  const latStep = Math.max(1, Math.ceil(rawLats.length / 52));
-  const lonStep = Math.max(1, Math.ceil(rawNormLons.length / 64));
+  // ── Spatial grid decimation for ultra-fluid rendering ──
+  const latStep = Math.max(1, Math.ceil(rawLats.length / 28));
+  const lonStep = Math.max(1, Math.ceil(rawNormLons.length / 36));
   const lats = rawLats.filter((_, idx) => idx % latStep === 0);
   const normLons = rawNormLons.filter((_, idx) => idx % lonStep === 0);
   const nLat = lats.length;
@@ -308,6 +345,26 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
     return c;
   }
 
+  // Precompute seafloor depths and XZ coordinates once for the 2D horizontal grid
+  const seafloorGrid = Array.from({ length: nLat }, () => new Float32Array(nLon));
+  const isLandGrid = Array.from({ length: nLat }, () => new Uint8Array(nLon));
+  const xzGrid = Array.from({ length: nLat }, () => Array.from({ length: nLon }, () => [0, 0]));
+
+  for (let i = 0; i < nLat; i++) {
+    const lat = lats[i];
+    for (let j = 0; j < nLon; j++) {
+      const normLon = normLons[j];
+      const origLon = (isAntimeridian && normLon > 180) ? normLon - 360 : normLon;
+      const sf = getSeafloorDepth(lat, origLon, bathyGrid, bathyLats, bathyLons);
+      if (sf === null) {
+        isLandGrid[i][j] = 1;
+      } else {
+        seafloorGrid[i][j] = sf;
+        xzGrid[i][j] = ptToXZ(lat, normLon);
+      }
+    }
+  }
+
   const positions = [];
   const colors = [];
   const indices = [];
@@ -320,40 +377,29 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
 
   let vPtr = 0;
 
-  // 1. Emit all vertices across all depth slices
-  for (let k = 0; k < nDepths; k++) {
-    const depth_m = sorted[k].depth_m ?? 0;
-    const isSeafloor = (k === nDepths - 1);
-    const sMap = sliceMaps[k];
+  // 1. Emit all vertices across all depth slices masked by real bathymetry
+  for (let i = 0; i < nLat; i++) {
+    const lat = lats[i];
+    for (let j = 0; j < nLon; j++) {
+      if (isLandGrid[i][j]) continue; // land — skip entirely
 
-    for (let i = 0; i < nLat; i++) {
-      const lat = lats[i];
-      for (let j = 0; j < nLon; j++) {
-        const normLon = normLons[j];
-        // Nearest lookup in map
+      const normLon = normLons[j];
+      const seafloor = seafloorGrid[i][j];
+      const [nx, nz] = xzGrid[i][j];
+
+      for (let k = 0; k < nDepths; k++) {
+        const depth_m = sorted[k].depth_m ?? 0;
+        if (depth_m > seafloor) continue; // below seafloor for this cell — skip
+
+        const sMap = sliceMaps[k];
         const pt = sMap.get(`${lat}_${normLon}`);
         if (!pt) continue;
 
         const v = valueFor(pt, current.variable);
         if (!Number.isFinite(v)) continue;
 
-        const [nx, nz] = ptToXZ(lat, normLon);
-        let y = computeElevation(v, minVal, valRange, depth_m, exag, maxDepth);
+        const y = computeElevation(v, minVal, valRange, depth_m, exag, maxDepth);
         const c = getColor(pt).clone();
-
-        if (isSeafloor) {
-          // Add 3D bathymetry relief: underwater mountains, ridges, trenches, basins, and slopes
-          const bRelief = computeBathymetryRelief(lat, normLon, exag);
-          y += bRelief;
-          // Bedrock bathymetric shading
-          if (bRelief > 0.3) {
-            c.lerp(new THREE.Color('#00b4d8'), 0.35); // underwater ridge peak highlight
-          } else if (bRelief < -0.3) {
-            c.lerp(new THREE.Color('#020712'), 0.55); // deep trench shadow
-          } else {
-            c.lerp(new THREE.Color('#041226'), 0.40); // abyssal seafloor bedrock
-          }
-        }
 
         positions.push(nx, y, nz);
         colors.push(c.r, c.g, c.b);
@@ -389,8 +435,6 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
   }
 
   // 3. Connect adjacent depth levels vertically — forming a continuous 3D ocean volume
-  //    Connects both along the outer boundary and through the water column so there
-  //    are NO empty air gaps between depth slabs.
   if (nDepths > 1) {
     for (let k = 0; k < nDepths - 1; k++) {
       // Latitude-aligned vertical faces
@@ -450,6 +494,9 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
 export default function OceanSlab({
   depthSlices = [],
   volumeData = null,
+  bathyGrid = null,
+  bathyLats = null,
+  bathyLons = null,
   grid = [],
   floats = [],
   showArgo = true,
@@ -479,19 +526,19 @@ export default function OceanSlab({
   const tooltipRef = useRef(null);
 
   const dataRef = useRef({
-    depthSlices, volumeData, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
+    depthSlices, volumeData, bathyGrid, bathyLats, bathyLons, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
     variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold,
     source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading, loadingPhase,
   });
 
   useEffect(() => {
     dataRef.current = {
-      depthSlices, volumeData, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
+      depthSlices, volumeData, bathyGrid, bathyLats, bathyLons, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
       variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold,
       source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading, loadingPhase,
     };
   }, [
-    depthSlices, volumeData, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
+    depthSlices, volumeData, bathyGrid, bathyLats, bathyLons, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
     variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold,
     source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading, loadingPhase,
   ]);
@@ -507,7 +554,7 @@ export default function OceanSlab({
     scene.fog = new THREE.FogExp2('#050b16', 0.008);
 
     const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 1000);
-    camera.position.set(0, 16, 26);
+    camera.position.set(0, 8, 22);
     camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -576,8 +623,8 @@ export default function OceanSlab({
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.target.set(0, 0, 0);
-    controls.minDistance = 5;
-    controls.maxDistance = 80;
+    controls.minDistance = 0.5;
+    controls.maxDistance = 120;
     controls.update();
 
     // Lighting
@@ -665,6 +712,10 @@ export default function OceanSlab({
     let volumeMesh = null;
     let bathyMesh = null;
 
+    let targetCameraY = null;
+    let targetControlsY = null;
+    let lastAnimatedDepth = null;
+
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     let hoveredFloat = null;
@@ -707,69 +758,14 @@ export default function OceanSlab({
         ? cur.depthSlices
         : cur.volumeData?.depth_slices || [];
 
-      let slicesToRender = [];
-      const baseGrid = cur.grid || [];
-
-      if (rawSlices.length > 0) {
-        slicesToRender = rawSlices;
-      } else if (baseGrid.length > 0) {
-        // Fallback synthetic depth stratification from surface grid
-        const synthDepths = [0, 50, 100, 200, 500, 1000];
-        const fallbackBounds = cur.bounds || { west: 70, east: 85, south: 8, north: 22 };
-        const west = Number(fallbackBounds.west ?? fallbackBounds.lon_min ?? 70);
-        const east = Number(fallbackBounds.east ?? fallbackBounds.lon_max ?? 85);
-        const south = Number(fallbackBounds.south ?? fallbackBounds.lat_min ?? 8);
-        const north = Number(fallbackBounds.north ?? fallbackBounds.lat_max ?? 22);
-        const isAntimeridian = west > east;
-        const lonSpan = isAntimeridian
-          ? (180 - west) + (east + 180)
-          : Math.max(east - west, 0.001);
-        const latSpan = Math.max(north - south, 0.001);
-
-        slicesToRender = synthDepths.map((dM) => {
-          return {
-            depth_m: dM,
-            points: baseGrid.map((p) => {
-              const pointLat = Number(p.lat);
-              const pointLon = Number(p.lon);
-              const latNorm = Number.isFinite(pointLat)
-                ? (pointLat - south) / latSpan
-                : 0.5;
-              const normalizedLon = Number.isFinite(pointLon)
-                ? normalizeLon(pointLon, west, isAntimeridian)
-                : west + lonSpan / 2;
-              const lonNorm = (normalizedLon - west) / lonSpan;
-              const spatialVariance = 1.0
-                + 0.3 * Math.sin(latNorm * Math.PI) * Math.cos(lonNorm * Math.PI * 1.5);
-              const localDecay = Math.exp(-dM / (180.0 * spatialVariance));
-              const surfaceTempValue = Number(p.temperature_c ?? p.value ?? 26.0);
-              const surfaceTemp = Number.isFinite(surfaceTempValue) ? surfaceTempValue : 26.0;
-              const deepTemp = 3.5 + latNorm * 2.5;
-              const surfaceSalinityValue = Number(p.salinity_psu ?? 34.5);
-              const surfaceSalinity = Number.isFinite(surfaceSalinityValue) ? surfaceSalinityValue : 34.5;
-              const salinityDecay = Math.exp(-dM / (350.0 * spatialVariance));
-              const currentU = Number(p.current_u_ms ?? 0);
-              const currentV = Number(p.current_v_ms ?? 0);
-
-              return {
-                ...p,
-                depth_m: dM,
-                temperature_c: deepTemp + (surfaceTemp - deepTemp) * localDecay,
-                salinity_psu: 34.7 + (surfaceSalinity - 34.7) * salinityDecay,
-                current_u_ms: (Number.isFinite(currentU) ? currentU : 0) * localDecay,
-                current_v_ms: (Number.isFinite(currentV) ? currentV : 0) * localDecay,
-              };
-            }),
-          };
-        });
-      }
+      let slicesToRender = rawSlices.length > 0 ? rawSlices : [];
 
       // Preserve previously rendered scene while new data is loading
       if (!slicesToRender.length) {
         if (!volumeMesh && hudRef.current) {
           hudRef.current.innerHTML = `
             <div style="font-weight:700;color:#38bdf8;">3D OCEAN · ${(cur.regionName || '').toUpperCase()}</div>
-            <div style="font-size:11px;color:#94a3b8;">Assembling ocean volume…</div>
+            <div style="font-size:11px;color:#94a3b8;">Loading ocean volume…</div>
           `;
         }
         return;
@@ -860,7 +856,14 @@ export default function OceanSlab({
 
       // Active depth indicator position
       const selDepth = Number(cur.depth || 0);
-      activeDepthLine.position.y = depthToY(selDepth, exag, effectiveMaxDepth);
+      const activeY = depthToY(selDepth, exag, effectiveMaxDepth);
+      activeDepthLine.position.y = activeY;
+
+      if (lastAnimatedDepth !== selDepth) {
+        lastAnimatedDepth = selDepth;
+        targetCameraY = activeY + 3.2;
+        targetControlsY = activeY;
+      }
 
       // Bounds resolution for XZ coordinates
       const bnds = cur.bounds || { west: 70, east: 85, south: 8, north: 22 };
@@ -1000,7 +1003,7 @@ export default function OceanSlab({
           </div>
           <div style="display:flex;gap:10px;font-size:11px;color:#94a3b8;margin-top:2px;">
             <span>Depth: <strong style="color:#00f5d4;">${selDepth}m</strong></span>
-            <span>Layers: <strong style="color:#fff;">${layerCount} (${Math.round(minDepth)}–${Math.round(maxDepthVal)}m)</strong></span>
+            <span>Layers: <strong style="color:#fff;">${layerCount} (${minDepth < 1 ? minDepth.toFixed(3) : Math.round(minDepth)}–${maxDepthVal > 1000 ? maxDepthVal.toFixed(1) : Math.round(maxDepthVal)}m)</strong></span>
             <span>Variable: <strong style="color:#fff;text-transform:capitalize;">${cur.variable}</strong></span>
           </div>
           <div style="font-size:10.5px;color:#cbd5e1;margin-top:2px;">${srcLabel}</div>
@@ -1140,6 +1143,16 @@ export default function OceanSlab({
     // Animation render loop
     let frame;
     const animate = () => {
+      // Smooth 60-frame lerp when flying to clicked depth
+      if (targetCameraY !== null) {
+        const dy = targetCameraY - camera.position.y;
+        if (Math.abs(dy) > 0.02) {
+          camera.position.y += dy * 0.08;
+          controls.target.y += (targetControlsY - controls.target.y) * 0.08;
+        } else {
+          targetCameraY = null;
+        }
+      }
       controls.update();
       renderer.render(scene, camera);
       frame = requestAnimationFrame(animate);

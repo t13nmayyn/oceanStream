@@ -258,6 +258,48 @@ def predict_temperatures_batch(
     return _tgt_scaler.inverse_transform(y_scaled).ravel()
 
 
+from pydantic import BaseModel, Field
+
+
+# ── Request / Response schemas ──────────────────────────────────────────
+
+class PredictRequest(BaseModel):
+    latitude:      float = Field(..., ge=-90,  le=90,   description="Decimal degrees N")
+    longitude:     float = Field(..., ge=-180, le=180,  description="Decimal degrees E")
+    pressure_dbar: float = Field(..., ge=0,              description="Depth proxy in dbar (≈ metres)")
+    salinity_psu:  float = Field(..., ge=0,   le=45,    description="Practical Salinity Units")
+    date:          str   = Field(...,                    description="ISO-8601 date/datetime string")
+
+
+class PredictResponse(BaseModel):
+    predicted_temperature_C: float
+    latitude:      float
+    longitude:     float
+    pressure_dbar: float
+    salinity_psu:  float
+    date:          str
+
+
+class AnomalyRequest(BaseModel):
+    latitude:             float = Field(..., ge=-90,  le=90)
+    longitude:            float = Field(..., ge=-180, le=180)
+    pressure_dbar:        float = Field(..., ge=0)
+    salinity_psu:         float = Field(..., ge=0, le=45)
+    date:                 str
+    observed_temperature: float = Field(..., description="Measured temperature in °C")
+
+
+class AnomalyResponse(BaseModel):
+    predicted_temperature_C:  float
+    observed_temperature_C:   float
+    anomaly_C:                float   # observed − predicted
+    absolute_anomaly_C:       float
+    anomaly_score:            float   # |anomaly| / threshold
+    is_anomaly:               bool
+    direction:                str     # "warmer" | "colder" | "normal"
+    anomaly_threshold_C:      float
+
+
 # ---------------------------------------------------------------------------
 # FastAPI route definitions
 # ---------------------------------------------------------------------------
@@ -265,42 +307,6 @@ def predict_temperatures_batch(
 def register_ai_routes(app) -> None:
     """Attach /api/ai/* routes to an existing FastAPI app instance."""
     from fastapi import HTTPException
-    from pydantic import BaseModel, Field
-
-    # ── Request / Response schemas ──────────────────────────────────────────
-
-    class PredictRequest(BaseModel):
-        latitude:      float = Field(..., ge=-90,  le=90,   description="Decimal degrees N")
-        longitude:     float = Field(..., ge=-180, le=180,  description="Decimal degrees E")
-        pressure_dbar: float = Field(..., ge=0,              description="Depth proxy in dbar (≈ metres)")
-        salinity_psu:  float = Field(..., ge=0,   le=45,    description="Practical Salinity Units")
-        date:          str   = Field(...,                    description="ISO-8601 date/datetime string")
-
-    class PredictResponse(BaseModel):
-        predicted_temperature_C: float
-        latitude:      float
-        longitude:     float
-        pressure_dbar: float
-        salinity_psu:  float
-        date:          str
-
-    class AnomalyRequest(BaseModel):
-        latitude:             float = Field(..., ge=-90,  le=90)
-        longitude:            float = Field(..., ge=-180, le=180)
-        pressure_dbar:        float = Field(..., ge=0)
-        salinity_psu:         float = Field(..., ge=0, le=45)
-        date:                 str
-        observed_temperature: float = Field(..., description="Measured temperature in °C")
-
-    class AnomalyResponse(BaseModel):
-        predicted_temperature_C:  float
-        observed_temperature_C:   float
-        anomaly_C:                float   # observed − predicted
-        absolute_anomaly_C:       float
-        anomaly_score:            float   # |anomaly| / threshold
-        is_anomaly:               bool
-        direction:                str     # "warmer" | "colder" | "normal"
-        anomaly_threshold_C:      float
 
     # ── Endpoints ───────────────────────────────────────────────────────────
 
