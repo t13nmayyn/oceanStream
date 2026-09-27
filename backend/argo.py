@@ -506,12 +506,12 @@ async def fetch_bgc_argo_nearest(
 
     # Fallback to local zarr if available
     local_floats = _search_local_argo_nearest(lat, lon, radius_km, max_floats)
-    bgc_local = [f for f in local_floats if f.get("type") == "bgc"]
+    bgc_local = [f for f in local_floats if f.get("type") == "bgc" and f.get("platform_number") != "SYNTHETIC_BGC_MODEL"]
     if bgc_local:
         return bgc_local
 
-    # Fallback to gridded model virtual placeholder
-    return _bgc_argo_gridded_placeholder(lat, lon, radius_km, date_str, max_floats)
+    # Return empty list when no real BGC floats exist in range
+    return []
 
 
 def _bgc_argo_gridded_placeholder(

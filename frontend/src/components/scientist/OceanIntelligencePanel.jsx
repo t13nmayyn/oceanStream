@@ -366,7 +366,14 @@ function ArgoObservationsSection({ lat, lon }) {
   }, [lat, lon]);
 
   if (lat == null || lon == null) return null;
-  const display = (floats ?? []).slice(0, 5);
+  const validFloats = (floats ?? []).filter(
+    (f) =>
+      f.source_label !== 'synthetic_bgc_model' &&
+      f.source_label !== 'gridded_model' &&
+      f.data_type !== 'SYNTHETIC_BGC_MODEL' &&
+      f.platform_number !== 'SYNTHETIC_BGC_MODEL'
+  );
+  const display = validFloats.slice(0, 5);
 
   return (
     <div className="rounded-xl border border-[#1C3A63]/12 bg-white shadow-sm overflow-hidden">
@@ -374,7 +381,7 @@ function ArgoObservationsSection({ lat, lon }) {
         <span className="text-[11px] font-semibold text-[#0B1E3D]">Nearby Argo Floats</span>
         {floats !== null && (
           <span className="text-[9px] font-mono text-[#6B7C96]">
-            {display.length} of {floats.length} within 500 km
+            {display.length} of {validFloats.length} within 500 km
           </span>
         )}
       </div>
@@ -384,7 +391,7 @@ function ArgoObservationsSection({ lat, lon }) {
         ))}
         {!loading && floats !== null && display.length === 0 && (
           <p className="px-1 py-2 text-[9px] font-mono text-[#6B7C96]">
-            No Argo floats found within 500 km of this point.
+            No BGC floats in range
           </p>
         )}
         {!loading && display.map((f) => (

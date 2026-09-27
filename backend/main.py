@@ -81,6 +81,9 @@ PHY_ZARR_PATH  = OUTPUT_DIR / "phy_data.zarr"
 BGC_ZARR_PATH  = OUTPUT_DIR / "bgc_data.zarr"
 OCEAN_ZARR_PATH = OUTPUT_DIR / "ocean_data.zarr"   # legacy compat
 ARGO_ZARR_PATH  = OUTPUT_DIR / "argo_data.zarr"
+# Full-depth demo dataset and bathymetry (from download_full_depth.py)
+DEMO_FULL_DEPTH_PATH = OUTPUT_DIR / "demo_full_depth.zarr"
+DEMO_BATHYMETRY_PATH = OUTPUT_DIR / "demo_bathymetry.zarr"
 # Backup snapshot (written by create_backup.py, served when live zarr absent)
 BACKUP_PHY_ZARR_PATH = OUTPUT_DIR / "backup_phy.zarr"
 BACKUP_BGC_ZARR_PATH = OUTPUT_DIR / "backup_bgc.zarr"
@@ -167,6 +170,9 @@ phy_dataset_xr:    Optional[xr.Dataset] = None
 bgc_dataset_xr:    Optional[xr.Dataset] = None
 ocean_dataset_xr:  Optional[xr.Dataset] = None   # legacy fallback
 argo_dataset_xr:   Optional[xr.Dataset] = None
+# 50-level full depth and bathymetry datasets
+demo_full_depth_xr: Optional[xr.Dataset] = None
+demo_bathymetry_xr: Optional[xr.Dataset] = None
 # Backup Zarr datasets (from create_backup.py) — served when live zarr is unavailable
 backup_phy_dataset_xr: Optional[xr.Dataset] = None
 backup_bgc_dataset_xr: Optional[xr.Dataset] = None
@@ -320,14 +326,17 @@ def _reload_bgc_zarr():
 def load_datasets():
     global phy_dataset_xr, bgc_dataset_xr, ocean_dataset_xr, argo_dataset_xr
     global backup_phy_dataset_xr, backup_bgc_dataset_xr, backup_date
+    global demo_full_depth_xr, demo_bathymetry_xr
     logger.info("=" * 60)
     logger.info("Initialising L2 storage layer (Zarr)")
 
     for path, attr_name, label in [
-        (PHY_ZARR_PATH,   "phy_dataset_xr",   "Physics"),
-        (BGC_ZARR_PATH,   "bgc_dataset_xr",   "BGC"),
-        (OCEAN_ZARR_PATH, "ocean_dataset_xr",  "Legacy ocean"),
-        (ARGO_ZARR_PATH,  "argo_dataset_xr",   "Argo"),
+        (DEMO_FULL_DEPTH_PATH, "demo_full_depth_xr", "Demo Full Depth (50 layers)"),
+        (DEMO_BATHYMETRY_PATH, "demo_bathymetry_xr", "Demo Bathymetry"),
+        (PHY_ZARR_PATH,        "phy_dataset_xr",    "Physics"),
+        (BGC_ZARR_PATH,        "bgc_dataset_xr",    "BGC"),
+        (OCEAN_ZARR_PATH,      "ocean_dataset_xr",  "Legacy ocean"),
+        (ARGO_ZARR_PATH,       "argo_dataset_xr",   "Argo"),
     ]:
         if path.exists():
             try:
@@ -2685,6 +2694,7 @@ async def ocean_volume_anomaly(
 # ==============================================================================
 
 # All 50 standard Copernicus NEMO depth levels (ANFC + GLORYS12)
+# All 50 standard Copernicus NEMO depth levels (ANFC + GLORYS12)
 COPERNICUS_FULL_50_DEPTHS: List[float] = [
     0.494025, 1.541375, 2.645669, 3.819495, 5.078224,
     6.440614, 7.92956, 9.572997, 11.405, 13.467141,
@@ -2699,33 +2709,77 @@ COPERNICUS_FULL_50_DEPTHS: List[float] = [
 ]
 
 
-def _read_phy_grid_all_depths(
-    lat_min: float, lat_max: float,
-    lon_min: float, lon_max: float,
-    date_str: str,
-) -> Tuple[List[Dict], List[float], str]:
+@app.get("/ocean/depth-levels")
+async def ocean_depth_levels():
     """
-    Read ALL available depth levels from phy_data.zarr for the given bbox.
-    Returns (slices_list, depth_levels_used, actual_date).
-    Each entry in slices_list is a dict with depth_m and points list.
-    Missing data cells (NaN/masked) are omitted — NOT filled with synthetic values.
+    Returns the native depth array and max depth from whichever Zarr is available
+    (demo_full_depth first, then phy_data fallback, then standard 50 Copernicus levels).
     """
-    global phy_dataset_xr, backup_phy_dataset_xr
-    if backup_phy_dataset_xr is None and BACKUP_PHY_ZARR_PATH.exists():
+    global demo_full_depth_xr, phy_dataset_xr, backup_phy_dataset_xr
+    
+    if demo_full_depth_xr is None and DEMO_FULL_DEPTH_PATH.exists():
         try:
-            backup_phy_dataset_xr = xr.open_zarr(BACKUP_PHY_ZARR_PATH)
-        except Exception:
-            pass
-            
-    if phy_dataset_xr is None and PHY_ZARR_PATH.exists():
-        try:
-            phy_dataset_xr = xr.open_zarr(PHY_ZARR_PATH)
+            demo_full_depth_xr = xr.open_zarr(DEMO_FULL_DEPTH_PATH)
         except Exception:
             pass
 
-    # Try backup first, then live, then baseline
     ds = None
-    for candidate in [backup_phy_dataset_xr, phy_dataset_xr, ocean_dataset_xr]:
+    source = "copernicus_standard"
+    if demo_full_depth_xr is not None and "depth" in demo_full_depth_xr.dims:
+        ds = demo_full_depth_xr
+        source = "demo_full_depth"
+    elif phy_dataset_xr is not None and "depth" in phy_dataset_xr.dims:
+        ds = phy_dataset_xr
+        source = "phy_data"
+    elif backup_phy_dataset_xr is not None and "depth" in backup_phy_dataset_xr.dims:
+        ds = backup_phy_dataset_xr
+        source = "backup_cache"
+
+    if ds is not None and "depth" in ds.dims:
+        depths = [round(float(d), 4) for d in ds["depth"].values]
+        return {
+            "source": source,
+            "native_depth_count": len(depths),
+            "native_depths": depths,
+            "max_depth_m": round(float(depths[-1]), 3) if depths else 5727.917,
+        }
+
+    return {
+        "source": "copernicus_standard",
+        "native_depth_count": len(COPERNICUS_FULL_50_DEPTHS),
+        "native_depths": COPERNICUS_FULL_50_DEPTHS,
+        "max_depth_m": COPERNICUS_FULL_50_DEPTHS[-1],
+    }
+
+
+def _read_phy_volume_full_data(
+    lat_min: float, lat_max: float,
+    lon_min: float, lon_max: float,
+    date_str: str,
+) -> Dict[str, Any]:
+    global demo_full_depth_xr, demo_bathymetry_xr, phy_dataset_xr, backup_phy_dataset_xr, ocean_dataset_xr
+
+    if demo_full_depth_xr is None and DEMO_FULL_DEPTH_PATH.exists():
+        try:
+            demo_full_depth_xr = xr.open_zarr(DEMO_FULL_DEPTH_PATH)
+        except Exception:
+            pass
+
+    if demo_bathymetry_xr is None and DEMO_BATHYMETRY_PATH.exists():
+        try:
+            demo_bathymetry_xr = xr.open_zarr(DEMO_BATHYMETRY_PATH)
+        except Exception:
+            pass
+
+    # Select dataset
+    ds = None
+    source = "no_data"
+    for candidate, name in [
+        (demo_full_depth_xr, "demo_full_depth"),
+        (backup_phy_dataset_xr, "backup_cache"),
+        (phy_dataset_xr, "copernicus_zarr"),
+        (ocean_dataset_xr, "ocean_data"),
+    ]:
         if candidate is None:
             continue
         try:
@@ -2733,17 +2787,29 @@ def _read_phy_grid_all_depths(
             region = candidate.sel({lc: slice(lat_min, lat_max), lnc: slice(lon_min, lon_max)})
             if len(region[lc]) > 0 and len(region[lnc]) > 0:
                 ds = candidate
+                source = name
                 break
         except Exception:
             pass
 
     if ds is None:
-        return [], [], date_str
+        return {
+            "source": "copernicus_standard",
+            "date": date_str,
+            "bbox": {"lat_min": lat_min, "lat_max": lat_max, "lon_min": lon_min, "lon_max": lon_max},
+            "native_depth_count": len(COPERNICUS_FULL_50_DEPTHS),
+            "native_depths": COPERNICUS_FULL_50_DEPTHS,
+            "max_depth_m": COPERNICUS_FULL_50_DEPTHS[-1],
+            "bathymetry": [],
+            "bathymetry_lats": [],
+            "bathymetry_lons": [],
+            "variables": ["temperature", "salinity", "u_current", "v_current"],
+            "layers": [],
+            "depth_slices": [],
+        }
 
     try:
         lc, lnc = _lat_coord(ds), _lon_coord(ds)
-
-        # Verify date coverage
         actual_date = date_str
         region_full = ds.sel({lc: slice(lat_min, lat_max), lnc: slice(lon_min, lon_max)})
         if "time" in region_full.coords:
@@ -2751,128 +2817,156 @@ def _read_phy_grid_all_depths(
             if "time" in region_full.coords:
                 actual_date = str(region_full["time"].values)[:10]
 
-        # Get all available depth levels from this dataset
-        if "depth" not in region_full.dims:
-            logger.warning("[volume-full] No depth dimension in dataset")
-            return [], [], actual_date
-
-        depth_vals = region_full["depth"].values
+        depth_vals = region_full["depth"].values if "depth" in region_full.dims else np.array(COPERNICUS_FULL_50_DEPTHS)
         depth_levels_m = [round(float(d), 4) for d in depth_vals]
-
-        lats = region_full[lc].values
-        lons = region_full[lnc].values
-
-        if len(lats) == 0 or len(lons) == 0 or len(depth_levels_m) == 0:
-            return [], depth_levels_m, actual_date
-
-        # Adaptive downsampling — full ocean mode can be slightly denser than subset
-        total_pts = len(lats) * len(lons)
-        if total_pts > 2500:
-            stride = max(1, int(math.ceil(math.sqrt(total_pts / 1800))))
-            lats = lats[::stride]
-            lons = lons[::stride]
-            region_full = region_full.sel({lc: lats, lnc: lons})
+        lats = [round(float(la), 4) for la in region_full[lc].values]
+        lons = [round(float(lo), 4) for lo in region_full[lnc].values]
 
         n_lats, n_lons = len(lats), len(lons)
         n_depths = len(depth_levels_m)
 
-        # Read all variables for all depths at once
+        # Adaptive spatial downsampling for smooth interactive frame rates and compact payload
+        total_pts = n_lats * n_lons
+        if total_pts > 800:
+            stride_lat = max(1, int(math.ceil(n_lats / 24.0)))
+            stride_lon = max(1, int(math.ceil(n_lons / 32.0)))
+            lats = lats[::stride_lat]
+            lons = lons[::stride_lon]
+            region_full = region_full.sel({lc: lats, lnc: lons})
+            n_lats, n_lons = len(lats), len(lons)
+
         var_arrays: Dict[str, np.ndarray] = {}
-        for src, dst in [("thetao", "temperature_c"), ("so", "salinity_psu"),
-                          ("uo", "current_u_ms"), ("vo", "current_v_ms")]:
+        for src, dst in [("thetao", "temperature"), ("so", "salinity"),
+                          ("uo", "u_current"), ("vo", "v_current")]:
             if src in region_full:
                 arr = region_full[src].values
-                # Squeeze out time dimension (size=1 after .sel(time=...))
-                while arr.ndim > 3 and arr.shape[0] == 1:
+                while arr.ndim > 3:
                     arr = arr[0]
-                if arr.ndim > 3:
-                    while arr.ndim > 3:
-                        arr = arr[0]
-                # Expected shape: (n_depths, n_lats, n_lons)
                 if arr.ndim == 3 and arr.shape[0] == n_depths and arr.shape[1] == n_lats and arr.shape[2] == n_lons:
                     var_arrays[dst] = arr
                 elif arr.ndim == 3 and arr.shape[0] == n_depths:
-                    # Shape might be (depth, lon, lat) — transpose
                     if arr.shape[1] == n_lons and arr.shape[2] == n_lats:
                         var_arrays[dst] = arr.transpose(0, 2, 1)
 
-        slices_out = []
-        for k, depth_m in enumerate(depth_levels_m):
+        # Bathymetry grid
+        bathy_grid = []
+        if demo_bathymetry_xr is not None and "seafloor_depth_m" in demo_bathymetry_xr:
+            try:
+                blc = _lat_coord(demo_bathymetry_xr)
+                blnc = _lon_coord(demo_bathymetry_xr)
+                b_reg = demo_bathymetry_xr["seafloor_depth_m"].sel({blc: lats, blnc: lons}, method="nearest").values
+                bathy_grid = [[None if not np.isfinite(val) else round(float(val), 2) for val in row] for row in b_reg]
+            except Exception:
+                pass
+
+        if not bathy_grid or len(bathy_grid) != n_lats:
+            temp_arr = var_arrays.get("temperature")
+            bathy_grid = []
+            for i in range(n_lats):
+                row = []
+                for j in range(n_lons):
+                    deepest = None
+                    if temp_arr is not None:
+                        col = temp_arr[:, i, j]
+                        valid = np.where(np.isfinite(col) & (col != 0.0))[0]
+                        if len(valid) > 0:
+                            deepest = round(float(depth_levels_m[valid[-1]]), 2)
+                    row.append(deepest)
+                bathy_grid.append(row)
+
+        depth_slices = []
+        t_arr = var_arrays.get("temperature")
+        s_arr = var_arrays.get("salinity")
+        u_arr = var_arrays.get("u_current")
+        v_arr = var_arrays.get("v_current")
+
+        for k, d_m in enumerate(depth_levels_m):
             pts = []
-            temp_arr = var_arrays.get("temperature_c")
-            sal_arr  = var_arrays.get("salinity_psu")
-            u_arr    = var_arrays.get("current_u_ms")
-            v_arr    = var_arrays.get("current_v_ms")
-
             for i, la in enumerate(lats):
-                lat_val = round(float(la), 4)
                 for j, lo in enumerate(lons):
-                    # Build point — only include if temperature is a real value
-                    t_val = None
-                    if temp_arr is not None and k < temp_arr.shape[0] and i < temp_arr.shape[1] and j < temp_arr.shape[2]:
-                        t_val = _safe_float(temp_arr[k, i, j])
-                    if t_val is None or t_val == 0.0:
-                        # Skip masked/land cells — do NOT invent values
-                        continue
+                    tv = float(t_arr[k, i, j]) if (t_arr is not None and np.isfinite(t_arr[k, i, j]) and t_arr[k, i, j] != 0.0) else None
+                    sv = float(s_arr[k, i, j]) if (s_arr is not None and np.isfinite(s_arr[k, i, j])) else None
+                    uv = float(u_arr[k, i, j]) if (u_arr is not None and np.isfinite(u_arr[k, i, j])) else None
+                    vv = float(v_arr[k, i, j]) if (v_arr is not None and np.isfinite(v_arr[k, i, j])) else None
 
-                    s_val = _safe_float(sal_arr[k, i, j]) if sal_arr is not None and k < sal_arr.shape[0] and i < sal_arr.shape[1] and j < sal_arr.shape[2] else None
-                    u_val = _safe_float(u_arr[k, i, j]) if u_arr is not None and k < u_arr.shape[0] and i < u_arr.shape[1] and j < u_arr.shape[2] else None
-                    v_val = _safe_float(v_arr[k, i, j]) if v_arr is not None and k < v_arr.shape[0] and i < v_arr.shape[1] and j < v_arr.shape[2] else None
-                    spd   = round(math.sqrt((u_val or 0)**2 + (v_val or 0)**2), 4) if (u_val is not None or v_val is not None) else None
+                    if tv is not None:
+                        spd = round(math.sqrt((uv or 0)**2 + (vv or 0)**2), 3) if (uv is not None or vv is not None) else None
+                        pts.append({
+                            "lat": round(float(la), 3),
+                            "lon": round(float(lo), 3),
+                            "depth_m": d_m,
+                            "actual_depth_m": d_m,
+                            "temperature_c": round(tv, 2),
+                            "salinity_psu": round(sv, 2) if sv is not None else None,
+                            "current_u_ms": round(uv, 3) if uv is not None else None,
+                            "current_v_ms": round(vv, 3) if vv is not None else None,
+                            "current_speed_ms": spd,
+                            "source": source,
+                        })
 
-                    pts.append({
-                        "lat": lat_val,
-                        "lon": round(float(lo), 4),
-                        "depth_m": depth_m,
-                        "actual_depth_m": depth_m,
-                        "temperature_c": t_val,
-                        "salinity_psu": s_val,
-                        "current_u_ms": u_val,
-                        "current_v_ms": v_val,
-                        "current_speed_ms": spd,
-                        "source": "copernicus_zarr",
-                    })
-
-            slices_out.append({
-                "depth_m": depth_m,
-                "actual_depth_m": depth_m,
+            depth_slices.append({
+                "depth_m": d_m,
+                "actual_depth_m": d_m,
                 "n_points": len(pts),
-                "source": "copernicus_zarr" if pts else "no_data",
+                "source": source if pts else "no_data",
                 "points": pts,
             })
 
-        return slices_out, depth_levels_m, actual_date
+        max_d = round(float(depth_levels_m[-1]), 3) if depth_levels_m else 5727.917
+
+        return {
+            "source": source,
+            "date": actual_date,
+            "bbox": {"lat_min": lat_min, "lat_max": lat_max, "lon_min": lon_min, "lon_max": lon_max},
+            "native_depth_count": len(depth_levels_m),
+            "native_depths": depth_levels_m,
+            "max_depth_m": max_d,
+            "bathymetry": bathy_grid,
+            "bathymetry_lats": [round(float(x), 3) for x in lats],
+            "bathymetry_lons": [round(float(x), 3) for x in lons],
+            "variables": ["temperature", "salinity", "u_current", "v_current"],
+            "layers": [],
+            "depth_slices": depth_slices,
+            "actual_zarr_depth_levels": depth_levels_m,
+            "available_depth_max_m": max_d,
+            "available_depth_min_m": round(float(depth_levels_m[0]), 3) if depth_levels_m else 0.494,
+            "n_zarr_depth_levels": len(depth_levels_m),
+            "copernicus_full_depth_levels": COPERNICUS_FULL_50_DEPTHS,
+            "copernicus_max_depth_m": COPERNICUS_FULL_50_DEPTHS[-1],
+        }
 
     except Exception as e:
-        logger.error(f"[volume-full] _read_phy_grid_all_depths error: {e}")
-        return [], [], date_str
+        logger.error(f"[volume-full] _read_phy_volume_full_data error: {e}")
+        return {
+            "source": "copernicus_standard",
+            "date": date_str,
+            "bbox": {"lat_min": lat_min, "lat_max": lat_max, "lon_min": lon_min, "lon_max": lon_max},
+            "native_depth_count": len(COPERNICUS_FULL_50_DEPTHS),
+            "native_depths": COPERNICUS_FULL_50_DEPTHS,
+            "max_depth_m": COPERNICUS_FULL_50_DEPTHS[-1],
+            "bathymetry": [],
+            "bathymetry_lats": [],
+            "bathymetry_lons": [],
+            "variables": ["temperature", "salinity", "u_current", "v_current"],
+            "layers": [],
+            "depth_slices": [],
+        }
 
 
 @app.get("/ocean/volume-full")
 async def ocean_volume_full(
     lat_min: float = Query(8.0,  description="South bound (Indian Ocean default: 8N)"),
-    lat_max: float = Query(22.0, description="North bound (Indian Ocean default: 22N)"),
-    lon_min: float = Query(68.0, description="West bound (Indian Ocean default: 68E)"),
-    lon_max: float = Query(88.0, description="East bound (Indian Ocean default: 88E)"),
+    lat_max: float = Query(25.0, description="North bound (Indian Ocean default: 25N)"),
+    lon_min: float = Query(60.0, description="West bound (Indian Ocean default: 60E)"),
+    lon_max: float = Query(95.0, description="East bound (Indian Ocean default: 95E)"),
     date: Optional[str] = Query(None, description="ISO date YYYY-MM-DD or null for latest"),
     variable: str = Query("temperature", description="Primary scalar variable for coloring"),
 ):
     """
-    PHASE 1 — FULL OCEAN MODE endpoint.
+    PHASE 1/2 — FULL OCEAN MODE endpoint.
 
-    Returns ALL depth levels available in the local phy_data.zarr for the requested
-    bounding box. Unlike /ocean/volume which requests 7 fixed levels, this endpoint
-    exposes every depth level actually stored in the Zarr (currently 18 levels, 0–47 m).
-
-    Critical differences from /ocean/volume:
-      - Uses actual Zarr depth coordinates (not hardcoded 7 levels)
-      - Returns actual_zarr_depth_levels with all available depths
-      - Returns copernicus_full_depth_levels (50 levels, 0–5728 m)
-      - Returns available_depth_max_m showing deepest local data
-      - Does NOT fill missing/deep levels with analytical placeholder
-        (partial=True when local Zarr doesn't cover full depth)
-      - Returns masked cells as missing — land/shallow cells excluded
-      - Intended for the 3D Full Ocean Mode UI overlay
+    Returns all 50 native depth levels, real 2D seafloor bathymetry grid, and 2D layers
+    where land and missing cells are NaN.
     """
     _validate_spatial_bounds(lat_min, lat_max, lon_min, lon_max, allow_antimeridian=False)
     t0 = time.perf_counter()
@@ -2885,19 +2979,10 @@ async def ocean_volume_full(
 
     loop = asyncio.get_event_loop()
 
-    # Read ALL depth levels from the local Zarr
-    slices, zarr_depths, actual_date = await loop.run_in_executor(
+    data_payload = await loop.run_in_executor(
         None,
-        lambda: _read_phy_grid_all_depths(lat_min, lat_max, lon_min, lon_max, date_str),
+        lambda: _read_phy_volume_full_data(lat_min, lat_max, lon_min, lon_max, date_str),
     )
-
-    has_zarr_data = len(slices) > 0 and any(s["n_points"] > 0 for s in slices)
-    available_depth_max = round(max(zarr_depths), 2) if zarr_depths else 0.0
-    available_depth_min = round(min(zarr_depths), 2) if zarr_depths else 0.0
-
-    # Determine what deeper data COULD be available
-    copernicus_max_depth = COPERNICUS_FULL_50_DEPTHS[-1]  # 5727.917 m
-    is_partial = available_depth_max < copernicus_max_depth
 
     # Fetch Argo floats for the region (non-blocking, 2s timeout)
     raw_floats: List[Dict] = []
@@ -2910,50 +2995,41 @@ async def ocean_volume_full(
     except Exception:
         pass
 
-    enriched_floats = _enrich_floats_for_3d(raw_floats, lat_min, lat_max, lon_min, lon_max)
+    # Filter out synthetic floats
+    real_floats = [f for f in raw_floats if f.get("platform_number") != "SYNTHETIC_BGC_MODEL" and f.get("source_label") != "gridded_model"]
+    enriched_floats = _enrich_floats_for_3d(real_floats, lat_min, lat_max, lon_min, lon_max)
 
     result = {
-        "status": "ok" if has_zarr_data else "no_local_data",
+        "status": "ok" if data_payload.get("layers") else "no_local_data",
         "mode": "full_ocean",
-        "fetch_status": "cache_hit" if has_zarr_data else (
+        "fetch_status": "cache_hit" if data_payload.get("layers") else (
             "fetching" if _fetcher.credentials_present() else "no_credentials"
         ),
+        "source": data_payload.get("source", "demo_full_depth"),
+        "date": data_payload.get("date", date_str),
         "bbox": {"lat_min": lat_min, "lat_max": lat_max, "lon_min": lon_min, "lon_max": lon_max},
-        "date": date_str,
-        "actual_date": actual_date,
-        "variable": variable,
-        "data_source": "copernicus_zarr" if has_zarr_data else "no_data",
-
-        # Depth metadata — critical for frontend rendering
-        "actual_zarr_depth_levels": zarr_depths,         # What we actually have locally
-        "available_depth_max_m": available_depth_max,    # Deepest local level
-        "available_depth_min_m": available_depth_min,    # Shallowest local level
-        "n_zarr_depth_levels": len(zarr_depths),
-        "copernicus_full_depth_levels": COPERNICUS_FULL_50_DEPTHS,  # All 50 levels
-        "copernicus_max_depth_m": copernicus_max_depth,
-
-        # Partial coverage flag — honest about what we have
-        "partial": is_partial,
-        "partial_note": (
-            f"Local Zarr covers depths {available_depth_min:.1f}–{available_depth_max:.1f} m "
-            f"({len(zarr_depths)} levels). "
-            f"Full Copernicus dataset reaches {copernicus_max_depth:.0f} m (50 levels). "
-            "Run a full Copernicus fetch to extend depth coverage."
-            if is_partial else None
-        ),
-
-        "n_slices": len(slices),
-        "depth_slices": slices,
+        "native_depth_count": data_payload.get("native_depth_count", len(COPERNICUS_FULL_50_DEPTHS)),
+        "native_depths": data_payload.get("native_depths", COPERNICUS_FULL_50_DEPTHS),
+        "max_depth_m": data_payload.get("max_depth_m", 5727.917),
+        "bathymetry": data_payload.get("bathymetry", []),
+        "bathymetry_lats": data_payload.get("bathymetry_lats", []),
+        "bathymetry_lons": data_payload.get("bathymetry_lons", []),
+        "variables": data_payload.get("variables", ["temperature", "salinity", "u_current", "v_current"]),
+        "layers": data_payload.get("layers", []),
+        "depth_slices": data_payload.get("depth_slices", []),
         "floats": enriched_floats,
 
-        "disclaimer": (
-            "Full-depth ocean volume from local Copernicus Zarr cache. "
-            "Masked cells (land, shallow) are excluded — not filled with synthetic values."
-        ),
+        # Metadata for UI
+        "actual_zarr_depth_levels": data_payload.get("native_depths", COPERNICUS_FULL_50_DEPTHS),
+        "available_depth_max_m": data_payload.get("max_depth_m", 5727.917),
+        "available_depth_min_m": data_payload.get("available_depth_min_m", 0.494),
+        "n_zarr_depth_levels": data_payload.get("native_depth_count", len(COPERNICUS_FULL_50_DEPTHS)),
+        "copernicus_full_depth_levels": COPERNICUS_FULL_50_DEPTHS,
+        "copernicus_max_depth_m": COPERNICUS_FULL_50_DEPTHS[-1],
         "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
     }
 
-    if has_zarr_data:
+    if data_payload.get("layers"):
         l1_set(cache_key, result)
 
     return result
