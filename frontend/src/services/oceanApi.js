@@ -91,6 +91,35 @@ export async function getOceanVolume(bounds, depths = '0,10,50,100,200,500,1000'
   }
 }
 
+/**
+ * Fetch Full-depth 3D ocean volume using all available Zarr depth levels (Phase 1 Full Ocean Mode)
+ */
+export async function getOceanVolumeFull(bounds, date = null, variable = 'temperature') {
+  const south = Number(bounds.south ?? bounds.lat_min ?? 8);
+  const north = Number(bounds.north ?? bounds.lat_max ?? 20);
+  const west = Number(bounds.west ?? bounds.lon_min ?? 71);
+  const east = Number(bounds.east ?? bounds.lon_max ?? 88);
+
+  const params = new URLSearchParams({
+    lat_min: south.toFixed(2),
+    lat_max: north.toFixed(2),
+    lon_min: west.toFixed(2),
+    lon_max: east.toFixed(2),
+    variable,
+  });
+  if (date) params.append('date', date);
+
+  try {
+    const res = await fetch(`${API_BASE}/ocean/volume-full?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('[oceanApi] getOceanVolumeFull error:', err.message);
+    return null;
+  }
+}
+
+
 export async function getOceanCoverage(bounds) {
   const params = new URLSearchParams({
     lat_min: bounds.south.toFixed(2),
