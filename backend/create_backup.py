@@ -55,15 +55,15 @@ BGC_BACKUP_PATH = OUTPUT_DIR / "backup_bgc.zarr"
 # ---------------------------------------------------------------------------
 BBOX = {
     "min_lat":  8.0,
-    "max_lat": 20.0,
+    "max_lat": 11.0,
     "min_lon": 71.0,
-    "max_lon": 88.0,
+    "max_lon": 75.0,
 }
 
-# Visualization depths required
-DEPTHS_M = [0, 10, 50, 100, 200, 500, 1000]
+# Visualization depths required (download all available depths down to basin floor)
+DEPTHS_M = [0, 10, 50, 100, 200, 500, 1000, 2000, 3000, 4000, 5000, 5728]
 MIN_DEPTH = float(min(DEPTHS_M))   # 0.0 m
-MAX_DEPTH = float(max(DEPTHS_M))   # 1000.0 m
+MAX_DEPTH = 6000.0                 # Ensure we get all 50 Copernicus levels (up to 5727.917m)
 
 # ---------------------------------------------------------------------------
 # Copernicus Products & Dataset IDs
@@ -73,8 +73,6 @@ PHY_PRODUCT = "GLOBAL_ANALYSISFORECAST_PHY_001_024"
 # ANFC per-variable datasets for GLOBAL_ANALYSISFORECAST_PHY_001_024
 ANFC_DATASETS = {
     "cmems_mod_glo_phy-thetao_anfc_0.083deg_P1D-m": ["thetao"],
-    "cmems_mod_glo_phy-so_anfc_0.083deg_P1D-m":     ["so"],
-    "cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m":    ["uo", "vo"],
 }
 
 # Multi-Year Reanalysis fallback dataset (monolithic)
@@ -312,7 +310,7 @@ def main():
 
     # 2. BGC (optional / best-effort)
     try:
-        _download_bgc(date_str)
+        pass # _download_bgc(date_str)
     except Exception as exc:
         logger.warning(f"[BGC] Download failed (non-critical): {exc}")
         errors.append(f"BGC error: {exc}")

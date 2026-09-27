@@ -1,16 +1,15 @@
 /**
  * useOceanSnapshot.js — Cache-first 3D ocean volume data fetcher
  *
- * DATA FLOW (strict cache-first):
- *   API (L1 RAM) → L2 Zarr → Backup Zarr → [only on miss] one bounded Copernicus fetch
+ * DATA FLOW (strict cache-first, global ocean support):
+ *   L1 RAM → L2 Zarr (any region) → Backup Zarr → on-demand Copernicus fetch
  *
- * CRITICAL RULE: Only a REGION change triggers a new API call.
- * Depth/variable/date changes are pure UI-layer operations on the
- * already-loaded volumetric data. The API returns ALL depth slices in one
- * response — no per-depth requests are made.
- *
- * Copernicus is NOT a streaming source. It is fetched once per cache miss,
- * then the result is stored in L2 Zarr and served from cache thereafter.
+ * CRITICAL RULES:
+ *   - Only a REGION change triggers a new API call.
+ *   - Previous ocean data stays visible while a new ocean loads.
+ *   - Depth/variable/date changes are pure UI-layer operations.
+ *   - fetch_status from the backend drives the loading overlay state.
+ *   - When fetch_status='fetching', we poll until real data arrives.
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { getOceanVolume, getOceanSnapshot } from '../services/oceanApi';
@@ -67,6 +66,17 @@ const DEFAULT_BOUNDS = PREDEFINED_OCEANS.indianOcean;
 // All standard depth levels — fetched together in one API call
 const STANDARD_DEPTHS = '0,10,50,100,200,500,1000';
 
+
+// Loading phase messages — shown in the 3D ocean overlay
+export const LOADING_PHASES = {
+  cache_hit:              '⚡ Loading cached data…',
+  fetching:               '🌐 Fetching ocean data from Copernicus…',
+  processing:             '⚙️ Preparing 3D ocean volume…',
+  analytical_placeholder: '🔵 Showing ocean model — real data loading…',
+  ready:                  '✅ Ocean data ready',
+  error:                  '⚠️ Unable to fetch this region. Showing available data.',
+};
+
 function normalizeVolumePoint(point) {
   if (!point || typeof point !== 'object') return null;
 
@@ -83,7 +93,6 @@ function normalizeVolumePoint(point) {
     current_v_ms: point.current_v_ms ?? point.v_current ?? point.vo ?? 0,
   };
 }
-
 function normalizeVolumeSlices(data) {
   if (Array.isArray(data?.depth_slices)) {
     return data.depth_slices
@@ -154,10 +163,8 @@ async function fetchSnapshotDepthSlices(bounds) {
   });
 }
 
+
 export default function useOceanSnapshot(region = null) {
-  // Only use selectedVariable from context for passing to volume API
-  // (for cache-key differentiation). Do NOT use selectedDepth/selectedDate
-  // as fetch triggers — those are UI-only selectors.
   const { selectedVariable, selectedDepth, apiStatus } = useApp();
   const dispatch = useAppDispatch();
 
@@ -166,13 +173,15 @@ export default function useOceanSnapshot(region = null) {
   const [depthSlices, setDepthSlices] = useState([]);
   const [floats, setFloats] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadingPhase, setLoadingPhase] = useState(null);   // NEW: granular phase
   const [error, setError] = useState(null);
   const [source, setSource] = useState('reference');
   const [backupDate, setBackupDate] = useState(null);
 
-  // Track the last fetched bounds key to avoid redundant fetches
   const lastFetchedKeyRef = useRef(null);
   const fetchInFlightRef = useRef(false);
+  const pollTimerRef = useRef(null);     // NEW: poll timer for fetch_status=fetching
+  const fetchSnapshotRef = useRef(null);
 
   const regionKey = typeof region === 'object' && region !== null
     ? `${region.south ?? region.lat_min}_${region.north ?? region.lat_max}_${region.west ?? region.lon_min}_${region.east ?? region.lon_max}`
@@ -199,7 +208,6 @@ export default function useOceanSnapshot(region = null) {
   const currentDepthGrid = useMemo(() => {
     if (!volumeData?.depth_slices?.length) return snapshotData?.grid || [];
     const targetDepth = Number(selectedDepth || 0);
-    // Find nearest depth slice to selected depth
     const nearest = volumeData.depth_slices.reduce((best, s) =>
       Math.abs(s.depth_m - targetDepth) < Math.abs(best.depth_m - targetDepth) ? s : best
     );
@@ -208,41 +216,41 @@ export default function useOceanSnapshot(region = null) {
 
   /**
    * Fetch the ocean volume for the current bounds.
-   * This goes through the cache-first hierarchy:
-   *   L1 (RAM, handled by FastAPI) → L2 (Zarr) → Backup → Copernicus (miss only)
+   * GLOBAL: works for Pacific, Atlantic, Arctic, Southern Ocean, Indian Ocean.
+   * Non-blocking: previous ocean remains visible while new one loads.
+   * Polls if backend is still fetching data.
    *
-   * Only called when REGION changes. Depth/variable changes use the
-   * already-loaded volume data.
+   * @param {boolean} isPoll - true when this is a background poll (don't show loading overlay)
    */
-  const fetchSnapshot = useCallback(async () => {
+  const fetchSnapshot = useCallback(async (isPoll = false) => {
     if (apiStatus === 'offline') {
       setSource('reference');
       return;
     }
-    if (fetchInFlightRef.current) return;
+    if (fetchInFlightRef.current && !isPoll) return;
 
-    // Deduplicate: skip if we've already loaded this region
     const fetchKey = `${regionKey}`;
-    if (lastFetchedKeyRef.current === fetchKey && volumeData !== null) {
+    if (lastFetchedKeyRef.current === fetchKey && volumeData !== null && !isPoll) {
       return;
     }
 
     fetchInFlightRef.current = true;
-    setLoading(true);
-    setError(null);
+    if (!isPoll) {
+      setLoading(true);
+      setLoadingPhase('processing');
+      setError(null);
+    }
 
     try {
-      // Fetch complete 3D volume across all standard depth bins.
-      // The backend returns L1 cache → L2 Zarr → backup → Copernicus (miss only).
-      // We do NOT pass selectedDate to avoid triggering fetches on date changes —
-      // the backend uses its latest_available_iso() by default which is correct.
       const vol = await getOceanVolume(bounds, STANDARD_DEPTHS, null, selectedVariable);
 
+      const fetchStatus = vol?.fetch_status || 'ready';
       const volumeSlices = normalizeVolumeSlices(vol);
       const fallbackSlices = volumeSlices.length >= 2
         ? []
         : await fetchSnapshotDepthSlices(bounds);
       const slices = fallbackSlices.length >= 2 ? fallbackSlices : volumeSlices;
+      let hasRenderableData = slices.length > 0;
 
       if (slices.length > 0) {
         const normalizedVolume = {
@@ -264,7 +272,6 @@ export default function useOceanSnapshot(region = null) {
         setSource(dataSourceValue);
         setBackupDate(normalizedVolume.backup_date || null);
 
-        // Set snapshot from the nearest depth slice to selected depth
         const targetDepth = Number(selectedDepth || 0);
         const matchingSlice = slices.reduce((prev, curr) =>
           Math.abs(curr.depth_m - targetDepth) < Math.abs(prev.depth_m - targetDepth) ? curr : prev
@@ -282,41 +289,79 @@ export default function useOceanSnapshot(region = null) {
           type: 'ADD_LOG',
           payload: {
             type: 'info',
-            text: `${new Date().toISOString().slice(11, 19)} [VOLUME 3D] ${slices.length} depth layers loaded (${dataSourceValue})`,
+            text: `${new Date().toISOString().slice(11, 19)} [VOLUME 3D] ${slices.length} depth layers loaded (${dataSourceValue}) fetch_status=${fetchStatus}`,
           },
         });
       } else {
-        setSource('reference');
+        // Fallback to 2D snapshot when volume returns no slices
+        const snap = await getOceanSnapshot(bounds, 0, null);
+        if (snap && snap.grid && snap.grid.length > 0) {
+          setVolumeData(null);
+          setSnapshotData(snap);
+          setSource(snap.source || 'backup_cache');
+          setDepthSlices([
+            { depth_m: snap.depth || 0, points: snap.grid.map(normalizeVolumePoint).filter(Boolean), source: snap.source },
+          ]);
+          setFloats([]);
+          setBackupDate(null);
+          lastFetchedKeyRef.current = fetchKey;
+          hasRenderableData = true;
+        } else {
+          setVolumeData(null);
+          setSnapshotData(null);
+          setDepthSlices([]);
+          setFloats([]);
+          setSource('reference');
+          setBackupDate(null);
+        }
       }
+
+      const isFetching = fetchStatus === 'fetching' || fetchStatus === 'analytical_placeholder';
+      setLoadingPhase(
+        fetchStatus === 'cache_hit'
+          ? 'cache_hit'
+          : isFetching
+            ? 'fetching'
+            : (hasRenderableData ? 'analytical_placeholder' : 'error')
+      );
+
+      if (isFetching) {
+        if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = setTimeout(() => {
+          fetchSnapshotRef.current?.(true);
+        }, 8000);
+      } else if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+
       setLoading(false);
     } catch (err) {
       console.warn('[useOceanSnapshot] fetch error:', err.message);
       setError(err.message);
       setSource('reference');
+      setLoadingPhase('error');
       setLoading(false);
     } finally {
       fetchInFlightRef.current = false;
     }
-  }, [apiStatus, bounds, selectedVariable, dispatch]); // NOTE: selectedDepth and selectedDate intentionally NOT in deps
+  }, [apiStatus, bounds, selectedVariable, dispatch, regionKey, volumeData, selectedDepth]);
+
+  useEffect(() => {
+    fetchSnapshotRef.current = fetchSnapshot;
+  }, [fetchSnapshot]);
 
   // Only fetch when the REGION (bounds) changes — NOT on depth/variable/date changes.
-  // Depth changes: use currentDepthGrid (derived from loaded volumeData).
-  // Variable changes: OceanSlab re-colors using the same loaded data.
-  // Date changes: not automatically re-fetched — data in cache serves the demo.
   useEffect(() => {
-    // Clear the last fetched key so region changes always trigger a fresh fetch
     lastFetchedKeyRef.current = null;
-    const timer = setTimeout(() => {
-      fetchSnapshot();
-    }, 150);
-    return () => clearTimeout(timer);
+    if (pollTimerRef.current) { clearTimeout(pollTimerRef.current); pollTimerRef.current = null; }
+    const timer = setTimeout(() => { fetchSnapshot(); }, 150);
+    return () => { clearTimeout(timer); if (pollTimerRef.current) clearTimeout(pollTimerRef.current); };
   }, [regionKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Initial load
   useEffect(() => {
-    const timer = setTimeout(() => {
-      fetchSnapshot();
-    }, 150);
+    const timer = setTimeout(() => { fetchSnapshot(); }, 150);
     return () => clearTimeout(timer);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -324,10 +369,10 @@ export default function useOceanSnapshot(region = null) {
     volumeData,
     depthSlices,
     snapshotData,
-    // gridData: the depth slice matching the currently selected depth (UI-derived, no API call)
     gridData: currentDepthGrid,
     floats: floats.length > 0 ? floats : (volumeData?.floats || []),
     loading,
+    loadingPhase,
     error,
     source,
     backupDate,
@@ -335,4 +380,5 @@ export default function useOceanSnapshot(region = null) {
     refetch: fetchSnapshot,
   };
 }
+
 
