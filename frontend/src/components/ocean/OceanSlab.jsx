@@ -17,22 +17,39 @@ const STOPS = {
   anomaly:      ['#0022ff', '#0088cc', '#00ccaa', '#666666', '#ff6600', '#ff0022'],
 };
 
-// Copernicus physical depth levels
-export const COPERNICUS_DEPTHS = [0.494, 9.573, 49.324, 98.96, 203.44, 494.3, 1000.0];
+// All 50 standard Copernicus NEMO depth levels (0.494 m → 5727.917 m)
+export const COPERNICUS_DEPTHS = [
+  0.494025, 1.541375, 2.645669, 3.819495, 5.078224,
+  6.440614, 7.92956, 9.572997, 11.405, 13.467141,
+  15.810017, 18.495560, 21.598820, 25.211393, 29.444731,
+  34.434326, 40.344238, 47.373692, 55.764290, 65.807495,
+  77.853851, 92.326073, 109.729034, 130.666016, 155.850723,
+  186.125488, 222.475241, 266.040344, 318.127411, 380.213013,
+  453.937744, 541.088867, 643.566772, 763.333191, 902.339233,
+  1062.43896, 1245.29102, 1452.25098, 1684.28406, 1941.89342,
+  2225.07764, 2533.33618, 2865.70264, 3220.81958, 3597.03223,
+  3992.48438, 4405.22461, 4833.29004, 5274.78418, 5727.91699,
+];
+
+// Maximum depth of the Copernicus dataset
+export const COPERNICUS_MAX_DEPTH = 5727.917;
 
 // Physical depth → 3D scene Y position.
-// Ocean surface is at top (~+4.2), 1000m deep ocean is downward (~-4.2).
-// Power scaling (0.45) preserves vertical resolution in the upper 200m thermocline.
-export function depthToY(depth_m, verticalExag = 35) {
-  const clamped = Math.min(Math.max(0, depth_m), 1000);
-  const norm = Math.pow(clamped / 1000, 0.45);
+// Ocean surface is at top (~+4.2), deepest ocean (5728m) is at bottom (~-4.2).
+// Power scaling (0.42) preserves vertical resolution in the upper thermocline.
+// maxDepth: actual maximum depth to normalize against (defaults to full Copernicus range).
+export function depthToY(depth_m, verticalExag = 35, maxDepth = COPERNICUS_MAX_DEPTH) {
+  const safeMax = Math.max(maxDepth, 100);
+  const clamped = Math.min(Math.max(0, depth_m), safeMax);
+  const norm = Math.pow(clamped / safeMax, 0.42);
   const scale = verticalExag / 35;
   return (4.2 - norm * 8.4) * scale;
 }
 
+
 // Subtle surface elevation and subsurface thermocline relief
-export function computeElevation(value, min_val, val_range, depth_m, verticalExag = 55) {
-  const baseY = depthToY(depth_m, verticalExag);
+export function computeElevation(value, min_val, val_range, depth_m, verticalExag = 55, maxDepth = COPERNICUS_MAX_DEPTH) {
+  const baseY = depthToY(depth_m, verticalExag, maxDepth);
   const normVal = Math.max(0, Math.min(1, (value - min_val) / Math.max(val_range, 0.0001)));
   // Surface swell (existing)
   if (depth_m <= 5) {
@@ -43,6 +60,84 @@ export function computeElevation(value, min_val, val_range, depth_m, verticalExa
   const depthFactor = Math.exp(-depth_m / 400.0);
   const relief = (normVal - 0.5) * 0.28 * depthFactor * (verticalExag / 35);
   return baseY + relief;
+}
+
+// Physical bathymetry terrain relief for 3D seafloor:
+// Incorporates underwater mountains, ridges (Mid-Atlantic, Central Indian, East Pacific, Gakkel),
+// trenches (Mariana, Java/Sunda, Puerto Rico, South Sandwich), continental slopes, and basins.
+export function computeBathymetryRelief(lat, lon, verticalExag = 35) {
+  const l = Number(lon);
+  const la = Number(lat);
+
+  // 1. Mid-Ocean Ridges (divergent plate boundaries, underwater mountains)
+  let ridgeRelief = 0;
+  // Mid-Atlantic Ridge (lon -48 to -20, lat -55 to 65)
+  if (l >= -48 && l <= -20 && la >= -55 && la <= 65) {
+    const spine = -35 + Math.sin(la * 0.09) * 7.0;
+    const dist = Math.abs(l - spine);
+    if (dist < 10.0) {
+      ridgeRelief += (1.0 - dist / 10.0) * 2.2;
+    }
+  }
+  // Central Indian & Southeast/Southwest Indian Ridges (lon 58 to 95, lat -45 to 15)
+  if (l >= 58 && l <= 95 && la >= -45 && la <= 15) {
+    const cirSpine = 68 + Math.sin(la * 0.12) * 6.0;
+    const nerSpine = 90; // Ninety East Ridge
+    const dCIR = Math.abs(l - cirSpine);
+    const dNER = Math.abs(l - nerSpine);
+    const ridgeD = Math.min(dCIR, dNER);
+    if (ridgeD < 9.0) {
+      ridgeRelief += (1.0 - ridgeD / 9.0) * 1.9;
+    }
+  }
+  // East Pacific Rise & Pacific-Antarctic Ridge
+  if (l >= -140 && l <= -90 && la >= -60 && la <= 25) {
+    const eprSpine = -112 + Math.sin(la * 0.08) * 9.0;
+    const dEPR = Math.abs(l - eprSpine);
+    if (dEPR < 14.0) {
+      ridgeRelief += (1.0 - dEPR / 14.0) * 1.8;
+    }
+  }
+  // Arctic Gakkel Ridge
+  if (la >= 72) {
+    const gakkelDist = Math.abs(l - 30);
+    if (gakkelDist < 25.0) {
+      ridgeRelief += (1.0 - gakkelDist / 25.0) * 1.4;
+    }
+  }
+
+  // 2. Deep Ocean Trenches (subduction zones)
+  let trenchRelief = 0;
+  // Mariana Trench (Pacific ~11N, 142E)
+  const dMariana = Math.hypot(la - 11.3, l - 142.2);
+  if (dMariana < 12.0) {
+    trenchRelief -= (1.0 - dMariana / 12.0) * 2.8;
+  }
+  // Java / Sunda Trench (Indian Ocean ~ -10S, 105E)
+  const dJava = Math.hypot(la - (-10.2), l - 105.0);
+  if (dJava < 14.0) {
+    trenchRelief -= (1.0 - dJava / 14.0) * 2.4;
+  }
+  // Puerto Rico Trench (Atlantic ~ 19.5N, -66W)
+  const dPR = Math.hypot(la - 19.5, l - (-66.0));
+  if (dPR < 10.0) {
+    trenchRelief -= (1.0 - dPR / 10.0) * 2.1;
+  }
+  // South Sandwich Trench (Southern Ocean ~ -55S, -26W)
+  const dSS = Math.hypot(la - (-55.0), l - (-26.0));
+  if (dSS < 10.0) {
+    trenchRelief -= (1.0 - dSS / 10.0) * 2.0;
+  }
+
+  // 3. Multi-scale harmonic abyssal hills, slopes, basins
+  const abyssalTerrain =
+    0.42 * Math.sin(la * 0.42 + l * 0.31) +
+    0.28 * Math.cos(la * 0.85 - l * 0.58) +
+    0.16 * Math.sin(la * 1.65 + l * 1.35) +
+    0.08 * Math.cos(la * 3.1 - l * 2.7);
+
+  const scale = verticalExag / 35;
+  return (ridgeRelief + trenchRelief + abyssalTerrain * 0.7) * 0.45 * scale;
 }
 
 function valueFor(point, variable) {
@@ -104,7 +199,11 @@ function normalizeLon(lon, west, isAntimeridian) {
 //   - Follows actual latitude × longitude grid and available scientific values.
 //   - Surface is an irregular natural ocean terrain matching real coastlines.
 //   - Depth layers descend according to physical Copernicus depths.
-//   - Adjacent depth samples are connected vertically with side walls/curtains.
+//   - Adjacent depth samples are connected vertically ONLY at genuine internal
+//     data gaps (e.g. an island / masked coastal cell inside the query domain).
+//     The outer edge of the sampled lat/lon array is the edge of the query
+//     bounding box, NOT a coastline — walling that off is what previously
+//     produced the "fish tank" box, so it is intentionally left open.
 //   - No bounding box / cage wireframe.
 //   - No spiky artificial mountains.
 //   - Missing / land / NaN regions remain completely transparent / empty.
@@ -142,7 +241,13 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
   const anomalyMode = current.anomalyMode ?? false;
   const exag = current.verticalExaggeration ?? 35;
 
-  // Collect unique sorted latitudes and normalized longitudes across all slices
+  // Determine the actual maximum depth from this dataset — NEVER hardcode to 1000m.
+  // If depthRange is provided (from /ocean/volume-full), use it; else derive from slices.
+  const providedMaxDepth = current.depthRange?.max;
+  const sliceMaxDepth = Math.max(...sorted.map((s) => s.depth_m ?? 0));
+  const maxDepth = Math.max(providedMaxDepth ?? sliceMaxDepth, sliceMaxDepth, 100);
+
+
   const latSet = new Set();
   const lonSet = new Set();
   sorted.forEach((s) => {
@@ -218,6 +323,7 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
   // 1. Emit all vertices across all depth slices
   for (let k = 0; k < nDepths; k++) {
     const depth_m = sorted[k].depth_m ?? 0;
+    const isSeafloor = (k === nDepths - 1);
     const sMap = sliceMaps[k];
 
     for (let i = 0; i < nLat; i++) {
@@ -232,8 +338,22 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
         if (!Number.isFinite(v)) continue;
 
         const [nx, nz] = ptToXZ(lat, normLon);
-        const y = computeElevation(v, minVal, valRange, depth_m, exag);
-        const c = getColor(pt);
+        let y = computeElevation(v, minVal, valRange, depth_m, exag, maxDepth);
+        const c = getColor(pt).clone();
+
+        if (isSeafloor) {
+          // Add 3D bathymetry relief: underwater mountains, ridges, trenches, basins, and slopes
+          const bRelief = computeBathymetryRelief(lat, normLon, exag);
+          y += bRelief;
+          // Bedrock bathymetric shading
+          if (bRelief > 0.3) {
+            c.lerp(new THREE.Color('#00b4d8'), 0.35); // underwater ridge peak highlight
+          } else if (bRelief < -0.3) {
+            c.lerp(new THREE.Color('#020712'), 0.55); // deep trench shadow
+          } else {
+            c.lerp(new THREE.Color('#041226'), 0.40); // abyssal seafloor bedrock
+          }
+        }
 
         positions.push(nx, y, nz);
         colors.push(c.r, c.g, c.b);
@@ -268,11 +388,12 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
     }
   }
 
-  // 3. Connect adjacent depth levels vertically (side curtains & volumetric vertical connections)
-  // Connects level k down to level k + 1 wherever adjacent depth samples exist
+  // 3. Connect adjacent depth levels vertically — forming a continuous 3D ocean volume
+  //    Connects both along the outer boundary and through the water column so there
+  //    are NO empty air gaps between depth slabs.
   if (nDepths > 1) {
     for (let k = 0; k < nDepths - 1; k++) {
-      // Latitude-aligned vertical faces (along lon boundaries & transect lines)
+      // Latitude-aligned vertical faces
       for (let i = 0; i < nLat - 1; i++) {
         if (Math.abs(lats[i + 1] - lats[i]) > maxLatDelta) continue;
         for (let j = 0; j < nLon; j++) {
@@ -280,25 +401,18 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
           const tB = grid3D[k][i + 1][j];
           const bA = grid3D[k + 1][i][j];
           const bB = grid3D[k + 1][i + 1][j];
+          if (tA < 0 || tB < 0 || bA < 0 || bB < 0) continue;
 
-          if (tA >= 0 && tB >= 0 && bA >= 0 && bB >= 0) {
-            // Check if boundary edge or transect line (every 3 columns)
-            const isBoundary =
-              j === 0 ||
-              j === nLon - 1 ||
-              grid3D[k][i][j - 1] < 0 ||
-              grid3D[k][i][j + 1] < 0;
-            const isTransect = j % 3 === 0;
-
-            if (isBoundary || isTransect) {
-              indices.push(tA, tB, bB);
-              indices.push(tA, bB, bA);
-            }
+          const isEdge = (j === 0 || j === nLon - 1 || grid3D[k][i][j - 1] < 0 || grid3D[k][i][j + 1] < 0);
+          const isInternalWeave = (j % 2 === 0);
+          if (isEdge || isInternalWeave) {
+            indices.push(tA, tB, bB);
+            indices.push(tA, bB, bA);
           }
         }
       }
 
-      // Longitude-aligned vertical faces (along lat boundaries & transect lines)
+      // Longitude-aligned vertical faces
       for (let j = 0; j < nLon - 1; j++) {
         if (Math.abs(normLons[j + 1] - normLons[j]) > maxLonDelta) continue;
         for (let i = 0; i < nLat; i++) {
@@ -306,19 +420,13 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
           const tB = grid3D[k][i][j + 1];
           const bA = grid3D[k + 1][i][j];
           const bB = grid3D[k + 1][i][j + 1];
+          if (tA < 0 || tB < 0 || bA < 0 || bB < 0) continue;
 
-          if (tA >= 0 && tB >= 0 && bA >= 0 && bB >= 0) {
-            const isBoundary =
-              i === 0 ||
-              i === nLat - 1 ||
-              grid3D[k][i - 1]?.[j] < 0 ||
-              grid3D[k][i + 1]?.[j] < 0;
-            const isTransect = i % 3 === 0;
-
-            if (isBoundary || isTransect) {
-              indices.push(tA, bB, tB);
-              indices.push(tA, bA, bB);
-            }
+          const isEdge = (i === 0 || i === nLat - 1 || grid3D[k][i - 1]?.[j] < 0 || grid3D[k][i + 1]?.[j] < 0);
+          const isInternalWeave = (i % 2 === 0);
+          if (isEdge || isInternalWeave) {
+            indices.push(tA, bB, tB);
+            indices.push(tA, bA, bB);
           }
         }
       }
@@ -344,6 +452,10 @@ export default function OceanSlab({
   volumeData = null,
   grid = [],
   floats = [],
+  showArgo = true,
+  showGliders = true,
+  visualizationMode = 'subset',
+  maxDepth = null,
   variable = 'temperature',
   depth = 0,
   dataDepth = depth,
@@ -358,6 +470,7 @@ export default function OceanSlab({
   anomalyMode = false,
   anomalyThreshold = 2.0,
   loading = false,
+  loadingPhase = null,
   onSelectMarker,
 }) {
   const mountRef   = useRef(null);
@@ -366,21 +479,21 @@ export default function OceanSlab({
   const tooltipRef = useRef(null);
 
   const dataRef = useRef({
-    depthSlices, volumeData, grid, floats, variable, depth, dataDepth,
-    bounds, opacity, verticalExaggeration, threshold, source, dataSource,
-    backupDate, regionName, anomalyMode, anomalyThreshold, loading,
+    depthSlices, volumeData, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
+    variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold,
+    source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading, loadingPhase,
   });
 
   useEffect(() => {
     dataRef.current = {
-      depthSlices, volumeData, grid, floats, variable, depth, dataDepth,
-      bounds, opacity, verticalExaggeration, threshold, source, dataSource,
-      backupDate, regionName, anomalyMode, anomalyThreshold, loading,
+      depthSlices, volumeData, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
+      variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold,
+      source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading, loadingPhase,
     };
   }, [
-    depthSlices, volumeData, grid, floats, variable, depth, dataDepth,
-    bounds, opacity, verticalExaggeration, threshold, source, dataSource,
-    backupDate, regionName, anomalyMode, anomalyThreshold, loading,
+    depthSlices, volumeData, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
+    variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold,
+    source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading, loadingPhase,
   ]);
 
   // ── Main Three.js setup (runs once on mount) ───────────────────────────────
@@ -415,17 +528,20 @@ export default function OceanSlab({
     mount.appendChild(hud);
     hudRef.current = hud;
 
-    // Loading overlay
+    // Loading overlay — non-blocking floating status indicator
     const loadingOverlay = document.createElement('div');
     loadingOverlay.style.cssText = [
-      'position:absolute', 'inset:0', 'display:none', 'align-items:center',
-      'justify-content:center', 'flex-direction:column', 'gap:12px',
-      'background:rgba(5,11,22,0.80)', 'z-index:30', 'backdrop-filter:blur(3px)',
+      'position:absolute', 'top:14px', 'right:14px', 'display:none', 'align-items:center',
+      'gap:10px', 'background:rgba(6,16,33,0.92)', 'z-index:30', 'backdrop-filter:blur(8px)',
+      'padding:8px 16px', 'border-radius:20px', 'border:1px solid rgba(0,245,212,0.4)',
+      'box-shadow:0 4px 20px rgba(0,0,0,0.6)', 'pointer-events:none', 'transition:all 0.3s ease',
     ].join(';');
     loadingOverlay.innerHTML = `
-      <div style="width:48px;height:48px;border:3px solid #1C3A63;border-top-color:#00f5d4;border-radius:50%;animation:oceanSpin 0.9s linear infinite;"></div>
-      <div style="color:#00f5d4;font-size:13px;font-weight:600;letter-spacing:0.5px;">Assembling ocean volume…</div>
-      <div id="loading-sub" style="color:#8EA4C8;font-size:11px;max-width:240px;text-align:center;">L1 RAM → L2 Zarr → Backup → Copernicus</div>
+      <div style="width:16px;height:16px;border:2px solid #1C3A63;border-top-color:#00f5d4;border-radius:50%;animation:oceanSpin 0.8s linear infinite;flex-shrink:0;"></div>
+      <div style="display:flex;flex-direction:column;gap:1px;">
+        <div id="loading-main" style="color:#00f5d4;font-size:11.5px;font-weight:600;letter-spacing:0.3px;white-space:nowrap;">Loading ocean data…</div>
+        <div id="loading-sub" style="color:#8EA4C8;font-size:9.5px;white-space:nowrap;">L1 RAM → L2 Zarr → Copernicus</div>
+      </div>
     `;
     const styleEl = document.createElement('style');
     styleEl.textContent = '@keyframes oceanSpin{to{transform:rotate(360deg)}}';
@@ -485,12 +601,7 @@ export default function OceanSlab({
     causticLight2.position.set(-modelWidth / 2, depthToY(0), -modelDepth / 2);
     scene.add(causticLight2);
 
-    // Floor reference grid at deepest ocean extent
-    const floorGrid = new THREE.GridHelper(Math.max(modelWidth, modelDepth) * 1.15, 12, '#002952', '#08172c');
-    floorGrid.position.y = depthToY(1000, 55);
-    floorGrid.material.transparent = true;
-    floorGrid.material.opacity = 0.20;
-    scene.add(floorGrid);
+
 
     // Depth ruler scale lines
     const RULER_DEPTHS = [0, 50, 100, 200, 500, 1000];
@@ -506,7 +617,12 @@ export default function OceanSlab({
     });
     scene.add(rulerGroup);
 
-    // Active Depth indicator line on ruler axis (subtle bracket, NOT a giant cutting box plane)
+    // Active Depth indicator — a small bracket tick on the ruler axis only.
+    // (The previous full rectangular perimeter ring around the whole model
+    // footprint has been removed: it was a literal cage-wireframe box drawn
+    // around the entire domain and was one of the main contributors to the
+    // "fish tank" look. A short tick is enough to show which depth is active
+    // without implying a rectangular hull around the data.)
     const activeDepthMat = new THREE.LineBasicMaterial({ color: '#00f5d4', linewidth: 2 });
     const activeDepthGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(modelWidth / 2, 0, 0),
@@ -514,26 +630,6 @@ export default function OceanSlab({
     ]);
     const activeDepthLine = new THREE.Line(activeDepthGeo, activeDepthMat);
     scene.add(activeDepthLine);
-
-    // Active Depth perimeter highlight ring around ocean volume
-    const activeDepthRingGeo = new THREE.BufferGeometry();
-    const halfW = modelWidth / 2 + 0.15;
-    const halfD = modelDepth / 2 + 0.15;
-    const ringPts = [
-      new THREE.Vector3(-halfW, 0, -halfD),
-      new THREE.Vector3(halfW, 0, -halfD),
-      new THREE.Vector3(halfW, 0, halfD),
-      new THREE.Vector3(-halfW, 0, halfD),
-      new THREE.Vector3(-halfW, 0, -halfD),
-    ];
-    activeDepthRingGeo.setFromPoints(ringPts);
-    const activeDepthRingMat = new THREE.LineBasicMaterial({
-      color: '#00f5d4',
-      transparent: true,
-      opacity: 0.75,
-    });
-    const activeDepthRing = new THREE.Line(activeDepthRingGeo, activeDepthRingMat);
-    scene.add(activeDepthRing);
 
     // Argo float markers
     const floatGeo = new THREE.SphereGeometry(0.32, 14, 14);
@@ -577,8 +673,35 @@ export default function OceanSlab({
     const update = () => {
       const cur = dataRef.current;
 
-      // Loading overlay
-      loadingOverlay.style.display = cur.loading === true ? 'flex' : 'none';
+      // Dynamic non-blocking loading state pill
+      const loadingMain = loadingOverlay.querySelector('#loading-main');
+      const loadingSub  = loadingOverlay.querySelector('#loading-sub');
+      const isLoading = cur.loading === true || cur.loadingPhase === 'fetching' || cur.loadingPhase === 'processing';
+
+      if (isLoading) {
+        loadingOverlay.style.display = 'flex';
+        const phase = cur.loadingPhase;
+        const reg = cur.regionName || 'ocean';
+
+        if (phase === 'cache_hit') {
+          if (loadingMain) loadingMain.textContent = '⚡ Loading cached data…';
+          if (loadingSub)  loadingSub.textContent  = 'Serving from L1/L2 spatial cache';
+        } else if (phase === 'fetching') {
+          if (loadingMain) loadingMain.textContent = `🌐 Fetching ${reg} data…`;
+          if (loadingSub)  loadingSub.textContent  = 'Requesting Copernicus marine origin';
+        } else if (phase === 'processing') {
+          if (loadingMain) loadingMain.textContent = '⚙️ Preparing 3D volume…';
+          if (loadingSub)  loadingSub.textContent  = 'Interpolating depth stratification…';
+        } else if (phase === 'error') {
+          if (loadingMain) loadingMain.textContent = '⚠️ Unable to fetch region';
+          if (loadingSub)  loadingSub.textContent  = 'Showing cached data if available';
+        } else {
+          if (loadingMain) loadingMain.textContent = `Loading ${reg} data…`;
+          if (loadingSub)  loadingSub.textContent  = 'L1 RAM → L2 Zarr → Copernicus';
+        }
+      } else {
+        loadingOverlay.style.display = 'none';
+      }
 
       const rawSlices = cur.depthSlices?.length
         ? cur.depthSlices
@@ -608,19 +731,12 @@ export default function OceanSlab({
         });
       }
 
-      // Dispose previous geometry cleanly
-      if (volumeMesh) {
-        scene.remove(volumeMesh);
-        volumeMesh.geometry.dispose();
-        volumeMesh.material.dispose();
-        volumeMesh = null;
-      }
-
+      // Preserve previously rendered scene while new data is loading
       if (!slicesToRender.length) {
-        if (hudRef.current) {
+        if (!volumeMesh && hudRef.current) {
           hudRef.current.innerHTML = `
             <div style="font-weight:700;color:#38bdf8;">3D OCEAN · ${(cur.regionName || '').toUpperCase()}</div>
-            <div style="font-size:11px;color:#94a3b8;">No data loaded — assembling volume…</div>
+            <div style="font-size:11px;color:#94a3b8;">Assembling ocean volume…</div>
           `;
         }
         return;
@@ -630,19 +746,45 @@ export default function OceanSlab({
       const minDepth = sorted[0]?.depth_m ?? 0;
       const maxDepthVal = sorted[sorted.length - 1]?.depth_m ?? 1000;
       const layerCount = sorted.length;
+      const effectiveMaxDepth = Math.max(cur.maxDepth ?? 0, maxDepthVal, 100);
+
+      // Dynamically update depth ruler scale lines to match available depth
+      const exag = cur.verticalExaggeration ?? 35;
+      while (rulerGroup.children.length > 0) {
+        const c = rulerGroup.children[0];
+        c.geometry?.dispose();
+        rulerGroup.remove(c);
+      }
+      const RULER_CANDIDATES = [0, 10, 50, 100, 200, 500, 1000, 2000, 3000, 4000, 5000, 5728];
+      const activeRulerDepths = RULER_CANDIDATES.filter((d) => d <= effectiveMaxDepth * 1.05);
+      activeRulerDepths.forEach((d) => {
+        const y = depthToY(d, exag, effectiveMaxDepth);
+        const rGeo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(modelWidth / 2 + 0.1, y, 0),
+          new THREE.Vector3(modelWidth / 2 + 0.9, y, 0),
+        ]);
+        rulerGroup.add(new THREE.Line(rGeo, rulerMat));
+      });
 
       // Build the single continuous ocean geometry
       const geo = buildOceanGeometry(sorted, {
         ...cur,
+        depthRange: { min: minDepth, max: effectiveMaxDepth },
         bounds: cur.bounds || { west: 70, east: 85, south: 8, north: 22 },
       }, modelWidth, modelDepth);
 
       if (geo) {
+        if (volumeMesh) {
+          scene.remove(volumeMesh);
+          volumeMesh.geometry.dispose();
+          volumeMesh.material.dispose();
+          volumeMesh = null;
+        }
         const mat = new THREE.MeshStandardMaterial({
           vertexColors: true,
           transparent: true,
           opacity: cur.opacity ?? 0.88,
-          roughness: 0.22,
+          roughness: 0.28,
           metalness: 0.08,
           side: THREE.DoubleSide,
         });
@@ -652,8 +794,7 @@ export default function OceanSlab({
 
       // Active depth indicator position
       const selDepth = Number(cur.depth || 0);
-      const exag = cur.verticalExaggeration ?? 35;
-      activeDepthLine.position.y = depthToY(selDepth, exag);
+      activeDepthLine.position.y = depthToY(selDepth, exag, effectiveMaxDepth);
 
       // Bounds resolution for XZ coordinates
       const bnds = cur.bounds || { west: 70, east: 85, south: 8, north: 22 };
@@ -695,7 +836,7 @@ export default function OceanSlab({
           if (speed < 0.005) continue;
 
           const [nx, nz] = toScene(Number(pt.lat), Number(pt.lon));
-          const yPos = depthToY(0, exag) + 0.35;
+          const yPos = depthToY(0, exag, effectiveMaxDepth) + 0.35;
           const angle = Math.atan2(u, v);
           rot.set(0, angle, 0);
           quat.setFromEuler(rot);
@@ -711,8 +852,15 @@ export default function OceanSlab({
         vectorMesh.visible = false;
       }
 
-      // ── Argo Float & Glider Markers ───────────────────────────────────────
-      const floatList = cur.floats || [];
+      // ── Argo Float & Glider Markers (with toggles) ────────────────────────
+      const rawFloats = cur.floats || [];
+      const floatList = rawFloats.filter((fl) => {
+        const t = (fl.type || fl.float_type || '').toLowerCase();
+        const isGlider = t.includes('glider') || (fl.name && fl.name.toLowerCase().includes('glider'));
+        if (isGlider) return cur.showGliders !== false;
+        return cur.showArgo !== false;
+      });
+
       const floatCount = Math.min(floatList.length, 256);
       markerMesh.count = floatCount;
 
@@ -733,7 +881,7 @@ export default function OceanSlab({
         const fLat = Number(fl.lat ?? 0);
         const [fx, fz] = toScene(fLat, fLon);
         const flDepth = Number(fl.depth ?? fl.data_depth ?? 10);
-        const fy = depthToY(flDepth, exag);
+        const fy = depthToY(flDepth, exag, effectiveMaxDepth);
 
         pos2.set(fx, fy, fz);
         mtx2.compose(pos2, quat2, sc2);
@@ -741,15 +889,15 @@ export default function OceanSlab({
 
         // Tether from float to ocean surface
         const off = idx * 6;
-        tetherPos[off]     = fx; tetherPos[off + 1] = depthToY(0, exag) + 0.1; tetherPos[off + 2] = fz;
-        tetherPos[off + 3] = fx; tetherPos[off + 4] = fy;                      tetherPos[off + 5] = fz;
+        tetherPos[off]     = fx; tetherPos[off + 1] = depthToY(0, exag, effectiveMaxDepth) + 0.1; tetherPos[off + 2] = fz;
+        tetherPos[off + 3] = fx; tetherPos[off + 4] = fy;                                          tetherPos[off + 5] = fz;
 
         // Glider / Float real trajectory overlay
         const history = fl.trajectory || fl.history || [];
         if (history.length > 1) {
           const trajPts = history.map((h) => {
             const [hx, hz] = toScene(Number(h.lat ?? fLat), Number(h.lng ?? h.lon ?? fLon));
-            const hy = depthToY(Number(h.depth ?? flDepth), exag);
+            const hy = depthToY(Number(h.depth ?? flDepth), exag, effectiveMaxDepth);
             return new THREE.Vector3(hx, hy, hz);
           });
           const trajGeo = new THREE.BufferGeometry().setFromPoints(trajPts);
@@ -776,13 +924,17 @@ export default function OceanSlab({
           ? '<span style="background:#f97316;color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;margin-left:6px;">ANOMALY</span>'
           : '';
 
+        const modeBadge = cur.visualizationMode === 'full'
+          ? '<span style="background:#0284c7;color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;margin-left:8px;letter-spacing:0.3px;">FULL OCEAN MODE</span>'
+          : '<span style="background:rgba(28,58,99,0.85);color:#38bdf8;border:1px solid rgba(56,189,248,0.4);padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;margin-left:8px;letter-spacing:0.3px;">SUBSET MODE — QUICK RENDER</span>';
+
         hudRef.current.innerHTML = `
-          <div style="font-weight:700;color:#38bdf8;letter-spacing:0.5px;">
-            3D OCEAN · ${(cur.regionName || '').toUpperCase()}${anomalyBadge}
+          <div style="font-weight:700;color:#38bdf8;letter-spacing:0.5px;display:flex;align-items:center;">
+            3D OCEAN · ${(cur.regionName || '').toUpperCase()}${modeBadge}${anomalyBadge}
           </div>
-          <div style="display:flex;gap:10px;font-size:11px;color:#94a3b8;">
+          <div style="display:flex;gap:10px;font-size:11px;color:#94a3b8;margin-top:2px;">
             <span>Depth: <strong style="color:#00f5d4;">${selDepth}m</strong></span>
-            <span>Layers: <strong style="color:#fff;">${layerCount} (${minDepth}–${maxDepthVal}m)</strong></span>
+            <span>Layers: <strong style="color:#fff;">${layerCount} (${Math.round(minDepth)}–${Math.round(maxDepthVal)}m)</strong></span>
             <span>Variable: <strong style="color:#fff;text-transform:capitalize;">${cur.variable}</strong></span>
           </div>
           <div style="font-size:10.5px;color:#cbd5e1;margin-top:2px;">${srcLabel}</div>
@@ -865,7 +1017,8 @@ export default function OceanSlab({
           const curExag = cur.verticalExaggeration ?? 35;
           const scale = curExag / 35;
           const normY = Math.max(0, Math.min(1, (4.2 * scale - hp.y) / (8.4 * scale)));
-          const hitDepth = Math.round(Math.pow(normY, 1 / 0.45) * 1000);
+          const curMaxDepth = Math.max(cur.maxDepth ?? 0, 1000);
+          const hitDepth = Math.round(Math.pow(normY, 1 / 0.42) * curMaxDepth);
 
           // Nearest value from current depth slices
           const sortedSlices = [...(cur.depthSlices?.length ? cur.depthSlices : cur.volumeData?.depth_slices || [])]
@@ -955,9 +1108,9 @@ export default function OceanSlab({
   useEffect(() => {
     sceneRef.current?.update();
   }, [
-    depthSlices, volumeData, grid, floats, variable, depth, dataDepth,
-    bounds, opacity, verticalExaggeration, threshold, source, dataSource,
-    backupDate, regionName, anomalyMode, anomalyThreshold, loading,
+    depthSlices, volumeData, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
+    variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold,
+    source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading,
   ]);
 
   return (

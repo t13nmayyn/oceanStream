@@ -8,7 +8,7 @@ import ScientificTimelineChart from '../scientist/ScientificTimelineChart';
 import { useApp, useAppDispatch } from '../../context/AppContext';
 import useOceanSnapshot, { PREDEFINED_OCEANS } from '../../hooks/useOceanSnapshot';
 import useArgoFloats from '../../hooks/useArgoFloats';
-import { getOceanCoverage } from '../../services/oceanApi';
+import { getOceanCoverage, getOceanVolumeFull } from '../../services/oceanApi';
 import { API_BASE } from '../../config/api';
 
 
@@ -51,6 +51,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
     backupDate,
     dataSource,
     loading: snapshotLoading,
+    loadingPhase,
   } = useOceanSnapshot(activeRegion);
   const { floats: argoHookFloats } = useArgoFloats(200);
   const activeFloats = snapshotFloats && snapshotFloats.length > 0 ? snapshotFloats : argoHookFloats;
@@ -64,6 +65,15 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
   const [verticalExaggeration, setVerticalExaggeration] = useState(35);
   const [threshold, setThreshold] = useState({ enabled: false, operator: '>', value: 28, tolerance: 0.05 });
   const [anomalyOn, setAnomalyOn] = useState(false);
+
+  // Phase 1 Visualization Modes & Sensor Toggles
+  const [visualizationMode, setVisualizationMode] = useState('subset'); // 'subset' | 'full'
+  const [fullVolumeData, setFullVolumeData] = useState(null);
+  const [fullLoading, setFullLoading] = useState(false);
+  const [fullError, setFullError] = useState(null);
+  const [showArgo, setShowArgo] = useState(true);
+  const [showGliders, setShowGliders] = useState(true);
+  const fullFetchRef = useRef(null);
 
   // Anomaly volume slices (fetched from /ocean/volume-anomaly when anomalyOn)
   const [anomalySlices, setAnomalySlices] = useState([]);
@@ -176,6 +186,44 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
     };
   }, [anomalyOn, viewport, selectedVariable]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Full Ocean Volume fetch (Phase 1 Full Ocean Mode) ───────────────────────
+  useEffect(() => {
+    if (visualizationMode !== 'full' || !viewport) {
+      return undefined;
+    }
+
+    if (fullFetchRef.current) {
+      fullFetchRef.current.abort();
+    }
+    const controller = new AbortController();
+    fullFetchRef.current = controller;
+
+    setFullLoading(true);
+    setFullError(null);
+
+    getOceanVolumeFull(viewport, selectedDate, selectedVariable)
+      .then((data) => {
+        if (data && data.depth_slices?.length > 0) {
+          setFullVolumeData(data);
+        } else {
+          setFullError('No full-depth data returned from server');
+        }
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') {
+          console.warn('[OceanWorkspace] Full ocean error:', err.message);
+          setFullError(err.message);
+        }
+      })
+      .finally(() => {
+        setFullLoading(false);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [visualizationMode, viewport, selectedDate, selectedVariable]);
+
   const selectVariable = (id) => dispatch({ type: 'SET_SELECTED_VARIABLE', payload: id });
   const setDepth = (value) => dispatch({ type: 'SET_DEPTH', payload: Number(value) });
   const selected = VARIABLES.find(([id]) => id === selectedVariable) || VARIABLES[0];
@@ -183,9 +231,41 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
   const valueMin = loadedValues.length ? Math.min(...loadedValues) : null;
   const valueMax = loadedValues.length ? Math.max(...loadedValues) : null;
 
-  // Choose which depth slices to pass to OceanSlab
-  const activeDepthSlices = anomalyOn && anomalySlices.length > 0 ? anomalySlices : depthSlices;
-  const isLoading = snapshotLoading || anomalyLoading;
+  // Active data slices resolution based on Mode
+  const isFullMode = visualizationMode === 'full';
+  const fullDepthSlices = fullVolumeData?.depth_slices || [];
+
+  const activeDepthSlices = isFullMode && fullDepthSlices.length > 0
+    ? fullDepthSlices
+    : (anomalyOn && anomalySlices.length > 0 ? anomalySlices : depthSlices);
+
+  const activeMaxDepth = isFullMode
+    ? (fullVolumeData?.copernicus_max_depth_m || fullVolumeData?.available_depth_max_m || 5728)
+    : 1000;
+
+  const combinedFloats = isFullMode && fullVolumeData?.floats?.length > 0
+    ? fullVolumeData.floats
+    : activeFloats;
+
+  const effectiveDataSource = isFullMode
+    ? (fullVolumeData?.data_source || 'copernicus_zarr')
+    : dataSource;
+
+  const effectiveLoadingPhase = fullLoading
+    ? 'fetching'
+    : loadingPhase;
+
+  const isLoading = snapshotLoading || anomalyLoading || fullLoading;
+
+  // Depth buttons for depth bar (dynamic to full or subset)
+  const depthButtons = useMemo(() => {
+    if (isFullMode && fullVolumeData?.actual_zarr_depth_levels?.length > 0) {
+      const zarrD = fullVolumeData.actual_zarr_depth_levels;
+      const candidates = [0, 5, 10, 20, 35, 47, 100, 200, 500, 1000, 2000, 3500, 5728];
+      return candidates.filter((d) => d <= activeMaxDepth);
+    }
+    return [0, 20, 50, 100, 200, 400, 600, 800, 1000];
+  }, [isFullMode, fullVolumeData, activeMaxDepth]);
 
   return <main className={`ocean-workspace ${!showMap ? '!flex !flex-col h-full bg-[#F8FAFC]' : ''}`}>
     {showMap && <section className="ocean-globe-pane"><MapView onPointClick={onPointClick} onSelectFloatForProfile={(id) => setProfile(id)} selectedPoint={selectedPoint} hideSidebar /></section>}
@@ -198,14 +278,78 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
             <p>Choose a region on the globe, then inspect the water column in three dimensions.</p>
           </div>
           <div className="source-note">
-            {dataSource === 'backup_cache'
+            {effectiveDataSource === 'backup_cache'
               ? `📦 Copernicus Backup (${backupDate || 'Stored'})`
-              : dataSource === 'copernicus_zarr'
-              ? '🟢 Copernicus Live Analysis'
+              : effectiveDataSource === 'copernicus_zarr'
+              ? (isFullMode ? '🟢 Copernicus Full-Depth (L2)' : '🟢 Copernicus Live Analysis')
               : '🌐 Indian Ocean Reference / Demo Field'}
           </div>
         </div>
       )}
+
+      {/* Mode Switcher & Observation Overlays Bar */}
+      <div className={`mode-and-toggles-bar flex items-center justify-between flex-wrap gap-2 ${!showMap ? 'mb-2.5 p-2 bg-white rounded-lg border border-[#1C3A63]/20 shadow-xs' : 'mb-2 px-3 py-1.5 bg-[#0B1E3D]/80 border border-[#1C3A63]/50 rounded-lg text-white'}`}>
+        <div className="flex items-center flex-wrap gap-2">
+          <span className="text-[10px] uppercase font-bold tracking-wider text-[#8EA4C8]">3D Ocean</span>
+          <div className="inline-flex rounded-lg p-0.5 bg-[#061021] border border-[#1C3A63]/70">
+            <button
+              type="button"
+              onClick={() => setVisualizationMode('subset')}
+              className={`px-3 py-1 rounded text-[11px] font-semibold transition-all cursor-pointer ${
+                visualizationMode === 'subset'
+                  ? 'bg-teal-500 text-white shadow-sm'
+                  : 'text-[#8EA4C8] hover:text-white'
+              }`}
+            >
+              Subset Mode — Quick Render
+            </button>
+            <button
+              type="button"
+              onClick={() => setVisualizationMode('full')}
+              className={`px-3 py-1 rounded text-[11px] font-semibold transition-all cursor-pointer ${
+                visualizationMode === 'full'
+                  ? 'bg-sky-500 text-white shadow-sm'
+                  : 'text-[#8EA4C8] hover:text-white'
+              }`}
+            >
+              Full Ocean Mode
+            </button>
+          </div>
+          {fullLoading && (
+            <span className="text-[11px] text-sky-400 animate-pulse font-mono flex items-center gap-1.5 ml-1">
+              <span className="inline-block w-2 h-2 rounded-full bg-sky-400 animate-ping" />
+              Loading full-depth ocean data...
+            </span>
+          )}
+          {fullVolumeData?.partial && isFullMode && (
+            <span className="text-[10.5px] text-amber-400 font-mono" title={fullVolumeData.partial_note}>
+              ⚠️ {fullVolumeData.n_zarr_depth_levels} Zarr levels (0–{fullVolumeData.available_depth_max_m}m)
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-4 text-[11.5px]">
+          <span className="text-[10px] uppercase font-bold tracking-wider text-[#8EA4C8]">Sensors</span>
+          <label className="flex items-center gap-1.5 cursor-pointer select-none text-[#CBD5E1] hover:text-white font-medium">
+            <input
+              type="checkbox"
+              checked={showArgo}
+              onChange={(e) => setShowArgo(e.target.checked)}
+              className="accent-teal-400 rounded cursor-pointer"
+            />
+            <span>Argo Floats</span>
+          </label>
+          <label className="flex items-center gap-1.5 cursor-pointer select-none text-[#CBD5E1] hover:text-white font-medium">
+            <input
+              type="checkbox"
+              checked={showGliders}
+              onChange={(e) => setShowGliders(e.target.checked)}
+              className="accent-sky-400 rounded cursor-pointer"
+            />
+            <span>Gliders</span>
+          </label>
+        </div>
+      </div>
       
       <div className={`variable-pills flex items-center justify-between ${!showMap ? '!p-0 mb-3' : ''}`} role="tablist" aria-label="Ocean variable">
         <div className="flex items-center flex-wrap gap-2">
@@ -244,9 +388,9 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
             </div>
           </div>
 
-          {/* Physical Depth Horizon Scale: 0m · 20m · 50m · 100m · 200m · 400m · 600m · 800m · 1000m */}
+          {/* Physical Depth Horizon Scale */}
           <div className="flex flex-col gap-1 w-full my-auto overflow-y-auto py-1">
-            {[0, 20, 50, 100, 200, 400, 600, 800, 1000].map((d) => {
+            {depthButtons.map((d) => {
               const isSelected = selectedDepth === d || (selectedDepth >= d - 10 && selectedDepth < d + 15);
               return (
                 <button
@@ -272,8 +416,8 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
             <input
               type="range"
               min="0"
-              max="1000"
-              step="10"
+              max={activeMaxDepth}
+              step={activeMaxDepth > 1000 ? '25' : '10'}
               value={selectedDepth}
               onChange={(e) => setDepth(Number(e.target.value))}
               className="w-16 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-400"
@@ -285,9 +429,13 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
         <div className={`slab-frame flex-1 relative min-w-0 ${!showMap ? '!h-full' : ''}`}>
           <OceanSlab
             depthSlices={activeDepthSlices}
-            volumeData={volumeData}
+            volumeData={isFullMode ? fullVolumeData : volumeData}
             grid={gridData}
-            floats={activeFloats}
+            floats={combinedFloats}
+            showArgo={showArgo}
+            showGliders={showGliders}
+            visualizationMode={visualizationMode}
+            maxDepth={activeMaxDepth}
             variable={selectedVariable}
             depth={selectedDepth}
             dataDepth={snapshotData?.depth ?? selectedDepth}
@@ -296,16 +444,17 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
             verticalExaggeration={verticalExaggeration}
             threshold={threshold}
             source={snapshotSource}
-            dataSource={dataSource}
+            dataSource={effectiveDataSource}
             backupDate={backupDate}
             regionName={
               typeof region === 'string'
                 ? region
-                : (snapshotData?.region_name || bbox?.name || 'Ocean')
+                : (snapshotData?.region_name || bbox?.name || 'Indian Ocean')
             }
             anomalyMode={anomalyOn}
             anomalyThreshold={2.0}
             loading={isLoading}
+            loadingPhase={effectiveLoadingPhase}
             onSelectMarker={handleMarkerSelect}
           />
           <div className={`colorbar absolute !top-auto !bottom-4 !right-4 !w-[200px] ${!showMap ? '!bg-white/95 backdrop-blur-md !border-[#1C3A63]/30 !text-[#0B1E3D] rounded-lg shadow-sm' : ''}`}>
