@@ -67,6 +67,93 @@ const DEFAULT_BOUNDS = PREDEFINED_OCEANS.indianOcean;
 // All standard depth levels — fetched together in one API call
 const STANDARD_DEPTHS = '0,10,50,100,200,500,1000';
 
+function normalizeVolumePoint(point) {
+  if (!point || typeof point !== 'object') return null;
+
+  return {
+    ...point,
+    lat: Number(point.lat ?? point.latitude),
+    lon: Number(point.lon ?? point.lng ?? point.longitude),
+    temperature_c: point.temperature_c ?? point.temperature ?? point.thetao ?? null,
+    salinity_psu: point.salinity_psu ?? point.salinity ?? point.so ?? null,
+    chlorophyll_mgl: point.chlorophyll_mgl ?? point.chlorophyll ?? point.chl ?? null,
+    oxygen_mmolm3: point.oxygen_mmolm3 ?? point.oxygen ?? point.o2 ?? null,
+    ph: point.ph ?? point.pH ?? null,
+    current_u_ms: point.current_u_ms ?? point.u_current ?? point.uo ?? 0,
+    current_v_ms: point.current_v_ms ?? point.v_current ?? point.vo ?? 0,
+  };
+}
+
+function normalizeVolumeSlices(data) {
+  if (Array.isArray(data?.depth_slices)) {
+    return data.depth_slices
+      .map((slice) => ({
+        ...slice,
+        depth_m: Number(slice.depth_m ?? slice.depth ?? 0),
+        points: (Array.isArray(slice.points) ? slice.points : [])
+          .map(normalizeVolumePoint)
+          .filter(Boolean),
+      }))
+      .filter((slice) => Number.isFinite(slice.depth_m) && slice.points.length > 0);
+  }
+
+  if (!Array.isArray(data?.layers)) return [];
+
+  const bbox = data.bbox || {};
+  const latMin = Number(bbox.lat_min ?? bbox.south ?? 0);
+  const latMax = Number(bbox.lat_max ?? bbox.north ?? latMin);
+  const lonMin = Number(bbox.lon_min ?? bbox.west ?? 0);
+  const lonMax = Number(bbox.lon_max ?? bbox.east ?? lonMin);
+
+  return data.layers
+    .filter((layer) => layer?.status !== 'not_fetched' && Array.isArray(layer?.grid))
+    .map((layer) => {
+      const grid = layer.grid;
+      const latDenom = Math.max(grid.length - 1, 1);
+      const points = grid.flatMap((row, i) => {
+        if (!Array.isArray(row)) return [];
+        const lonDenom = Math.max(row.length - 1, 1);
+        return row.map((value, j) => {
+          const sample = value && typeof value === 'object' ? value : { temperature: value };
+          return normalizeVolumePoint({
+            ...sample,
+            lat: latMin + (i * (latMax - latMin)) / latDenom,
+            lon: lonMin + (j * (lonMax - lonMin)) / lonDenom,
+            temperature_c: sample.temperature_c ?? sample.temperature ?? sample.value ?? null,
+            salinity_psu: sample.salinity_psu ?? sample.salinity ?? null,
+            chlorophyll_mgl: sample.chlorophyll_mgl ?? sample.chlorophyll ?? null,
+            oxygen_mmolm3: sample.oxygen_mmolm3 ?? sample.oxygen ?? null,
+            current_u_ms: sample.current_u_ms ?? sample.u_current ?? 0,
+            current_v_ms: sample.current_v_ms ?? sample.v_current ?? 0,
+          });
+        }).filter(Boolean);
+      });
+
+      return {
+        ...layer,
+        depth_m: Number(layer.depth_m ?? layer.depth ?? 0),
+        points,
+      };
+    })
+    .filter((slice) => Number.isFinite(slice.depth_m) && slice.points.length > 0);
+}
+
+async function fetchSnapshotDepthSlices(bounds) {
+  const depths = STANDARD_DEPTHS.split(',').map(Number);
+  const snapshots = await Promise.all(
+    depths.map((depth) => getOceanSnapshot(bounds, depth, null))
+  );
+
+  return snapshots.flatMap((snapshot, index) => {
+    if (!snapshot || !Array.isArray(snapshot.grid) || snapshot.grid.length === 0) return [];
+    return [{
+      depth_m: Number(snapshot.depth ?? depths[index]),
+      points: snapshot.grid.map(normalizeVolumePoint).filter(Boolean),
+      source: snapshot.source,
+    }];
+  });
+}
+
 export default function useOceanSnapshot(region = null) {
   // Only use selectedVariable from context for passing to volume API
   // (for cache-key differentiation). Do NOT use selectedDepth/selectedDate
@@ -151,24 +238,42 @@ export default function useOceanSnapshot(region = null) {
       // the backend uses its latest_available_iso() by default which is correct.
       const vol = await getOceanVolume(bounds, STANDARD_DEPTHS, null, selectedVariable);
 
-      if (vol && vol.depth_slices && vol.depth_slices.length > 0) {
-        setVolumeData(vol);
-        setDepthSlices(vol.depth_slices);
-        setFloats(vol.floats || []);
-        setSource(vol.data_source || vol.source || 'backup_cache');
-        setBackupDate(vol.backup_date || null);
+      const volumeSlices = normalizeVolumeSlices(vol);
+      const fallbackSlices = volumeSlices.length >= 2
+        ? []
+        : await fetchSnapshotDepthSlices(bounds);
+      const slices = fallbackSlices.length >= 2 ? fallbackSlices : volumeSlices;
+
+      if (slices.length > 0) {
+        const normalizedVolume = {
+          ...(vol || {}),
+          bbox: vol?.bbox || {
+            lat_min: bounds.south,
+            lat_max: bounds.north,
+            lon_min: bounds.west,
+            lon_max: bounds.east,
+          },
+          depth_slices: slices,
+          n_slices: slices.length,
+        };
+        const dataSourceValue = normalizedVolume.data_source || normalizedVolume.source || 'backup_cache';
+
+        setVolumeData(normalizedVolume);
+        setDepthSlices(slices);
+        setFloats(normalizedVolume.floats || []);
+        setSource(dataSourceValue);
+        setBackupDate(normalizedVolume.backup_date || null);
 
         // Set snapshot from the nearest depth slice to selected depth
         const targetDepth = Number(selectedDepth || 0);
-        const matchingSlice = vol.depth_slices.reduce((prev, curr) =>
+        const matchingSlice = slices.reduce((prev, curr) =>
           Math.abs(curr.depth_m - targetDepth) < Math.abs(prev.depth_m - targetDepth) ? curr : prev
         );
 
-        const pts = matchingSlice?.points || [];
         setSnapshotData({
-          ...vol,
+          ...normalizedVolume,
           depth: matchingSlice?.depth_m ?? targetDepth,
-          grid: pts,
+          grid: matchingSlice?.points || [],
         });
 
         lastFetchedKeyRef.current = fetchKey;
@@ -177,22 +282,11 @@ export default function useOceanSnapshot(region = null) {
           type: 'ADD_LOG',
           payload: {
             type: 'info',
-            text: `${new Date().toISOString().slice(11, 19)} [VOLUME 3D] ${vol.depth_slices.length} depth layers loaded (${vol.data_source || vol.source || 'cache'})`,
+            text: `${new Date().toISOString().slice(11, 19)} [VOLUME 3D] ${slices.length} depth layers loaded (${dataSourceValue})`,
           },
         });
       } else {
-        // Fallback to 2D snapshot if volume returned empty (e.g. no zarr at all)
-        const snap = await getOceanSnapshot(bounds, 0, null);
-        if (snap && snap.grid && snap.grid.length > 0) {
-          setSnapshotData(snap);
-          setSource(snap.source || 'backup_cache');
-          setDepthSlices([
-            { depth_m: snap.depth || 0, points: snap.grid, source: snap.source },
-          ]);
-          lastFetchedKeyRef.current = fetchKey;
-        } else {
-          setSource('reference');
-        }
+        setSource('reference');
       }
       setLoading(false);
     } catch (err) {

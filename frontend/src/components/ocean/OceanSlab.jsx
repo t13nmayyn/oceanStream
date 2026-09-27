@@ -485,13 +485,6 @@ export default function OceanSlab({
     causticLight2.position.set(-modelWidth / 2, depthToY(0), -modelDepth / 2);
     scene.add(causticLight2);
 
-    // Floor reference grid at deepest ocean extent
-    const floorGrid = new THREE.GridHelper(Math.max(modelWidth, modelDepth) * 1.15, 12, '#002952', '#08172c');
-    floorGrid.position.y = depthToY(1000, 55);
-    floorGrid.material.transparent = true;
-    floorGrid.material.opacity = 0.20;
-    scene.add(floorGrid);
-
     // Depth ruler scale lines
     const RULER_DEPTHS = [0, 50, 100, 200, 500, 1000];
     const rulerGroup = new THREE.Group();
@@ -566,8 +559,9 @@ export default function OceanSlab({
     vectorMesh.visible = false;
     scene.add(vectorMesh);
 
-    // Single continuous ocean volume mesh
+    // Single continuous ocean volume mesh and managed bathymetric floor
     let volumeMesh = null;
+    let bathyMesh = null;
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -592,18 +586,51 @@ export default function OceanSlab({
       } else if (baseGrid.length > 0) {
         // Fallback synthetic depth stratification from surface grid
         const synthDepths = [0, 50, 100, 200, 500, 1000];
+        const fallbackBounds = cur.bounds || { west: 70, east: 85, south: 8, north: 22 };
+        const west = Number(fallbackBounds.west ?? fallbackBounds.lon_min ?? 70);
+        const east = Number(fallbackBounds.east ?? fallbackBounds.lon_max ?? 85);
+        const south = Number(fallbackBounds.south ?? fallbackBounds.lat_min ?? 8);
+        const north = Number(fallbackBounds.north ?? fallbackBounds.lat_max ?? 22);
+        const isAntimeridian = west > east;
+        const lonSpan = isAntimeridian
+          ? (180 - west) + (east + 180)
+          : Math.max(east - west, 0.001);
+        const latSpan = Math.max(north - south, 0.001);
+
         slicesToRender = synthDepths.map((dM) => {
-          const decay = Math.exp(-dM / 220.0);
           return {
             depth_m: dM,
-            points: baseGrid.map((p) => ({
-              ...p,
-              depth_m: dM,
-              temperature_c: 4.0 + (Number(p.temperature_c ?? p.value ?? 26.0) - 4.0) * decay,
-              salinity_psu:  34.7 + (Number(p.salinity_psu ?? 34.5) - 34.7) * Math.exp(-dM / 350.0),
-              current_u_ms:  (p.current_u_ms ?? 0) * decay,
-              current_v_ms:  (p.current_v_ms ?? 0) * decay,
-            })),
+            points: baseGrid.map((p) => {
+              const pointLat = Number(p.lat);
+              const pointLon = Number(p.lon);
+              const latNorm = Number.isFinite(pointLat)
+                ? (pointLat - south) / latSpan
+                : 0.5;
+              const normalizedLon = Number.isFinite(pointLon)
+                ? normalizeLon(pointLon, west, isAntimeridian)
+                : west + lonSpan / 2;
+              const lonNorm = (normalizedLon - west) / lonSpan;
+              const spatialVariance = 1.0
+                + 0.3 * Math.sin(latNorm * Math.PI) * Math.cos(lonNorm * Math.PI * 1.5);
+              const localDecay = Math.exp(-dM / (180.0 * spatialVariance));
+              const surfaceTempValue = Number(p.temperature_c ?? p.value ?? 26.0);
+              const surfaceTemp = Number.isFinite(surfaceTempValue) ? surfaceTempValue : 26.0;
+              const deepTemp = 3.5 + latNorm * 2.5;
+              const surfaceSalinityValue = Number(p.salinity_psu ?? 34.5);
+              const surfaceSalinity = Number.isFinite(surfaceSalinityValue) ? surfaceSalinityValue : 34.5;
+              const salinityDecay = Math.exp(-dM / (350.0 * spatialVariance));
+              const currentU = Number(p.current_u_ms ?? 0);
+              const currentV = Number(p.current_v_ms ?? 0);
+
+              return {
+                ...p,
+                depth_m: dM,
+                temperature_c: deepTemp + (surfaceTemp - deepTemp) * localDecay,
+                salinity_psu: 34.7 + (surfaceSalinity - 34.7) * salinityDecay,
+                current_u_ms: (Number.isFinite(currentU) ? currentU : 0) * localDecay,
+                current_v_ms: (Number.isFinite(currentV) ? currentV : 0) * localDecay,
+              };
+            }),
           };
         });
       }
@@ -650,9 +677,39 @@ export default function OceanSlab({
         scene.add(volumeMesh);
       }
 
+      if (bathyMesh) {
+        scene.remove(bathyMesh);
+        bathyMesh.geometry.dispose();
+        bathyMesh.material.dispose();
+        bathyMesh = null;
+      }
+
+      const exag = cur.verticalExaggeration ?? 55;
+      const bathyGeo = new THREE.PlaneGeometry(modelWidth, modelDepth, 40, 40);
+      bathyGeo.rotateX(-Math.PI / 2);
+      const bathyPositions = bathyGeo.attributes.position;
+      for (let i = 0; i < bathyPositions.count; i++) {
+        const x = bathyPositions.getX(i);
+        const z = bathyPositions.getZ(i);
+        const radialDist = Math.sqrt((x / modelWidth) ** 2 + (z / modelDepth) ** 2);
+        const bowlDepth = 900 + radialDist * 300;
+        const ridge = Math.sin(x * 0.8) * Math.cos(z * 0.6) * 80;
+        const seamount = Math.exp(-((x + 2) ** 2 + (z - 1) ** 2) / 3) * 200;
+        const finalDepth = bowlDepth - ridge - seamount;
+        bathyPositions.setY(i, depthToY(Math.min(finalDepth, 1000), exag));
+      }
+      bathyGeo.computeVertexNormals();
+      const bathyMat = new THREE.MeshStandardMaterial({
+        color: '#0a2240',
+        roughness: 0.9,
+        metalness: 0.05,
+        side: THREE.DoubleSide,
+      });
+      bathyMesh = new THREE.Mesh(bathyGeo, bathyMat);
+      scene.add(bathyMesh);
+
       // Active depth indicator position
       const selDepth = Number(cur.depth || 0);
-      const exag = cur.verticalExaggeration ?? 35;
       activeDepthLine.position.y = depthToY(selDepth, exag);
 
       // Bounds resolution for XZ coordinates
@@ -934,6 +991,7 @@ export default function OceanSlab({
       renderer.domElement.removeEventListener('click', onClick);
       controls.dispose();
       if (volumeMesh) { volumeMesh.geometry.dispose(); volumeMesh.material.dispose(); }
+      if (bathyMesh) { bathyMesh.geometry.dispose(); bathyMesh.material.dispose(); }
       activeDepthGeo.dispose(); activeDepthMat.dispose();
       floatGeo.dispose(); floatMat.dispose();
       arrowGeo.dispose(); arrowMat.dispose();

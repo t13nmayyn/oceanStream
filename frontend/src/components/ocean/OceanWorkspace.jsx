@@ -61,7 +61,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
   const [openPanel, setOpenPanel] = useState('variables');
   const [previousDepth, setPreviousDepth] = useState(selectedDepth);
   const [hint, setHint] = useState(null);
-  const [verticalExaggeration, setVerticalExaggeration] = useState(35);
+  const [verticalExaggeration, setVerticalExaggeration] = useState(55);
   const [threshold, setThreshold] = useState({ enabled: false, operator: '>', value: 28, tolerance: 0.05 });
   const [anomalyOn, setAnomalyOn] = useState(false);
 

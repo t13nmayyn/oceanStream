@@ -3631,6 +3631,10 @@ async def ws_ocean_stream(ws: WebSocket):
 # ==============================================================================
 if __name__ == "__main__":
     import uvicorn
+
+    # Uvicorn resolves reload exclusions with Path.cwd().glob(), so wildcard
+    # exclusions must be relative to the directory used to launch this file.
+    reload_output = Path(os.path.relpath(BASE_DIR / "output", Path.cwd())).as_posix()
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
@@ -3642,9 +3646,9 @@ if __name__ == "__main__":
         # The "watchfiles.main: changes detected" log message is watchfiles
         # noticing filesystem changes — it is NOT a Copernicus error.
         reload_excludes=[
-            str(BASE_DIR / "output"),
-            str(BASE_DIR / "output" / "**"),
-            str(BASE_DIR / "output" / "user_uploads"),
+            reload_output,
+            f"{reload_output}/**",
+            f"{reload_output}/user_uploads",
             "data/**",
             "data/zarr/**",
             "data/backup_cache/**",
