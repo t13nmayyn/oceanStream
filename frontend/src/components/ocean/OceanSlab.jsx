@@ -310,11 +310,45 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
   const rawNormLons = [...lonSet].sort((a, b) => a - b);
   if (rawLats.length === 0 || rawNormLons.length === 0) return null;
 
-  // ── Spatial grid decimation for ultra-fluid rendering ──
-  const latStep = Math.max(1, Math.ceil(rawLats.length / 28));
-  const lonStep = Math.max(1, Math.ceil(rawNormLons.length / 36));
-  const lats = rawLats.filter((_, idx) => idx % latStep === 0);
-  const normLons = rawNormLons.filter((_, idx) => idx % lonStep === 0);
+  // ── Scalable grid resolution: 80 - 150 points per axis scaled to geographic span ──
+  // Target: single ocean basin (15°-30° span) -> ~90-130 points per axis
+  // Draft quality during active camera interaction: ~45-55 points per axis for 60fps
+  const isInteracting = !!current.isInteracting;
+  const spanDeg = Math.max(latSpan, lonSpan);
+  const basePoints = Math.min(140, Math.max(80, Math.round(spanDeg * 5.2)));
+  const targetLats = isInteracting ? Math.max(28, Math.round(basePoints * 0.45)) : basePoints;
+  const targetLons = isInteracting
+    ? Math.max(34, Math.round(basePoints * (lonSpan / Math.max(latSpan, 0.01)) * 0.45))
+    : Math.min(160, Math.max(85, Math.round(basePoints * (lonSpan / Math.max(latSpan, 0.01)))));
+
+  let lats, normLons;
+  if (rawLats.length >= targetLats) {
+    const latStep = Math.max(1, Math.floor(rawLats.length / targetLats));
+    lats = rawLats.filter((_, idx) => idx % latStep === 0);
+  } else {
+    // Upsample grid across the region span to achieve dense smooth terrain
+    const minLat = rawLats[0];
+    const maxLat = rawLats[rawLats.length - 1];
+    lats = [];
+    const step = (maxLat - minLat) / Math.max(targetLats - 1, 1);
+    for (let i = 0; i < targetLats; i++) {
+      lats.push(Math.round((minLat + i * step) * 1000) / 1000);
+    }
+  }
+
+  if (rawNormLons.length >= targetLons) {
+    const lonStep = Math.max(1, Math.floor(rawNormLons.length / targetLons));
+    normLons = rawNormLons.filter((_, idx) => idx % lonStep === 0);
+  } else {
+    const minLon = rawNormLons[0];
+    const maxLon = rawNormLons[rawNormLons.length - 1];
+    normLons = [];
+    const step = (maxLon - minLon) / Math.max(targetLons - 1, 1);
+    for (let j = 0; j < targetLons; j++) {
+      normLons.push(Math.round((minLon + j * step) * 1000) / 1000);
+    }
+  }
+
   const nLat = lats.length;
   const nLon = normLons.length;
 
@@ -330,17 +364,72 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
     return map;
   });
 
+  // Fast binary search to find index in raw coordinates for interpolation
+  function findLowerIndex(arr, val) {
+    let low = 0, high = arr.length - 1;
+    if (val <= arr[0]) return 0;
+    if (val >= arr[high]) return high - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (arr[mid] <= val && arr[mid + 1] > val) return mid;
+      if (arr[mid] > val) high = mid - 1;
+      else low = mid + 1;
+    }
+    return Math.max(0, Math.min(low, arr.length - 2));
+  }
+
+  // Fast bilinear value sampler across slices
+  function getSliceValue(k, lat, normLon) {
+    const sMap = sliceMaps[k];
+    const directKey = `${Math.round(lat * 100) / 100}_${Math.round(normLon * 100) / 100}`;
+    const directPt = sMap.get(directKey);
+    if (directPt) {
+      const v = valueFor(directPt, current.variable);
+      if (Number.isFinite(v)) return v;
+    }
+
+    if (rawLats.length <= 1 || rawNormLons.length <= 1) return NaN;
+
+    const i0 = findLowerIndex(rawLats, lat);
+    const i1 = Math.min(i0 + 1, rawLats.length - 1);
+    const j0 = findLowerIndex(rawNormLons, normLon);
+    const j1 = Math.min(j0 + 1, rawNormLons.length - 1);
+
+    const la0 = rawLats[i0], la1 = rawLats[i1];
+    const lo0 = rawNormLons[j0], lo1 = rawNormLons[j1];
+
+    const p00 = sMap.get(`${la0}_${lo0}`);
+    const p01 = sMap.get(`${la0}_${lo1}`);
+    const p10 = sMap.get(`${la1}_${lo0}`);
+    const p11 = sMap.get(`${la1}_${lo1}`);
+
+    const v00 = p00 ? valueFor(p00, current.variable) : NaN;
+    const v01 = p01 ? valueFor(p01, current.variable) : NaN;
+    const v10 = p10 ? valueFor(p10, current.variable) : NaN;
+    const v11 = p11 ? valueFor(p11, current.variable) : NaN;
+
+    const tLat = la1 > la0 ? Math.max(0, Math.min(1, (lat - la0) / (la1 - la0))) : 0;
+    const tLon = lo1 > lo0 ? Math.max(0, Math.min(1, (normLon - lo0) / (lo1 - lo0))) : 0;
+
+    let sumVal = 0, sumWeight = 0;
+    if (Number.isFinite(v00)) { const w = (1 - tLat) * (1 - tLon); sumVal += v00 * w; sumWeight += w; }
+    if (Number.isFinite(v01)) { const w = (1 - tLat) * tLon;       sumVal += v01 * w; sumWeight += w; }
+    if (Number.isFinite(v10)) { const w = tLat * (1 - tLon);       sumVal += v10 * w; sumWeight += w; }
+    if (Number.isFinite(v11)) { const w = tLat * tLon;             sumVal += v11 * w; sumWeight += w; }
+
+    return sumWeight > 0.001 ? sumVal / sumWeight : NaN;
+  }
+
   function ptToXZ(ptLat, ptNormLon) {
     const nx = ((ptNormLon - west) / lonSpan - 0.5) * modelWidth;
     const nz = ((ptLat - south) / latSpan - 0.5) * modelDepth;
     return [nx, nz];
   }
 
-  function getColor(pt) {
-    const v = valueFor(pt, current.variable);
+  function getColor(v) {
     let c;
     if (anomalyMode) {
-      const aVal = pt.anomaly_c ?? (v - (minVal + maxVal) / 2);
+      const aVal = v - (minVal + maxVal) / 2;
       c = anomalyColor(aVal, anomalyThr);
     } else {
       c = colorFor(v, minVal, maxVal, current.variable);
@@ -402,15 +491,11 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
         const depth_m = sorted[k].depth_m ?? 0;
         if (depth_m > seafloor) continue; // below seafloor for this cell — skip
 
-        const sMap = sliceMaps[k];
-        const pt = sMap.get(`${lat}_${normLon}`);
-        if (!pt) continue;
-
-        const v = valueFor(pt, current.variable);
+        const v = getSliceValue(k, lat, normLon);
         if (!Number.isFinite(v)) continue;
 
         const y = computeElevation(v, minVal, valRange, depth_m, exag, maxDepth);
-        const c = getColor(pt).clone();
+        const c = getColor(v).clone();
 
         positions.push(nx, y, nz);
         colors.push(c.r, c.g, c.b);
@@ -445,10 +530,10 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
     }
   }
 
-  // 3. Connect adjacent depth levels vertically — forming a continuous 3D ocean volume
+  // 3. Connect adjacent depth levels vertically only at true domain perimeters and coastlines (NO internal block walls)
   if (nDepths > 1) {
     for (let k = 0; k < nDepths - 1; k++) {
-      // Latitude-aligned vertical faces
+      // Latitude-aligned boundary faces
       for (let i = 0; i < nLat - 1; i++) {
         if (Math.abs(lats[i + 1] - lats[i]) > maxLatDelta) continue;
         for (let j = 0; j < nLon; j++) {
@@ -458,16 +543,16 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
           const bB = grid3D[k + 1][i + 1][j];
           if (tA < 0 || tB < 0 || bA < 0 || bB < 0) continue;
 
-          const isEdge = (j === 0 || j === nLon - 1 || grid3D[k][i][j - 1] < 0 || grid3D[k][i][j + 1] < 0);
-          const isInternalWeave = (j % 2 === 0);
-          if (isEdge || isInternalWeave) {
+          // Connect only along true coastal border or domain edge
+          const isEdge = (j === 0 || j === nLon - 1 || isLandGrid[i][j - 1] === 1 || isLandGrid[i][j + 1] === 1);
+          if (isEdge) {
             indices.push(tA, tB, bB);
             indices.push(tA, bB, bA);
           }
         }
       }
 
-      // Longitude-aligned vertical faces
+      // Longitude-aligned boundary faces
       for (let j = 0; j < nLon - 1; j++) {
         if (Math.abs(normLons[j + 1] - normLons[j]) > maxLonDelta) continue;
         for (let i = 0; i < nLat; i++) {
@@ -477,9 +562,9 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
           const bB = grid3D[k + 1][i][j + 1];
           if (tA < 0 || tB < 0 || bA < 0 || bB < 0) continue;
 
-          const isEdge = (i === 0 || i === nLat - 1 || grid3D[k][i - 1]?.[j] < 0 || grid3D[k][i + 1]?.[j] < 0);
-          const isInternalWeave = (i % 2 === 0);
-          if (isEdge || isInternalWeave) {
+          // Connect only along true coastal border or domain edge
+          const isEdge = (i === 0 || i === nLat - 1 || isLandGrid[i - 1]?.[j] === 1 || isLandGrid[i + 1]?.[j] === 1);
+          if (isEdge) {
             indices.push(tA, bB, tB);
             indices.push(tA, bA, bB);
           }
@@ -629,7 +714,7 @@ export default function OceanSlab({
     ].join(';');
     mount.appendChild(inspector);
 
-    // Orbit controls
+    // Orbit controls with adaptive quality
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
@@ -637,6 +722,35 @@ export default function OceanSlab({
     controls.minDistance = 0.5;
     controls.maxDistance = 120;
     controls.update();
+
+    let interactionTimer = null;
+    const setInteractionMode = (active) => {
+      if (dataRef.current.isInteracting === active) return;
+      dataRef.current.isInteracting = active;
+      sceneRef.current?.update();
+    };
+
+    controls.addEventListener('start', () => {
+      if (interactionTimer) clearTimeout(interactionTimer);
+      setInteractionMode(true);
+    });
+
+    controls.addEventListener('change', () => {
+      if (!dataRef.current.isInteracting) {
+        setInteractionMode(true);
+      }
+      if (interactionTimer) clearTimeout(interactionTimer);
+      interactionTimer = setTimeout(() => {
+        setInteractionMode(false);
+      }, 300);
+    });
+
+    controls.addEventListener('end', () => {
+      if (interactionTimer) clearTimeout(interactionTimer);
+      interactionTimer = setTimeout(() => {
+        setInteractionMode(false);
+      }, 300);
+    });
 
     // Lighting
     scene.add(new THREE.AmbientLight('#d0e8ff', 1.8));
@@ -687,6 +801,20 @@ export default function OceanSlab({
     ]);
     const activeDepthLine = new THREE.Line(activeDepthGeo, activeDepthMat);
     scene.add(activeDepthLine);
+
+    // Active depth horizon slice plane (subtle glowing plane highlighting currently scrubbed depth level)
+    const activeSliceGeo = new THREE.PlaneGeometry(modelWidth, modelDepth, 1, 1);
+    activeSliceGeo.rotateX(-Math.PI / 2);
+    const activeSliceMat = new THREE.MeshBasicMaterial({
+      color: '#00f5d4',
+      transparent: true,
+      opacity: 0.15,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const activeSliceMesh = new THREE.Mesh(activeSliceGeo, activeSliceMat);
+    activeSliceMesh.visible = false;
+    scene.add(activeSliceMesh);
 
     // Argo float markers
     const floatGeo = new THREE.SphereGeometry(0.32, 14, 14);
@@ -839,20 +967,43 @@ export default function OceanSlab({
         bathyMesh = null;
       }
 
-      // Bathymetry floor — uses effectiveMaxDepth so full-depth mode shows correct basin shape
-      const bathyGeo = new THREE.PlaneGeometry(modelWidth, modelDepth, 40, 40);
+      // Bathymetry floor — driven by real Copernicus deptho (bathyGrid/bathyLats/bathyLons).
+      // Each PlaneGeometry vertex is mapped back to lat/lon via cur.bounds and then
+      // looked up with getSeafloorDepth(). If no real grid is available we fall back
+      // to a physically plausible bowl so the render is never completely flat.
+      const bathySegs = cur.isInteracting ? 48 : 112;
+      const bathyGeo = new THREE.PlaneGeometry(modelWidth, modelDepth, bathySegs, bathySegs);
       bathyGeo.rotateX(-Math.PI / 2);
       const bathyPositions = bathyGeo.attributes.position;
+      const bGrid = cur.bathyGrid || cur.volumeData?.bathymetry || null;
+      const bLats = cur.bathyLats || cur.volumeData?.bathymetry_lats || null;
+      const bLons = cur.bathyLons || cur.volumeData?.bathymetry_lons || null;
+      const bBounds = cur.bounds || { west: 70, east: 85, south: 8, north: 22 };
+      const bWest  = Number(bBounds.west  ?? bBounds.lon_min ?? 70);
+      const bEast  = Number(bBounds.east  ?? bBounds.lon_max ?? 85);
+      const bSouth = Number(bBounds.south ?? bBounds.lat_min ?? 8);
+      const bNorth = Number(bBounds.north ?? bBounds.lat_max ?? 22);
+      const isAnti = bWest > bEast;
+      const bLonSpan = isAnti ? ((180 - bWest) + (bEast + 180)) : Math.max(bEast - bWest, 0.0001);
+      const bLatSpan = Math.max(bNorth - bSouth, 0.0001);
+      const hasBathy = bGrid && bLats && bLons && bGrid.length > 0 && bLats.length > 0 && bLons.length > 0;
       for (let i = 0; i < bathyPositions.count; i++) {
         const x = bathyPositions.getX(i);
         const z = bathyPositions.getZ(i);
-        const radialDist = Math.sqrt((x / modelWidth) ** 2 + (z / modelDepth) ** 2);
-        // Scale bowl depth to actual dataset depth so it doesn't clip at 1000 m
-        const basinFraction = 0.85 + radialDist * 0.15;
-        const bowlDepth = effectiveMaxDepth * basinFraction;
-        const ridge = Math.sin(x * 0.8) * Math.cos(z * 0.6) * effectiveMaxDepth * 0.04;
-        const seamount = Math.exp(-((x + 2) ** 2 + (z - 1) ** 2) / 3) * effectiveMaxDepth * 0.1;
-        const finalDepth = Math.min(bowlDepth - ridge - seamount, effectiveMaxDepth);
+        let finalDepth;
+        if (hasBathy) {
+          // Map Three.js x/z back to geographic lon/lat
+          let lon = bWest + ((x / modelWidth) + 0.5) * bLonSpan;
+          if (isAnti && lon > 180) lon -= 360;
+          const lat = bSouth + ((z / modelDepth) + 0.5) * bLatSpan;
+          const sf = getSeafloorDepth(lat, lon, bGrid, bLats, bLons);
+          // sf===null means land; sf===1000 means fallback — treat land as max depth visually
+          finalDepth = Math.min(sf != null ? sf : effectiveMaxDepth, effectiveMaxDepth);
+        } else {
+          // Fallback: simple bowl so frame is never empty
+          const radialDist = Math.sqrt((x / modelWidth) ** 2 + (z / modelDepth) ** 2);
+          finalDepth = Math.min(effectiveMaxDepth * (0.85 + radialDist * 0.15), effectiveMaxDepth);
+        }
         bathyPositions.setY(i, depthToY(finalDepth, exag, effectiveMaxDepth));
       }
       bathyGeo.computeVertexNormals();
@@ -865,10 +1016,12 @@ export default function OceanSlab({
       bathyMesh = new THREE.Mesh(bathyGeo, bathyMat);
       scene.add(bathyMesh);
 
-      // Active depth indicator position
+      // Active depth indicator position and visible horizon plane
       const selDepth = Number(cur.depth || 0);
       const activeY = depthToY(selDepth, exag, effectiveMaxDepth);
       activeDepthLine.position.y = activeY;
+      activeSliceMesh.position.y = activeY;
+      activeSliceMesh.visible = selDepth > 0;
 
       if (lastAnimatedDepth !== selDepth) {
         lastAnimatedDepth = selDepth;
@@ -1179,6 +1332,7 @@ export default function OceanSlab({
       if (volumeMesh) { volumeMesh.geometry.dispose(); volumeMesh.material.dispose(); }
       if (bathyMesh) { bathyMesh.geometry.dispose(); bathyMesh.material.dispose(); }
       activeDepthGeo.dispose(); activeDepthMat.dispose();
+      activeSliceGeo.dispose(); activeSliceMat.dispose();
       floatGeo.dispose(); floatMat.dispose();
       arrowGeo.dispose(); arrowMat.dispose();
       tetherGeo.dispose(); tetherMat.dispose();
@@ -1199,9 +1353,9 @@ export default function OceanSlab({
   useEffect(() => {
     sceneRef.current?.update();
   }, [
-    depthSlices, volumeData, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
+    depthSlices, volumeData, bathyGrid, bathyLats, bathyLons, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
     variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold,
-    source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading,
+    source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading, loadingPhase,
   ]);
 
   return (

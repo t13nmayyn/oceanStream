@@ -208,12 +208,16 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
     };
   }, [anomalyOn, viewport, selectedVariable]);
 
-  // ── Full Ocean Volume fetch (Phase 1 & 4 Full Ocean Mode) ────────────────────
+
+  // ── Full Ocean Volume fetch (Phase 1 & 4 Full Ocean Mode) — Progressive Tiling ─────
+  // Tiles the viewport into ≤15° chunks, fetches each tile independently, merges on arrival.
+  // Renders whatever is ON_DISK immediately — never blocks on the full globe.
   useEffect(() => {
     if (visualizationMode !== 'full' || !viewport) {
       return undefined;
     }
 
+    // Abort any in-flight tile fetches
     if (fullFetchRef.current) {
       fullFetchRef.current.abort();
     }
@@ -222,36 +226,147 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
 
     setFullLoading(true);
     setFullError(null);
+    setFullVolumeData(null);
 
-    getOceanVolumeFull(viewport, selectedDate, selectedVariable)
-      .then((data) => {
-        console.log('[OceanWorkspace HOP 1: API Response]', {
-          hasData: !!data,
-          bathymetryIsArray: Array.isArray(data?.bathymetry),
-          bathymetryLength: data?.bathymetry?.length,
-          bathymetrySampleRow: data?.bathymetry?.[0]?.slice?.(0, 5),
-          bathymetryLatsLength: data?.bathymetry_lats?.length,
-          bathymetryLonsLength: data?.bathymetry_lons?.length,
-        });
-        if (data && (data.depth_slices?.length > 0 || data.layers?.length > 0)) {
-          setFullVolumeData(data);
-        } else {
-          setFullError('No full-depth data returned from server');
+    const TILE_DEG = 15; // max tile size per axis (degrees)
+    const { south, north, west, east } = viewport;
+
+    // Build lat tiles
+    const latTiles = [];
+    for (let lat = south; lat < north; lat += TILE_DEG) {
+      latTiles.push([lat, Math.min(lat + TILE_DEG, north)]);
+    }
+
+    // Build lon tiles (antimeridian-aware)
+    const lonTiles = [];
+    const isAntimeridian = west > east;
+    if (isAntimeridian) {
+      // Western half: west..180
+      for (let lon = west; lon < 180; lon += TILE_DEG) {
+        lonTiles.push([lon, Math.min(lon + TILE_DEG, 180)]);
+      }
+      // Eastern half: -180..east
+      for (let lon = -180; lon < east; lon += TILE_DEG) {
+        lonTiles.push([lon, Math.min(lon + TILE_DEG, east)]);
+      }
+    } else {
+      for (let lon = west; lon < east; lon += TILE_DEG) {
+        lonTiles.push([lon, Math.min(lon + TILE_DEG, east)]);
+      }
+    }
+
+    // All tiles
+    const tiles = [];
+    for (const [latMin, latMax] of latTiles) {
+      for (const [lonMin, lonMax] of lonTiles) {
+        tiles.push({ latMin, latMax, lonMin, lonMax });
+      }
+    }
+
+    // Merged depth-slice accumulator: key = depth_m string
+    const mergedSlicesMap = new Map();
+    let mergedBathyGrid = null, mergedBathyLats = null, mergedBathyLons = null;
+    let mergedMaxDepth = 5727.917;
+    let mergedNativeDepths = null;
+    let tilesCompleted = 0;
+    const totalTiles = tiles.length;
+
+    function getMergedData() {
+      const slicesArr = [...mergedSlicesMap.values()]
+        .map((s) => ({ ...s }))
+        .sort((a, b) => a.depth_m - b.depth_m);
+      return {
+        source: 'copernicus_zarr',
+        depth_slices: slicesArr,
+        layers: slicesArr,
+        bathymetry: mergedBathyGrid || [],
+        bathymetry_lats: mergedBathyLats || [],
+        bathymetry_lons: mergedBathyLons || [],
+        max_depth_m: mergedMaxDepth,
+        native_depths: mergedNativeDepths || [],
+        native_depth_count: (mergedNativeDepths || []).length,
+        bbox: { lat_min: south, lat_max: north, lon_min: west, lon_max: east },
+        variables: ['temperature', 'salinity', 'u_current', 'v_current'],
+      };
+    }
+
+    function mergeSlices(tileData, tile) {
+      if (!tileData?.depth_slices?.length && !tileData?.layers?.length) return;
+      const slices = tileData.depth_slices || tileData.layers || [];
+
+      slices.forEach((slice) => {
+        const key = String(slice.depth_m ?? slice.depth ?? 0);
+        const pts = (slice.points || []).filter((p) => p && p.lat != null && p.lon != null);
+        if (!pts.length) return;
+        if (!mergedSlicesMap.has(key)) {
+          mergedSlicesMap.set(key, { depth_m: Number(key), points: [], source: slice.source });
         }
-      })
-      .catch((err) => {
-        if (err.name !== 'AbortError') {
-          console.warn('[OceanWorkspace] Full ocean error:', err.message);
-          setFullError(err.message);
-        }
-      })
-      .finally(() => {
-        setFullLoading(false);
+        const existing = mergedSlicesMap.get(key);
+        existing.points.push(...pts);
       });
+
+      // Merge bathymetry from this tile (simple accumulation)
+      if (!mergedBathyGrid && tileData.bathymetry?.length > 0 && tileData.bathymetry_lats?.length > 0) {
+        mergedBathyGrid = tileData.bathymetry;
+        mergedBathyLats = tileData.bathymetry_lats;
+        mergedBathyLons = tileData.bathymetry_lons;
+      }
+      if (tileData.max_depth_m && tileData.max_depth_m > mergedMaxDepth) {
+        mergedMaxDepth = tileData.max_depth_m;
+      }
+      if (!mergedNativeDepths && tileData.native_depths?.length) {
+        mergedNativeDepths = tileData.native_depths;
+      }
+    }
+
+
+    async function fetchTile(tile) {
+      if (controller.signal.aborted) return;
+      try {
+        const params = new URLSearchParams({
+          lat_min: tile.latMin.toFixed(2),
+          lat_max: tile.latMax.toFixed(2),
+          lon_min: tile.lonMin.toFixed(2),
+          lon_max: tile.lonMax.toFixed(2),
+          variable: selectedVariable || 'temperature',
+        });
+        const res = await fetch(`${API_BASE}/ocean/volume-full?${params}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        mergeSlices(data, tile);
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.warn(`[OceanWorkspace] tile fetch error ${tile.latMin},${tile.lonMin}:`, err.message);
+        }
+      } finally {
+        tilesCompleted += 1;
+        // Push progressive update to UI after each tile (debounced by React batching)
+        if (!controller.signal.aborted && mergedSlicesMap.size > 0) {
+          setFullVolumeData({ ...getMergedData(), _tileProgress: tilesCompleted / totalTiles });
+          if (tilesCompleted === 1) setFullLoading(false); // show first data quickly
+        }
+        if (tilesCompleted >= totalTiles) {
+          setFullLoading(false);
+        }
+      }
+    }
+
+    // Fetch all tiles concurrently (browser limits to ~6 parallel)
+    Promise.allSettled(tiles.map(fetchTile)).then(() => {
+      if (!controller.signal.aborted) {
+        if (mergedSlicesMap.size === 0) {
+          setFullError('No data available for this region. Background fetch in progress.');
+        }
+        setFullLoading(false);
+      }
+    });
 
     return () => {
       controller.abort();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visualizationMode, viewport, selectedDate, selectedVariable]);
 
   const selectVariable = (id) => dispatch({ type: 'SET_SELECTED_VARIABLE', payload: id });

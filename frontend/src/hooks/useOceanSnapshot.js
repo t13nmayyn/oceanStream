@@ -214,6 +214,30 @@ export default function useOceanSnapshot(region = null) {
     return nearest?.points || [];
   }, [volumeData, selectedDepth, snapshotData?.grid]);
 
+  // On-demand fetch if selectedDepth exceeds loaded slices
+  useEffect(() => {
+    if (!bounds || selectedDepth == null) return;
+    const targetDepth = Number(selectedDepth);
+    if (!depthSlices?.length) return;
+    const maxLoadedDepth = Math.max(...depthSlices.map((s) => s.depth_m ?? 0));
+    if (targetDepth > maxLoadedDepth && targetDepth <= 6000) {
+      getOceanSnapshot(bounds, targetDepth, null).then((snap) => {
+        if (snap?.grid?.length > 0) {
+          const newSlice = {
+            depth_m: Number(snap.depth ?? targetDepth),
+            points: snap.grid.map(normalizeVolumePoint).filter(Boolean),
+            source: snap.source,
+          };
+          setDepthSlices((prev) =>
+            [...prev.filter((s) => Math.abs(s.depth_m - newSlice.depth_m) > 1), newSlice].sort(
+              (a, b) => a.depth_m - b.depth_m
+            )
+          );
+        }
+      }).catch(() => {});
+    }
+  }, [selectedDepth, bounds, depthSlices]);
+
   /**
    * Fetch the ocean volume for the current bounds.
    * GLOBAL: works for Pacific, Atlantic, Arctic, Southern Ocean, Indian Ocean.
@@ -284,12 +308,15 @@ export default function useOceanSnapshot(region = null) {
         lastFetchedKeyRef.current = fetchKey;
         setLoadingPhase('ready');
 
-        // Only poll if the backend is actively fetching fresh data from Copernicus
-        if (fetchStatus === 'fetching') {
+        // Poll again if:
+        // 1. Backend is actively fetching fresh Copernicus data (analytical_demo placeholder)
+        // 2. Bathymetry is empty (on-demand bathy fetch triggered but not yet complete)
+        const bathyEmpty = !normalizedVolume.bathymetry?.length;
+        if (fetchStatus === 'fetching' || dataSourceValue === 'analytical_demo' || normalizedVolume.source === 'analytical_demo' || bathyEmpty) {
           if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
           pollTimerRef.current = setTimeout(() => {
             fetchSnapshotRef.current?.(true); // background poll
-          }, 8000);
+          }, 3500);
         } else if (pollTimerRef.current) {
           clearTimeout(pollTimerRef.current);
           pollTimerRef.current = null;

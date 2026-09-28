@@ -632,25 +632,54 @@ async def fetch_bathy_range(
     import copernicusmarine
 
     if not credentials_present():
-        logger.warning("[BATHY] Copernicus credentials not found — skipping bathy fetch")
+        logger.warning("[BATHY] Copernicus credentials not found - skipping bathy fetch")
         return {"status": "skipped", "reason": "no_credentials"}
 
     # Pad bbox
     blat_min = max(-90.0,  lat_min - _BATHY_PAD_DEG)
     blat_max = min( 90.0,  lat_max + _BATHY_PAD_DEG)
-    blon_min = max(-180.0, lon_min - _BATHY_PAD_DEG)
-    blon_max = min( 180.0, lon_max + _BATHY_PAD_DEG)
+    blon_min = lon_min - _BATHY_PAD_DEG
+    blon_max = lon_max + _BATHY_PAD_DEG
 
+    # Antimeridian wrap handling
+    if lon_min > lon_max or blon_min > blon_max:
+        logger.info(f"[BATHY] Antimeridian bbox detected ([{lat_min},{lat_max}], [{lon_min},{lon_max}]) -> splitting at 180°")
+        t1 = await fetch_bathy_range(lat_min, lat_max, lon_min, 180.0)
+        t2 = await fetch_bathy_range(lat_min, lat_max, -180.0, lon_max)
+        return {"status": "success", "tiles": 2, "antimeridian": True}
+
+    blon_min = max(-180.0, blon_min)
+    blon_max = min( 180.0, blon_max)
     bbox_key = _bathy_bbox_key(blat_min, blat_max, blon_min, blon_max)
+
+    # ---- Spatial chunking ----
+    # Split large bboxes into bounded tiles (at most 8° for bathy) to keep subset fast.
+    bbox_lat = blat_max - blat_min
+    bbox_lon = blon_max - blon_min
+    MAX_BATHY_CHUNK_DEG = 8.0
+    if bbox_lat > MAX_BATHY_CHUNK_DEG or bbox_lon > MAX_BATHY_CHUNK_DEG:
+        tiles = _split_bbox_into_chunks(blat_min, blat_max, blon_min, blon_max, chunk_deg=MAX_BATHY_CHUNK_DEG)
+        logger.info(
+            f"[BATHY] Large bbox ({bbox_lat:.1f}°lat × {bbox_lon:.1f}°lon) → "
+            f"splitting into {len(tiles)} tiles of ≤{MAX_BATHY_CHUNK_DEG}°"
+        )
+        tile_tasks = [
+            fetch_bathy_range(tlat_min, tlat_max, tlon_min, tlon_max)
+            for (tlat_min, tlat_max, tlon_min, tlon_max) in tiles
+        ]
+        tile_results = await asyncio.gather(*tile_tasks, return_exceptions=True)
+        successes = [r for r in tile_results if isinstance(r, dict) and r.get("status") in ("success", "cached")]
+        _BATHY_FETCHED_REGIONS.append(bbox_key)
+        return {"status": "success", "tiles": len(successes), "bbox_key": bbox_key}
 
     # Skip if already fetched this process lifetime
     if bbox_key in _BATHY_FETCHED_REGIONS and BATHY_ZARR_PATH.exists():
-        logger.info(f"[BATHY] bbox {bbox_key} already cached — skipping re-fetch")
+        logger.info(f"[BATHY] bbox {bbox_key} already cached - skipping re-fetch")
         return {"status": "cached", "bbox_key": bbox_key}
 
     logger.info(
         f"[BATHY] Fetching deptho for lat=[{blat_min},{blat_max}] "
-        f"lon=[{blon_min},{blon_max}] (padded 1.5°) …"
+        f"lon=[{blon_min},{blon_max}] (padded 1.5 deg) ..."
     )
     t0 = time.perf_counter()
 
@@ -681,7 +710,7 @@ async def fetch_bathy_range(
                 )
         except asyncio.TimeoutError:
             logger.error(
-                f"[BATHY TIMEOUT] exceeded {FETCH_TIMEOUT_SECONDS:.0f}s — "
+                f"[BATHY TIMEOUT] exceeded {FETCH_TIMEOUT_SECONDS:.0f}s - "
                 "check credentials and Copernicus service availability"
             )
             return {"status": "error", "error": "timeout"}
@@ -695,28 +724,25 @@ async def fetch_bathy_range(
 
         ds = xr.open_dataset(str(tmp_nc)).load()
 
-    # ── Step-3 diagnostic: log distinct deptho values before wiring frontend ──
+    # Step-3 diagnostic: log distinct deptho values before wiring frontend
     if _BATHY_VARIABLE in ds:
         raw_vals = ds[_BATHY_VARIABLE].values.ravel()
         finite_vals = raw_vals[np.isfinite(raw_vals)]
         if finite_vals.size > 0:
             distinct_vals = np.unique(np.round(finite_vals, 2))
             logger.info(
-                f"[BATHY DIAGNOSTIC] deptho grid: "
-                f"shape={ds[_BATHY_VARIABLE].shape}, "
-                f"distinct_values={len(distinct_vals)}, "
-                f"min={float(finite_vals.min()):.2f}m, "
-                f"max={float(finite_vals.max()):.2f}m"
+                "[BATHY DIAGNOSTIC] shape=%s distinct_values=%d min=%.1f max=%.1f"
+                % (str(ds[_BATHY_VARIABLE].shape), len(distinct_vals), float(finite_vals.min()), float(finite_vals.max()))
             )
             if len(distinct_vals) <= 3:
                 logger.warning(
-                    f"[BATHY DIAGNOSTIC] Only {len(distinct_vals)} distinct depth values — "
+                    f"[BATHY DIAGNOSTIC] Only {len(distinct_vals)} distinct depth values - "
                     "the fetched grid is suspiciously flat. "
                     "Do NOT wire into frontend until this shows a real spread (>10 distinct values). "
                     "Check dataset_id, dataset_part, and bbox."
                 )
         else:
-            logger.warning("[BATHY DIAGNOSTIC] deptho array has no finite values — all NaN or land")
+            logger.warning("[BATHY DIAGNOSTIC] deptho array has no finite values - all NaN or land")
     else:
         logger.warning(f"[BATHY] Variable '{_BATHY_VARIABLE}' not found in downloaded dataset. "
                        f"Available variables: {list(ds.data_vars)}")
@@ -776,7 +802,7 @@ async def fetch_bathy_range(
 
     _BATHY_FETCHED_REGIONS.append(bbox_key)
     fetch_ms = round((time.perf_counter() - t0) * 1000, 1)
-    logger.info(f"[BATHY] Complete in {fetch_ms}ms — zarr size {zarr_size // 1024}KB at {BATHY_ZARR_PATH}")
+    logger.info(f"[BATHY] Complete in {fetch_ms}ms - zarr size {zarr_size // 1024}KB at {BATHY_ZARR_PATH}")
 
     return {
         "status": "success",

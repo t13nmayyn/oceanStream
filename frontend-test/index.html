@@ -1539,6 +1539,7 @@ function setTimePreset(preset) {
   if (preset === "yesterday") target = serverDateInfo?.yesterday || d.yesterday;
   else if (preset === "7d") target = serverDateInfo?.presets?.["7d"]?.start || d.weekAgo;
   else if (preset === "30d") target = serverDateInfo?.presets?.["30d"]?.start || d.monthAgo;
+  
   else if (preset === "1y") target = serverDateInfo?.presets?.["1y"]?.start || d.yearAgo;
 
   selectedDate = target;
