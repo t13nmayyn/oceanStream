@@ -2922,7 +2922,8 @@ async def ocean_volume(
 
     if not _is_bathy_covered(lat_min, lat_max, lon_min, lon_max) and _fetcher.credentials_present():
         try:
-            await asyncio.wait_for(_fetch_and_reload_bathy(lat_min, lat_max, lon_min, lon_max), timeout=6.0)
+            fetch_task = asyncio.create_task(_fetch_and_reload_bathy(lat_min, lat_max, lon_min, lon_max))
+            await asyncio.wait_for(asyncio.shield(fetch_task), timeout=6.0)
         except asyncio.TimeoutError:
             logger.info(f"[ocean_volume] Bathy fetch exceeded 6s, continuing in background...")
         except Exception as _bfe:
@@ -3530,16 +3531,14 @@ async def ocean_volume_full(
     if not _is_bathy_covered(lat_min, lat_max, lon_min, lon_max) and _fetcher.credentials_present():
         logger.info(f"[volume-full] Bathymetry not covered for lat=[{lat_min},{lat_max}], lon=[{lon_min},{lon_max}]. Triggering on-demand fetch...")
         try:
-            bathy_res = await asyncio.wait_for(
-                _fetcher.fetch_bathy_range(lat_min, lat_max, lon_min, lon_max),
-                timeout=15.0
-            )
+            fetch_task = asyncio.create_task(_fetcher.fetch_bathy_range(lat_min, lat_max, lon_min, lon_max))
+            bathy_res = await asyncio.wait_for(asyncio.shield(fetch_task), timeout=4.0)
             if bathy_res.get("status") in ("success", "cached"):
                 _bds = _safe_open_zarr(BATHY_ZARR_PATH)
                 if _bds is not None:
                     bathy_dataset_xr = _bds
         except Exception as _fe:
-            logger.warning(f"[volume-full] On-demand bathy fetch error/timeout: {_fe}")
+            logger.warning(f"[volume-full] Bathy fetch exceeded 4s, continuing in background...")
 
     loop = asyncio.get_event_loop()
 

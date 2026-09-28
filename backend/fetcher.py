@@ -645,11 +645,11 @@ async def fetch_bathy_range(
 
     # ---- Spatial chunking ----
     # Split large bboxes into bounded tiles (at most 8° for bathy) to keep subset fast.
-    bbox_lat = blat_max - blat_min
-    bbox_lon = blon_max - blon_min
+    bbox_lat = lat_max - lat_min
+    bbox_lon = lon_max - lon_min
     MAX_BATHY_CHUNK_DEG = 8.0
     if bbox_lat > MAX_BATHY_CHUNK_DEG or bbox_lon > MAX_BATHY_CHUNK_DEG:
-        tiles = _split_bbox_into_chunks(blat_min, blat_max, blon_min, blon_max, chunk_deg=MAX_BATHY_CHUNK_DEG)
+        tiles = _split_bbox_into_chunks(lat_min, lat_max, lon_min, lon_max, chunk_deg=MAX_BATHY_CHUNK_DEG)
         logger.info(
             f"[BATHY] Large bbox ({bbox_lat:.1f}°lat × {bbox_lon:.1f}°lon) → "
             f"splitting into {len(tiles)} tiles of ≤{MAX_BATHY_CHUNK_DEG}°"
