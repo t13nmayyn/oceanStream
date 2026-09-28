@@ -36,24 +36,15 @@ import xarray as xr
 from router import (
     phy_dataset, bgc_dataset, PHY_VARIABLES, BGC_VARIABLES,
     group_variables_by_dataset, dataset_for_variable,
+    BATHY_DATASET, BATHY_VARIABLE, MAX_OCEAN_DEPTH_M,
+)
+from main import (
+    BASE_DIR as _BASE_DIR, OUTPUT_DIR as _OUTPUT_DIR,
+    PHY_ZARR_PATH, BGC_ZARR_PATH, OCEAN_ZARR_PATH, ARGO_ZARR_PATH,
+    BATHY_ZARR_PATH, FULL_CACHE_DIR,
 )
 
 logger = logging.getLogger("fetcher")
-
-# ---------------------------------------------------------------------------
-# Path resolution
-# ---------------------------------------------------------------------------
-_BASE_DIR   = Path(__file__).resolve().parent
-_OUTPUT_DIR = _BASE_DIR / "output"
-_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-PHY_ZARR_PATH    = _OUTPUT_DIR / "phy_data.zarr"
-BGC_ZARR_PATH    = _OUTPUT_DIR / "bgc_data.zarr"
-# Backward-compat alias (thetao only)
-OCEAN_ZARR_PATH  = _OUTPUT_DIR / "ocean_data.zarr"
-ARGO_ZARR_PATH   = _OUTPUT_DIR / "argo_data.zarr"
-# Static bathymetry (Copernicus cmems_mod_glo_phy_my_0.083deg_static / deptho)
-BATHY_ZARR_PATH  = _OUTPUT_DIR / "bathy_data.zarr"
 
 # Registry of already-fetched bathy bboxes  →  skip re-fetch within same process
 _BATHY_FETCHED_REGIONS: list = []
@@ -62,12 +53,12 @@ _BATHY_FETCHED_REGIONS: list = []
 MAX_FETCH_DEPTH_SPAN = 6000.0
 
 # The shallowest coordinate in Copernicus ANFC/MY datasets is approximately
-# 0.494 m. Sending minimum_depth=0.0 causes a "depth coordinate not found"
+# 0.494025 m. Sending minimum_depth=0.0 causes a "depth coordinate not found"
 # error. Always clamp depth requests to this minimum.
-COPERNICUS_MIN_DEPTH: float = 0.494
+COPERNICUS_MIN_DEPTH: float = 0.494025
 
 def _clamp_depth(d: float) -> float:
-    """Clamp a depth value to the Copernicus dataset minimum (~0.494m)."""
+    """Clamp a depth value to the Copernicus dataset minimum (~0.494025m)."""
     return max(COPERNICUS_MIN_DEPTH, float(d))
 
 # Spatial chunking: large bounding boxes are split into smaller tiles before
@@ -596,9 +587,9 @@ async def fetch_bgc_range(
 _BATHY_PAD_DEG: float = 1.5
 
 # Dataset / part / variable identifiers for the static bathymetry product.
-_BATHY_DATASET_ID   = "cmems_mod_glo_phy_my_0.083deg_static"
+_BATHY_DATASET_ID   = BATHY_DATASET
 _BATHY_DATASET_PART = "bathy"
-_BATHY_VARIABLE     = "deptho"
+_BATHY_VARIABLE     = BATHY_VARIABLE
 
 
 def _bathy_bbox_key(lat_min: float, lat_max: float, lon_min: float, lon_max: float) -> str:

@@ -286,6 +286,61 @@ def _download_bgc(date_str: str) -> None:
     v.close()
 
 
+def _download_bathy() -> None:
+    """Download bathymetry (deptho) from static dataset."""
+    import copernicusmarine
+    import xarray as xr
+    from pathlib import Path
+
+    BATHY_ZARR_PATH = OUTPUT_DIR / "bathy_data.zarr"
+    tmp_nc = OUTPUT_DIR / "backup_bathy_tmp.nc"
+
+    logger.info("=" * 65)
+    logger.info("DOWNLOADING BATHYMETRY (deptho)")
+    logger.info(f"  Dataset  : cmems_mod_glo_phy_my_0.083deg_static")
+    logger.info(f"  Variables: ['deptho']")
+    logger.info("=" * 65)
+
+    try:
+        copernicusmarine.subset(
+            dataset_id="cmems_mod_glo_phy_my_0.083deg_static",
+            variables=["deptho"],
+            minimum_longitude=BBOX["min_lon"],
+            maximum_longitude=BBOX["max_lon"],
+            minimum_latitude=BBOX["min_lat"],
+            maximum_latitude=BBOX["max_lat"],
+            output_filename=tmp_nc.name,
+            output_directory=str(OUTPUT_DIR),
+            overwrite=True,
+        )
+
+        if not tmp_nc.exists():
+            logger.warning("[BATHY] Download file not found.")
+            return
+
+        ds = xr.open_dataset(str(tmp_nc))
+        ds_chunked = ds.chunk({"latitude": 50, "longitude": 50})
+        
+        ds_chunked.attrs["data_source"] = "cmems_mod_glo_phy_my_0.083deg_static"
+        
+        if BATHY_ZARR_PATH.exists():
+            shutil.rmtree(BATHY_ZARR_PATH)
+            
+        ds_chunked.to_zarr(str(BATHY_ZARR_PATH), mode="w")
+        ds.close()
+
+        if tmp_nc.exists():
+            tmp_nc.unlink()
+
+        logger.info(f"[BATHY] Successfully saved Bathymetry backup → {BATHY_ZARR_PATH}")
+
+        v = xr.open_zarr(str(BATHY_ZARR_PATH))
+        logger.info(f"  Verified dimensions : {dict(v.sizes)}")
+        logger.info(f"  Verified variables  : {list(v.data_vars)}")
+        v.close()
+    except Exception as e:
+        logger.warning(f"[BATHY] Download failed: {e}")
+
 def main():
     parser = argparse.ArgumentParser(description="Create real Copernicus Zarr backup for OceanStream demo")
     parser.add_argument("--date", type=str, default=None, help="Explicit historical date (YYYY-MM-DD)")
@@ -315,12 +370,20 @@ def main():
         logger.warning(f"[BGC] Download failed (non-critical): {exc}")
         errors.append(f"BGC error: {exc}")
 
+    # 3. Bathymetry
+    try:
+        _download_bathy()
+    except Exception as exc:
+        logger.error(f"[BATHY] Download failed: {exc}")
+        errors.append(f"Bathymetry error: {exc}")
+
     # Summary
     logger.info("=" * 65)
     logger.info("BACKUP GENERATION FINISHED")
     logger.info(f"  Snapshot date : {date_str}")
     logger.info(f"  PHY zarr      : {PHY_BACKUP_PATH}")
     logger.info(f"  BGC zarr      : {BGC_BACKUP_PATH}")
+    logger.info(f"  BATHY zarr    : {OUTPUT_DIR / 'bathy_data.zarr'}")
     if errors:
         for err in errors:
             logger.warning(f"  {err}")

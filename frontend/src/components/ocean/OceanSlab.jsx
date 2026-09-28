@@ -585,6 +585,143 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// buildBathyTerrainGeometry:
+//   Builds ONE continuous terrain mesh driven purely by the bathymetry grid.
+//   Shape  → seafloor depth at each lat/lon (real Copernicus deptho).
+//   Colour → ocean variable value at each point (from the nearest depth slice).
+//   Land cells (null bathy) are skipped — creating the natural coastline.
+// ─────────────────────────────────────────────────────────────────────────────
+function buildBathyTerrainGeometry(bathyGrid, bathyLats, bathyLons, depthSlices, variable, exag, maxDepth, bounds, modelWidth, modelDepth, anomalyMode, anomalyThreshold, minVal, maxVal) {
+  if (!bathyGrid?.length || !bathyLats?.length || !bathyLons?.length) return null;
+
+  const west  = Number(bounds.west  ?? bounds.lon_min ?? 70);
+  const east  = Number(bounds.east  ?? bounds.lon_max ?? 85);
+  const south = Number(bounds.south ?? bounds.lat_min ?? 8);
+  const north = Number(bounds.north ?? bounds.lat_max ?? 22);
+  const isAntimeridian = west > east;
+  const lonSpan = isAntimeridian ? (180 - west) + (east + 180) : Math.max(east - west, 0.0001);
+  const latSpan = Math.max(north - south, 0.0001);
+
+  // Build color lookup from depth slices: use shallowest slice (surface variable)
+  const sorted = [...depthSlices]
+    .filter((s) => s.points?.length > 0)
+    .sort((a, b) => (a.depth_m ?? 0) - (b.depth_m ?? 0));
+  const colorSlice = sorted[0]; // shallowest available slice
+
+  // Build sorted lat/lon point arrays for binary-search nearest lookup
+  const ptLats = [];
+  const ptLonsByLat = new Map(); // lat -> [lon, ...]
+  const ptValues = new Map();    // `lat_lon` -> value
+
+  if (colorSlice?.points) {
+    const latSet = new Set();
+    colorSlice.points.forEach((p) => {
+      const v = valueFor(p, variable);
+      if (!Number.isFinite(v)) return;
+      const lat = Number(p.lat);
+      let lon = Number(p.lon ?? p.lng ?? 0);
+      if (isAntimeridian && lon < west) lon += 360;
+      const lk = Math.round(lat * 20) / 20;
+      const lok = Math.round(lon * 20) / 20;
+      ptValues.set(`${lk}_${lok}`, v);
+      latSet.add(lk);
+      if (!ptLonsByLat.has(lk)) ptLonsByLat.set(lk, []);
+      ptLonsByLat.get(lk).push(lok);
+    });
+    ptLats.push(...[...latSet].sort((a, b) => a - b));
+  }
+
+  function bisectNearest(arr, val) {
+    if (!arr.length) return null;
+    let lo = 0, hi = arr.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (arr[mid] < val) lo = mid + 1; else hi = mid;
+    }
+    if (lo > 0 && Math.abs(arr[lo - 1] - val) < Math.abs(arr[lo] - val)) lo--;
+    return arr[lo];
+  }
+
+  function lookupValue(lat, lon) {
+    if (!ptLats.length) return NaN;
+    let nlon = lon;
+    if (isAntimeridian && lon < west) nlon += 360;
+    const lk  = Math.round(lat  * 20) / 20;
+    const lok = Math.round(nlon * 20) / 20;
+    const direct = ptValues.get(`${lk}_${lok}`);
+    if (direct !== undefined) return direct;
+    // Nearest lat
+    const nearLat = bisectNearest(ptLats, lk);
+    if (nearLat === null) return NaN;
+    const lonsForLat = ptLonsByLat.get(nearLat) || [];
+    const nearLon = bisectNearest(lonsForLat.sort((a, b) => a - b), lok);
+    if (nearLon === null) return NaN;
+    return ptValues.get(`${nearLat}_${nearLon}`) ?? NaN;
+  }
+
+  const nLat = bathyLats.length;
+  const nLon = bathyLons.length;
+  const positions = [];
+  const colors    = [];
+  const indices   = [];
+  const vGrid = Array.from({ length: nLat }, () => new Int32Array(nLon).fill(-1));
+  let vPtr = 0;
+
+  for (let i = 0; i < nLat; i++) {
+    const lat = bathyLats[i];
+    for (let j = 0; j < nLon; j++) {
+      const depth = bathyGrid[i]?.[j];
+      if (depth == null || !Number.isFinite(depth)) continue; // land — skip
+
+      let lon = bathyLons[j];
+      let normLon = lon;
+      if (isAntimeridian && lon < west) normLon += 360;
+
+      const x = ((normLon - west) / lonSpan - 0.5) * modelWidth;
+      const z = ((lat - south) / latSpan - 0.5) * modelDepth;
+      const y = depthToY(depth, exag, maxDepth); // deep = low Y, shallow = high Y
+
+      const v = lookupValue(lat, lon);
+      let c;
+      if (Number.isFinite(v)) {
+        if (anomalyMode) {
+          c = anomalyColor(v - (minVal + maxVal) / 2, anomalyThreshold);
+        } else {
+          c = colorFor(v, minVal, maxVal, variable);
+        }
+      } else {
+        c = new THREE.Color('#0d2a4a'); // deep ocean fallback colour
+      }
+
+      positions.push(x, y, z);
+      colors.push(c.r, c.g, c.b);
+      vGrid[i][j] = vPtr++;
+    }
+  }
+
+  if (vPtr === 0) return null;
+
+  for (let i = 0; i < nLat - 1; i++) {
+    for (let j = 0; j < nLon - 1; j++) {
+      const v00 = vGrid[i][j],     v01 = vGrid[i][j + 1];
+      const v10 = vGrid[i + 1][j], v11 = vGrid[i + 1][j + 1];
+      if (v00 >= 0 && v01 >= 0 && v10 >= 0 && v11 >= 0) {
+        indices.push(v00, v10, v01, v01, v10, v11);
+      }
+    }
+  }
+
+  if (!indices.length) return null;
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geo.setAttribute('color',    new THREE.BufferAttribute(new Float32Array(colors),    3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // OceanSlab component
 // ─────────────────────────────────────────────────────────────────────────────
 export default function OceanSlab({
@@ -934,26 +1071,66 @@ export default function OceanSlab({
         rulerGroup.add(new THREE.Line(rGeo, rulerMat));
       });
 
-      // Build the single continuous ocean geometry
-      const geo = buildOceanGeometry(sorted, {
-        ...cur,
-        depthRange: { min: minDepth, max: effectiveMaxDepth },
-        bounds: cur.bounds || { west: 70, east: 85, south: 8, north: 22 },
-      }, modelWidth, modelDepth);
-
-      if (geo) {
-        if (volumeMesh) {
-          scene.remove(volumeMesh);
-          volumeMesh.geometry.dispose();
-          volumeMesh.material.dispose();
-          volumeMesh = null;
+      // Calculate min/max for coloring
+      let minVal = Infinity;
+      let maxVal = -Infinity;
+      let valueCount = 0;
+      for (let si = 0; si < sorted.length; si++) {
+        const pts = sorted[si].points || [];
+        for (let pi = 0; pi < pts.length; pi++) {
+          const v = valueFor(pts[pi], cur.variable);
+          if (Number.isFinite(v)) {
+            if (v < minVal) minVal = v;
+            if (v > maxVal) maxVal = v;
+            valueCount++;
+          }
         }
+      }
+      if (valueCount === 0) { minVal = 0; maxVal = 1; }
+
+      const bGrid = cur.bathyGrid || cur.volumeData?.bathymetry || null;
+      const bLats = cur.bathyLats || cur.volumeData?.bathymetry_lats || null;
+      const bLons = cur.bathyLons || cur.volumeData?.bathymetry_lons || null;
+      const bBounds = cur.bounds || { west: 70, east: 85, south: 8, north: 22 };
+      const hasBathy = bGrid && bLats && bLons && bGrid.length > 0 && bLats.length > 0 && bLons.length > 0;
+
+      let geo = null;
+      let useTerrainMode = hasBathy;
+
+      if (useTerrainMode) {
+        // Build ONE irregular terrain mesh driven by bathymetry shape + variable colour
+        geo = buildBathyTerrainGeometry(
+          bGrid, bLats, bLons, sorted, cur.variable, exag, effectiveMaxDepth,
+          bBounds, modelWidth, modelDepth, cur.anomalyMode, cur.anomalyThreshold || 2.0,
+          minVal, maxVal
+        );
+        // If terrain generation fails, fallback to layered mesh
+        if (!geo) useTerrainMode = false;
+      }
+
+      if (!useTerrainMode) {
+        // Fallback: build the old stacked horizontal sheets
+        geo = buildOceanGeometry(sorted, {
+          ...cur,
+          depthRange: { min: minDepth, max: effectiveMaxDepth },
+          bounds: bBounds,
+        }, modelWidth, modelDepth);
+      }
+
+      if (volumeMesh) {
+        scene.remove(volumeMesh);
+        volumeMesh.geometry.dispose();
+        volumeMesh.material.dispose();
+        volumeMesh = null;
+      }
+      
+      if (geo) {
         const mat = new THREE.MeshStandardMaterial({
           vertexColors: true,
           transparent: true,
-          opacity: cur.opacity ?? 0.88,
-          roughness: 0.28,
-          metalness: 0.08,
+          opacity: useTerrainMode ? 1.0 : (cur.opacity ?? 0.88),
+          roughness: useTerrainMode ? 0.7 : 0.28,
+          metalness: useTerrainMode ? 0.05 : 0.08,
           side: THREE.DoubleSide,
         });
         volumeMesh = new THREE.Mesh(geo, mat);
@@ -967,55 +1144,40 @@ export default function OceanSlab({
         bathyMesh = null;
       }
 
-      // Bathymetry floor — driven by real Copernicus deptho (bathyGrid/bathyLats/bathyLons).
-      // Each PlaneGeometry vertex is mapped back to lat/lon via cur.bounds and then
-      // looked up with getSeafloorDepth(). If no real grid is available we fall back
-      // to a physically plausible bowl so the render is never completely flat.
-      const bathySegs = cur.isInteracting ? 48 : 112;
-      const bathyGeo = new THREE.PlaneGeometry(modelWidth, modelDepth, bathySegs, bathySegs);
-      bathyGeo.rotateX(-Math.PI / 2);
-      const bathyPositions = bathyGeo.attributes.position;
-      const bGrid = cur.bathyGrid || cur.volumeData?.bathymetry || null;
-      const bLats = cur.bathyLats || cur.volumeData?.bathymetry_lats || null;
-      const bLons = cur.bathyLons || cur.volumeData?.bathymetry_lons || null;
-      const bBounds = cur.bounds || { west: 70, east: 85, south: 8, north: 22 };
-      const bWest  = Number(bBounds.west  ?? bBounds.lon_min ?? 70);
-      const bEast  = Number(bBounds.east  ?? bBounds.lon_max ?? 85);
-      const bSouth = Number(bBounds.south ?? bBounds.lat_min ?? 8);
-      const bNorth = Number(bBounds.north ?? bBounds.lat_max ?? 22);
-      const isAnti = bWest > bEast;
-      const bLonSpan = isAnti ? ((180 - bWest) + (bEast + 180)) : Math.max(bEast - bWest, 0.0001);
-      const bLatSpan = Math.max(bNorth - bSouth, 0.0001);
-      const hasBathy = bGrid && bLats && bLons && bGrid.length > 0 && bLats.length > 0 && bLons.length > 0;
-      for (let i = 0; i < bathyPositions.count; i++) {
-        const x = bathyPositions.getX(i);
-        const z = bathyPositions.getZ(i);
-        let finalDepth;
-        if (hasBathy) {
-          // Map Three.js x/z back to geographic lon/lat
-          let lon = bWest + ((x / modelWidth) + 0.5) * bLonSpan;
-          if (isAnti && lon > 180) lon -= 360;
-          const lat = bSouth + ((z / modelDepth) + 0.5) * bLatSpan;
-          const sf = getSeafloorDepth(lat, lon, bGrid, bLats, bLons);
-          // sf===null means land; sf===1000 means fallback — treat land as max depth visually
-          finalDepth = Math.min(sf != null ? sf : effectiveMaxDepth, effectiveMaxDepth);
-        } else {
+      // If we used the new terrain mesh, we DO NOT need a separate seafloor bathyMesh.
+      // Only build the separate dark floor if we fell back to stacked layers.
+      if (!useTerrainMode) {
+        const bathySegs = cur.isInteracting ? 48 : 112;
+        const bathyGeo = new THREE.PlaneGeometry(modelWidth, modelDepth, bathySegs, bathySegs);
+        bathyGeo.rotateX(-Math.PI / 2);
+        const bathyPositions = bathyGeo.attributes.position;
+        const bWest  = Number(bBounds.west  ?? bBounds.lon_min ?? 70);
+        const bEast  = Number(bBounds.east  ?? bBounds.lon_max ?? 85);
+        const bSouth = Number(bBounds.south ?? bBounds.lat_min ?? 8);
+        const bNorth = Number(bBounds.north ?? bBounds.lat_max ?? 22);
+        const isAnti = bWest > bEast;
+        const bLonSpan = isAnti ? ((180 - bWest) + (bEast + 180)) : Math.max(bEast - bWest, 0.0001);
+        const bLatSpan = Math.max(bNorth - bSouth, 0.0001);
+        
+        for (let i = 0; i < bathyPositions.count; i++) {
+          const x = bathyPositions.getX(i);
+          const z = bathyPositions.getZ(i);
+          let finalDepth;
           // Fallback: simple bowl so frame is never empty
           const radialDist = Math.sqrt((x / modelWidth) ** 2 + (z / modelDepth) ** 2);
           finalDepth = Math.min(effectiveMaxDepth * (0.85 + radialDist * 0.15), effectiveMaxDepth);
+          bathyPositions.setY(i, depthToY(finalDepth, exag, effectiveMaxDepth));
         }
-        bathyPositions.setY(i, depthToY(finalDepth, exag, effectiveMaxDepth));
+        bathyGeo.computeVertexNormals();
+        const bathyMat = new THREE.MeshStandardMaterial({
+          color: '#0a2240',
+          roughness: 0.9,
+          metalness: 0.05,
+          side: THREE.DoubleSide,
+        });
+        bathyMesh = new THREE.Mesh(bathyGeo, bathyMat);
+        scene.add(bathyMesh);
       }
-      bathyGeo.computeVertexNormals();
-      const bathyMat = new THREE.MeshStandardMaterial({
-        color: '#0a2240',
-        roughness: 0.9,
-        metalness: 0.05,
-        side: THREE.DoubleSide,
-      });
-      bathyMesh = new THREE.Mesh(bathyGeo, bathyMat);
-      scene.add(bathyMesh);
-
       // Active depth indicator position and visible horizon plane
       const selDepth = Number(cur.depth || 0);
       const activeY = depthToY(selDepth, exag, effectiveMaxDepth);

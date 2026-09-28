@@ -38,6 +38,30 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+# ==============================================================================
+# ── CENTRALISED CONFIG BLOCK ──────────────────────────────────────────────────
+# All tuneable paths and constants live here at the top.
+# ==============================================================================
+BASE_DIR       = Path(__file__).resolve().parent
+OUTPUT_DIR     = BASE_DIR / "output"
+PHY_ZARR_PATH  = OUTPUT_DIR / "phy_data.zarr"
+BGC_ZARR_PATH  = OUTPUT_DIR / "bgc_data.zarr"
+OCEAN_ZARR_PATH = OUTPUT_DIR / "ocean_data.zarr"   # legacy compat
+ARGO_ZARR_PATH  = OUTPUT_DIR / "argo_data.zarr"
+# Copernicus static bathymetry (deptho) — written by fetcher.fetch_bathy_range()
+BATHY_ZARR_PATH = OUTPUT_DIR / "bathy_data.zarr"
+# Full-depth demo dataset and bathymetry (from download_full_depth.py)
+DEMO_FULL_DEPTH_PATH = OUTPUT_DIR / "demo_full_depth.zarr"
+DEMO_BATHYMETRY_PATH = OUTPUT_DIR / "demo_bathymetry.zarr"
+# Backup snapshot (written by create_backup.py, served when live zarr absent)
+BACKUP_PHY_ZARR_PATH = OUTPUT_DIR / "backup_phy.zarr"
+BACKUP_BGC_ZARR_PATH = OUTPUT_DIR / "backup_bgc.zarr"
+# Full-mode cache dir: pre-merged full-depth tiles (for ?mode=full on /ocean/volume-full)
+FULL_CACHE_DIR = OUTPUT_DIR / "full_cache"
+
+ROOT_DIR       = BASE_DIR.parent
+AODN_DIR       = ROOT_DIR / "aodn_output"
+
 # ---------------------------------------------------------------------------
 # Env / dotenv
 # ---------------------------------------------------------------------------
@@ -66,32 +90,13 @@ from router import (
     phy_dataset, bgc_dataset, route_info, today_iso, yesterday_iso,
     resolve_date_input, resolve_date_range, latest_available_iso,
     PHY_VARIABLES, BGC_VARIABLES, resolve_variables, date_info,
+    MAX_OCEAN_DEPTH_M, BATHY_DATASET, BATHY_VARIABLE,
 )
 import ai_inference as _ai
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("main")
 
-# ==============================================================================
-# Paths
-# ==============================================================================
-BASE_DIR       = Path(__file__).resolve().parent
-OUTPUT_DIR     = BASE_DIR / "output"
-PHY_ZARR_PATH  = OUTPUT_DIR / "phy_data.zarr"
-BGC_ZARR_PATH  = OUTPUT_DIR / "bgc_data.zarr"
-OCEAN_ZARR_PATH = OUTPUT_DIR / "ocean_data.zarr"   # legacy compat
-ARGO_ZARR_PATH  = OUTPUT_DIR / "argo_data.zarr"
-# Copernicus static bathymetry (deptho) — written by fetcher.fetch_bathy_range()
-BATHY_ZARR_PATH = OUTPUT_DIR / "bathy_data.zarr"
-# Full-depth demo dataset and bathymetry (from download_full_depth.py)
-DEMO_FULL_DEPTH_PATH = OUTPUT_DIR / "demo_full_depth.zarr"
-DEMO_BATHYMETRY_PATH = OUTPUT_DIR / "demo_bathymetry.zarr"
-# Backup snapshot (written by create_backup.py, served when live zarr absent)
-BACKUP_PHY_ZARR_PATH = OUTPUT_DIR / "backup_phy.zarr"
-BACKUP_BGC_ZARR_PATH = OUTPUT_DIR / "backup_bgc.zarr"
-
-ROOT_DIR       = BASE_DIR.parent
-AODN_DIR       = ROOT_DIR / "aodn_output"
 
 # ==============================================================================
 # App
@@ -139,7 +144,7 @@ _l1: Dict[str, Dict] = {}
 # is approximately 0.494 m. Sending depth=0.0 to the subset() API causes
 # a "no data at coordinate" error. Always clamp to COPERNICUS_MIN_DEPTH.
 # ---------------------------------------------------------------------------
-COPERNICUS_MIN_DEPTH: float = 0.494
+COPERNICUS_MIN_DEPTH: float = 0.494025
 
 def _clamp_depth_min(d: float) -> float:
     """Ensure depth is at or above the Copernicus dataset's shallowest level."""
@@ -285,9 +290,324 @@ def _populate_page_table(ds: xr.Dataset, zarr_path: Path):
         logger.warning(f"[PageTable] Pre-populate failed for {zarr_path.name}: {e}")
 
 
+
+# Thread-safe zarr reload lock — prevents concurrent reloads from racing
 # Thread-safe zarr reload lock — prevents concurrent reloads from racing
 import threading
 _zarr_reload_lock = threading.Lock()
+
+_logged_errors = set()
+def _log_read_error_once(err_type: str, msg: str):
+    if err_type not in _logged_errors:
+        _logged_errors.add(err_type)
+        logger.warning(f"[{err_type}] {msg}")
+
+
+def _physical_bathymetry_relief(lat: float, lon: float) -> float:
+    """Compute physical seafloor depth in metres (0m to ~6000m) based on major ridges and trenches."""
+    l = float(lon)
+    la = float(lat)
+    base_depth = 3800.0
+
+    # 1. Deep Trenches
+    trench_drop = 0.0
+    # Java / Sunda Trench (~ -10S, 105E)
+    d_java = math.hypot(la - (-10.2), l - 105.0)
+    if d_java < 14.0:
+        trench_drop += (1.0 - d_java / 14.0) * 2800.0
+    # Mariana Trench (~11N, 142E)
+    d_mariana = math.hypot(la - 11.3, l - 142.2)
+    if d_mariana < 12.0:
+        trench_drop += (1.0 - d_mariana / 12.0) * 3500.0
+    # Puerto Rico Trench (~19.5N, -66W)
+    d_pr = math.hypot(la - 19.5, l - (-66.0))
+    if d_pr < 10.0:
+        trench_drop += (1.0 - d_pr / 10.0) * 2500.0
+    # South Sandwich Trench (~-55S, -26W)
+    d_ss = math.hypot(la - (-55.0), l - (-26.0))
+    if d_ss < 12.0:
+        trench_drop += (1.0 - d_ss / 12.0) * 2600.0
+
+    # 2. Mid-Ocean Ridges (uplift seafloor towards 1800-2400m)
+    ridge_uplift = 0.0
+    # Mid-Atlantic Ridge
+    if -55 <= la <= 65 and -52 <= l <= -15:
+        spine = -35.0 + math.sin(la * 0.09) * 7.0
+        dist = abs(l - spine)
+        if dist < 9.0:
+            ridge_uplift += (1.0 - dist / 9.0) * 1650.0
+    # Central Indian Ridge & Ninety East Ridge
+    if -45 <= la <= 15 and 55 <= l <= 96:
+        cir = 68.0 + math.sin(la * 0.12) * 6.0
+        d_cir = abs(l - cir)
+        d_ner = abs(l - 90.0)
+        d_min = min(d_cir, d_ner)
+        if d_min < 8.0:
+            ridge_uplift += (1.0 - d_min / 8.0) * 1550.0
+    # East Pacific Rise
+    if -60 <= la <= 25 and -140 <= l <= -90:
+        epr = -112.0 + math.sin(la * 0.08) * 9.0
+        d_epr = abs(l - epr)
+        if d_epr < 12.0:
+            ridge_uplift += (1.0 - d_epr / 12.0) * 1500.0
+
+    # 3. Multi-harmonic abyssal hills & fracture zones
+    hills = (
+        240.0 * math.sin(la * 0.42 + l * 0.31) +
+        160.0 * math.cos(la * 0.85 - l * 0.58) +
+        90.0 * math.sin(la * 1.65 + l * 1.35)
+    )
+
+    depth = base_depth - ridge_uplift + trench_drop + hills
+    return round(max(50.0, min(6500.0, depth)), 2)
+
+
+def _thin_depth_levels(levels: List[float], target: int = 18) -> List[float]:
+    """Thin a depth level list to ~target entries, keeping dense shallow coverage
+    and sparse deep coverage. Always includes the shallowest and deepest levels."""
+    if len(levels) <= target:
+        return [round(float(d), 3) for d in levels]
+    result = [levels[0]]
+    shallow = [d for d in levels if d <= 200.0]
+    deep    = [d for d in levels if d >  200.0]
+    n_shallow = min(len(shallow), max(1, target * 2 // 3))
+    n_deep    = max(1, target - n_shallow)
+    if shallow:
+        step_s = max(1, len(shallow) // n_shallow)
+        result += [d for d in shallow[step_s::step_s]]
+    if deep:
+        step_d = max(1, len(deep) // n_deep)
+        result += [d for d in deep[::step_d]]
+    if levels[-1] not in result:
+        result.append(levels[-1])
+    seen = set()
+    out = []
+    for d in sorted(result):
+        rd = round(float(d), 3)
+        if rd not in seen:
+            seen.add(rd)
+            out.append(rd)
+    return out[:target]
+
+
+def get_bathymetry(
+    bbox: Any,
+    lats: Optional[List[float]] = None,
+    lons: Optional[List[float]] = None,
+    *args,
+) -> Tuple[List[List[Optional[float]]], str]:
+    """
+    Return (bathy_grid[lat][lon], source_label).
+    Tiers:
+      1. bathy_data.zarr (Copernicus deptho) — if its extent covers the bbox
+      2. demo_bathymetry.zarr               — if its extent covers the bbox
+      3. analytical relief model
+
+    Coverage = store lat/lon extent vs bbox (NOT NaN counting).
+    Inside a covered store: NaN = land (valid null); outside = go to next tier.
+    .sel nearest with tolerance 0.2 deg.
+    bathymetry_source: "copernicus_deptho" | "demo_bathymetry" | "analytical_relief"
+    Never label analytical as real; never infer bathymetry from temperature.
+    """
+    global bathy_dataset_xr, demo_bathymetry_xr
+
+    if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+        lat_min, lat_max, lon_min, lon_max = [float(x) for x in bbox]
+    elif isinstance(bbox, dict):
+        lat_min = float(bbox.get("lat_min", bbox.get("min_lat", 0)))
+        lat_max = float(bbox.get("lat_max", bbox.get("max_lat", 0)))
+        lon_min = float(bbox.get("lon_min", bbox.get("min_lon", 0)))
+        lon_max = float(bbox.get("lon_max", bbox.get("max_lon", 0)))
+    elif len(args) >= 2:
+        lat_min, lat_max, lon_min, lon_max = float(bbox), float(lats), float(lons), float(args[0])
+        lats = args[1] if len(args) > 1 else None
+        lons = args[2] if len(args) > 2 else None
+    else:
+        lat_min, lat_max, lon_min, lon_max = 8.0, 22.0, 68.0, 90.0
+
+    if lats is None or len(lats) == 0:
+        lats = [round(lat_min + i * (lat_max - lat_min) / 40.0, 3) for i in range(41)]
+    if lons is None or len(lons) == 0:
+        lons = [round(lon_min + j * (lon_max - lon_min) / 40.0, 3) for j in range(41)]
+
+    # Cap to <= 120x120 for contract budget
+    if len(lats) > 120:
+        stride_la = max(1, int(math.ceil(len(lats) / 120.0)))
+        lats = lats[::stride_la]
+    if len(lons) > 120:
+        stride_lo = max(1, int(math.ceil(len(lons) / 120.0)))
+        lons = lons[::stride_lo]
+
+    def _store_covers(ds: xr.Dataset) -> bool:
+        try:
+            lc = _lat_coord(ds)
+            lnc = _lon_coord(ds)
+            ds_lat_min = float(ds[lc].values.min())
+            ds_lat_max = float(ds[lc].values.max())
+            ds_lon_min = float(ds[lnc].values.min())
+            ds_lon_max = float(ds[lnc].values.max())
+            return (ds_lat_min <= lat_min + 0.1 and ds_lat_max >= lat_max - 0.1 and
+                    ds_lon_min <= lon_min + 0.1 and ds_lon_max >= lon_max - 0.1)
+        except Exception:
+            return False
+
+    def _extract_grid(ds: xr.Dataset, var: str) -> Optional[List[List[Optional[float]]]]:
+        try:
+            lc = _lat_coord(ds)
+            lnc = _lon_coord(ds)
+            sub = ds[var].sel({lc: lats}, method="nearest", tolerance=0.2).sel({lnc: lons}, method="nearest", tolerance=0.2)
+            arr = sub.values
+            while arr.ndim > 2:
+                arr = arr[0]
+            grid = []
+            for i in range(len(lats)):
+                row = []
+                for j in range(len(lons)):
+                    if i < arr.shape[0] and j < arr.shape[1]:
+                        val = arr[i, j]
+                        if np.isfinite(val):
+                            row.append(round(abs(float(val)), 2))
+                        else:
+                            row.append(None)
+                    else:
+                        row.append(None)
+                grid.append(row)
+            return grid
+        except Exception as e:
+            _log_read_error_once("bathy_extract", f"Failed extracting bathymetry grid: {e}")
+            return None
+
+    # Tier 1: Copernicus deptho
+    if bathy_dataset_xr is None and BATHY_ZARR_PATH.exists():
+        bathy_dataset_xr = _safe_open_zarr(BATHY_ZARR_PATH)
+    if bathy_dataset_xr is not None and "deptho" in bathy_dataset_xr and _store_covers(bathy_dataset_xr):
+        grid = _extract_grid(bathy_dataset_xr, "deptho")
+        if grid is not None:
+            return grid, "copernicus_deptho"
+
+    # Tier 2: demo_bathymetry
+    if demo_bathymetry_xr is None and DEMO_BATHYMETRY_PATH.exists():
+        demo_bathymetry_xr = _safe_open_zarr(DEMO_BATHYMETRY_PATH)
+    bathy_var = None
+    if demo_bathymetry_xr is not None:
+        for v in ("seafloor_depth_m", "deptho", "depth"):
+            if v in demo_bathymetry_xr:
+                bathy_var = v
+                break
+    if bathy_var and _store_covers(demo_bathymetry_xr):
+        grid = _extract_grid(demo_bathymetry_xr, bathy_var)
+        if grid is not None:
+            return grid, "demo_bathymetry"
+
+    # Tier 3: analytical relief
+    grid = [
+        [_physical_bathymetry_relief(la, lo) for lo in lons]
+        for la in lats
+    ]
+    return grid, "analytical_relief"
+
+
+def pick_phy_dataset(
+    bbox: Any,
+    date: Optional[str] = None,
+    need_depth_m: float = 0.0,
+    *args,
+) -> Tuple[Optional[xr.Dataset], str, bool]:
+    """
+    Select the best physics dataset for this bbox/date/depth request.
+    Order: live phy_data.zarr -> full_cache file covering the request -> demo_full_depth -> backup_phy -> analytical.
+    A candidate qualifies only if it overlaps bbox AND reaches min(need_depth_m, native max) within 15%.
+    A shallow live store must not beat a deep demo.
+    Source labels: copernicus_zarr | full_cache | demo_full_depth | backup_cache | analytical_demo
+    """
+    global phy_dataset_xr, demo_full_depth_xr, backup_phy_dataset_xr
+
+    if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+        lat_min, lat_max, lon_min, lon_max = [float(x) for x in bbox]
+        date_str = str(date) if date else today_iso()
+        req_depth = float(need_depth_m)
+    elif isinstance(bbox, dict):
+        lat_min = float(bbox.get("lat_min", bbox.get("min_lat", 0)))
+        lat_max = float(bbox.get("lat_max", bbox.get("max_lat", 0)))
+        lon_min = float(bbox.get("lon_min", bbox.get("min_lon", 0)))
+        lon_max = float(bbox.get("lon_max", bbox.get("max_lon", 0)))
+        date_str = str(date) if date else today_iso()
+        req_depth = float(need_depth_m)
+    elif len(args) >= 2:
+        lat_min, lat_max, lon_min, lon_max = float(bbox), float(date), float(need_depth_m), float(args[0])
+        date_str = str(args[1]) if len(args) > 1 else today_iso()
+        req_depth = float(args[2]) if len(args) > 2 else 0.0
+    else:
+        lat_min, lat_max, lon_min, lon_max = 8.0, 22.0, 68.0, 90.0
+        date_str = str(date) if date else today_iso()
+        req_depth = float(need_depth_m)
+
+    def _overlaps_bbox(ds: xr.Dataset) -> bool:
+        try:
+            lc = _lat_coord(ds)
+            lnc = _lon_coord(ds)
+            ds_lat_min = float(ds[lc].values.min())
+            ds_lat_max = float(ds[lc].values.max())
+            ds_lon_min = float(ds[lnc].values.min())
+            ds_lon_max = float(ds[lnc].values.max())
+            lat_ok = ds_lat_max >= lat_min and ds_lat_min <= lat_max
+            lon_ok = ds_lon_max >= lon_min and ds_lon_min <= lon_max
+            return lat_ok and lon_ok
+        except Exception:
+            return False
+
+    def _native_max_depth(ds: xr.Dataset) -> float:
+        try:
+            if "depth" in ds.dims:
+                return float(ds["depth"].values.max())
+        except Exception:
+            pass
+        return 0.0
+
+    def _qualifies(ds: xr.Dataset) -> bool:
+        if not _overlaps_bbox(ds):
+            return False
+        native_max = _native_max_depth(ds)
+        # Target depth: candidate must reach within 15% of need_depth_m
+        if req_depth > 50.0:
+            target = min(req_depth, MAX_OCEAN_DEPTH_M)
+            return native_max >= target * 0.85
+        return True
+
+    # Tier 1: live zarr
+    if phy_dataset_xr is not None and _qualifies(phy_dataset_xr):
+        return phy_dataset_xr, "copernicus_zarr", False
+
+    # Tier 2: full_cache files covering the request
+    if FULL_CACHE_DIR.exists():
+        for fc in sorted(FULL_CACHE_DIR.glob("*.zarr")):
+            try:
+                ds_fc = _safe_open_zarr(fc)
+                if ds_fc is not None and _qualifies(ds_fc):
+                    if "time" in ds_fc.coords:
+                        t_min = str(ds_fc["time"].values.min())[:10]
+                        t_max = str(ds_fc["time"].values.max())[:10]
+                        if t_min <= date_str <= t_max:
+                            return ds_fc, "full_cache", False
+                    else:
+                        return ds_fc, "full_cache", False
+            except Exception:
+                pass
+
+    # Tier 3: demo_full_depth
+    if demo_full_depth_xr is None and DEMO_FULL_DEPTH_PATH.exists():
+        demo_full_depth_xr = _safe_open_zarr(DEMO_FULL_DEPTH_PATH)
+    if demo_full_depth_xr is not None and _qualifies(demo_full_depth_xr):
+        return demo_full_depth_xr, "demo_full_depth", True
+
+    # Tier 4: backup_phy
+    if backup_phy_dataset_xr is None and BACKUP_PHY_ZARR_PATH.exists():
+        backup_phy_dataset_xr = _safe_open_zarr(BACKUP_PHY_ZARR_PATH)
+    if backup_phy_dataset_xr is not None and _qualifies(backup_phy_dataset_xr):
+        return backup_phy_dataset_xr, "backup_cache", True
+
+    return None, "analytical_demo", True
+
 
 
 def _safe_open_zarr(path: Path) -> Optional[xr.Dataset]:
@@ -333,6 +653,11 @@ def load_datasets():
     global demo_full_depth_xr, demo_bathymetry_xr, bathy_dataset_xr
     logger.info("=" * 60)
     logger.info("Initialising L2 storage layer (Zarr)")
+
+    # Ensure output directories exist
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    FULL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info(f"[STARTUP] FULL_CACHE_DIR: {FULL_CACHE_DIR}")
 
     # Log credential status at startup so the operator knows immediately
     # whether live Copernicus fetches (phy/bgc/bathy) will work.
@@ -396,8 +721,9 @@ def load_datasets():
 # Zarr slice helpers
 # ==============================================================================
 
-def _select_point(ds: xr.Dataset, lat: float, lon: float) -> xr.Dataset:
-    return ds.sel({_lat_coord(ds): lat, _lon_coord(ds): lon}, method="nearest")
+def _select_point(ds: xr.Dataset, lat: float, lon: float, tolerance: Optional[float] = None) -> xr.Dataset:
+    tol = tolerance if tolerance is not None else (0.5 if (ds is bgc_dataset_xr or "bgc" in getattr(ds, "title", "").lower()) else 0.2)
+    return ds.sel({_lat_coord(ds): lat, _lon_coord(ds): lon}, method="nearest", tolerance=tol)
 
 
 def _synthesize_phy_point(lat: float, lon: float, depth: float) -> Dict[str, Optional[float]]:
@@ -449,7 +775,9 @@ def _synthesize_bgc_point(temp_c: Optional[float], depth: float) -> Dict[str, Op
 
 
 def _read_phy_point(lat: float, lon: float, depth: float, date_str: str) -> Dict:
-    """Read physics variables from L2 zarr at nearest grid point with date verification."""
+    """Read physics variables from L2 zarr at nearest grid point with date verification.
+    Returns only variables actually present in the store; never synthesises missing ones.
+    """
     global phy_dataset_xr
     if phy_dataset_xr is None and PHY_ZARR_PATH.exists():
         try:
@@ -476,6 +804,10 @@ def _read_phy_point(lat: float, lon: float, depth: float, date_str: str) -> Dict
         if "depth" in pt.dims:
             pt = pt.sel(depth=depth, method="nearest")
             actual_depth = _safe_float(pt["depth"].values) or depth
+            # Depth tolerance: if nearest level is too far away, return no data
+            tol = max(25.0, depth * 0.15)
+            if abs(actual_depth - depth) > tol:
+                return {}
 
         if "time" in pt.dims:
             pt = pt.sel(time=np.datetime64(date_str), method="nearest")
@@ -496,15 +828,20 @@ def _read_phy_point(lat: float, lon: float, depth: float, date_str: str) -> Dict
             "vo":     "current_v_ms",
             "zos":    "sea_level_m",
         }
+        missing_vars = []
         for src, dst in var_map.items():
             if src in pt:
                 val = _safe_float(pt[src].values)
-                if val == 0.0 and dst in ("temperature_c", "salinity_psu"):
-                    val = None
                 result[dst] = val
+            else:
+                missing_vars.append(src)
 
-        if result.get("temperature_c") is None and result.get("salinity_psu") is None:
+        if result.get("temperature_c") is None and result.get("salinity_psu") is None and \
+           result.get("current_u_ms") is None:
             return {}
+
+        if missing_vars:
+            result["missing_variables"] = missing_vars
 
         # Compute speed and heading for current vectors
         u = result.get("current_u_ms")
@@ -513,26 +850,9 @@ def _read_phy_point(lat: float, lon: float, depth: float, date_str: str) -> Dict
             result["current_speed_ms"] = round(math.sqrt(u * u + v * v), 3)
             result["current_heading_deg"] = round((math.atan2(v, u) * 180.0 / math.pi) % 360.0, 1)
 
-        # Fallback for physics variables if store only contains thetao (legacy)
-        if "temperature_c" in result and result["temperature_c"] is not None:
-            lat_norm = max(0.0, min(1.0, (lat - 8.0) / 14.0))
-            if "salinity_psu" not in result or result["salinity_psu"] is None:
-                result["salinity_psu"] = round(34.2 - 1.2 * lat_norm + 0.4 * (1.0 - math.exp(-depth / 30.0)), 2)
-            if "current_u_ms" not in result or result["current_u_ms"] is None:
-                result["current_u_ms"] = round(0.14 * math.sin(lat * 0.2 + lon * 0.1), 3)
-            if "current_v_ms" not in result or result["current_v_ms"] is None:
-                result["current_v_ms"] = round(0.09 * math.cos(lat * 0.15 - lon * 0.1), 3)
-            if "current_speed_ms" not in result:
-                ru = result["current_u_ms"]
-                rv = result["current_v_ms"]
-                result["current_speed_ms"] = round(math.sqrt(ru * ru + rv * rv), 3)
-                result["current_heading_deg"] = round((math.atan2(rv, ru) * 180.0 / math.pi) % 360.0, 1)
-            if "sea_level_m" not in result or result["sea_level_m"] is None:
-                result["sea_level_m"] = round(0.04 + 0.03 * math.sin(lon * 0.3), 3)
-
         return result
     except Exception as e:
-        logger.debug(f"[L2 phy] point read failed: {e}")
+        logger.warning(f"[L2 phy point] read failed ({type(e).__name__}): {e}")
         return {}
 
 
@@ -683,8 +1003,9 @@ def _read_phy_grid(
             region = region.sel(depth=depth, method="nearest")
             if "depth" in region.coords:
                 actual_depth = _safe_float(region["depth"].values) or depth
-                if abs(actual_depth - depth) > 25.0:
-                    is_ref = True
+                tol = max(25.0, depth * 0.15)
+                if abs(actual_depth - depth) > tol:
+                    return [], None, date_str, False
 
         if "time" in region.dims:
             if exact_date:
@@ -2593,6 +2914,7 @@ async def ocean_volume(
     bathy_lats = []
     bathy_lons = []
     bathy_max = 5727.917
+    bathy_source_label = "none"
 
     global bathy_dataset_xr
     if bathy_dataset_xr is None and BATHY_ZARR_PATH.exists():
@@ -2606,10 +2928,17 @@ async def ocean_volume(
         except Exception as _bfe:
             logger.debug(f"[ocean_volume] Bathy fetch: {_bfe}")
 
-    if slices and slices[0].get("points"):
-        pts0 = slices[0]["points"]
-        bathy_lats = sorted(list(set(round(p["lat"], 3) for p in pts0)))
-        bathy_lons = sorted(list(set(round(p["lon"], 3) for p in pts0)))
+    # Always build an independent lat/lon grid for bathymetry —
+    # do NOT depend on slice points (which may be empty or coarse analytical data).
+    _n_bathy = 60
+    bathy_lats = [
+        round(lat_min + i * (lat_max - lat_min) / (_n_bathy - 1), 3)
+        for i in range(_n_bathy)
+    ] if lat_max > lat_min else [round(lat_min, 3)]
+    bathy_lons = [
+        round(lon_min + j * (lon_max - lon_min) / (_n_bathy - 1), 3)
+        for j in range(_n_bathy)
+    ] if lon_max > lon_min else [round(lon_min, 3)]
 
     if bathy_dataset_xr is not None and "deptho" in bathy_dataset_xr and bathy_lats and bathy_lons:
         try:
@@ -2625,7 +2954,13 @@ async def ocean_volume(
                     for row in b_reg
                 ]
                 bathy_max = round(float(finite_vals.max()), 1)
-        except Exception:
+                bathy_source_label = "copernicus_deptho"
+                logger.info(
+                    f"[BATHY /volume] copernicus_deptho: shape=({len(bathy_grid)}×{len(bathy_grid[0]) if bathy_grid else 0}) "
+                    f"distinct={len(set(v for r in bathy_grid for v in r if v is not None))} max={bathy_max}m"
+                )
+        except Exception as _bex:
+            logger.warning(f"[BATHY /volume] deptho sel failed: {_bex}")
             bathy_grid = []
 
     if not bathy_grid and bathy_lats and bathy_lons:
@@ -2634,10 +2969,11 @@ async def ocean_volume(
             for la in bathy_lats
         ]
         bathy_max = max(max(row) for row in bathy_grid)
+        bathy_source_label = "physical_relief_model"
 
     result = {
         "status": "ok" if vol_source != "no_data" else "no_data",
-        "fetch_status": fetch_status,        # NEW: frontend loading state
+        "fetch_status": fetch_status,
         "bbox": {"lat_min": lat_min, "lat_max": lat_max, "lon_min": lon_min, "lon_max": lon_max},
         "date": date_str,
         "actual_date": effective_backup_date if vol_source == "backup_cache" else date_str,
@@ -2650,6 +2986,7 @@ async def ocean_volume(
         "bathymetry": bathy_grid,
         "bathymetry_lats": bathy_lats,
         "bathymetry_lons": bathy_lons,
+        "bathymetry_source": bathy_source_label,
         "max_depth_m": bathy_max,
         "floats": enriched_floats,
         "is_reference": vol_source in ("analytical_demo", "copernicus_zarr_reference", "backup_cache"),
@@ -2852,63 +3189,6 @@ async def ocean_depth_levels():
     }
 
 
-def _physical_bathymetry_relief(lat: float, lon: float) -> float:
-    """Compute physical seafloor depth in metres (0m to ~6000m) based on major ridges and trenches."""
-    l = float(lon)
-    la = float(lat)
-    base_depth = 3800.0
-
-    # 1. Deep Trenches
-    trench_drop = 0.0
-    # Java / Sunda Trench (~ -10S, 105E)
-    d_java = math.hypot(la - (-10.2), l - 105.0)
-    if d_java < 14.0:
-        trench_drop += (1.0 - d_java / 14.0) * 2800.0
-    # Mariana Trench (~11N, 142E)
-    d_mariana = math.hypot(la - 11.3, l - 142.2)
-    if d_mariana < 12.0:
-        trench_drop += (1.0 - d_mariana / 12.0) * 3500.0
-    # Puerto Rico Trench (~19.5N, -66W)
-    d_pr = math.hypot(la - 19.5, l - (-66.0))
-    if d_pr < 10.0:
-        trench_drop += (1.0 - d_pr / 10.0) * 2500.0
-    # South Sandwich Trench (~-55S, -26W)
-    d_ss = math.hypot(la - (-55.0), l - (-26.0))
-    if d_ss < 12.0:
-        trench_drop += (1.0 - d_ss / 12.0) * 2600.0
-
-    # 2. Mid-Ocean Ridges (uplift seafloor towards 1800-2400m)
-    ridge_uplift = 0.0
-    # Mid-Atlantic Ridge
-    if -55 <= la <= 65 and -52 <= l <= -15:
-        spine = -35.0 + math.sin(la * 0.09) * 7.0
-        dist = abs(l - spine)
-        if dist < 9.0:
-            ridge_uplift += (1.0 - dist / 9.0) * 1650.0
-    # Central Indian Ridge & Ninety East Ridge
-    if -45 <= la <= 15 and 55 <= l <= 96:
-        cir = 68.0 + math.sin(la * 0.12) * 6.0
-        d_cir = abs(l - cir)
-        d_ner = abs(l - 90.0)
-        d_min = min(d_cir, d_ner)
-        if d_min < 8.0:
-            ridge_uplift += (1.0 - d_min / 8.0) * 1550.0
-    # East Pacific Rise
-    if -60 <= la <= 25 and -140 <= l <= -90:
-        epr = -112.0 + math.sin(la * 0.08) * 9.0
-        d_epr = abs(l - epr)
-        if d_epr < 12.0:
-            ridge_uplift += (1.0 - d_epr / 12.0) * 1500.0
-
-    # 3. Multi-harmonic abyssal hills & fracture zones
-    hills = (
-        240.0 * math.sin(la * 0.42 + l * 0.31) +
-        160.0 * math.cos(la * 0.85 - l * 0.58) +
-        90.0 * math.sin(la * 1.65 + l * 1.35)
-    )
-
-    depth = base_depth - ridge_uplift + trench_drop + hills
-    return round(max(50.0, min(6500.0, depth)), 2)
 
 
 def _is_bathy_covered(lat_min: float, lat_max: float, lon_min: float, lon_max: float) -> bool:

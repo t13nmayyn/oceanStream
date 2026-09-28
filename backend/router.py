@@ -68,6 +68,13 @@ ANFC_DATASET_CO2    = "cmems_mod_glo_bgc-co2_anfc_0.25deg_P1D-m"
 PHY_MY_DATASET      = "cmems_mod_glo_phy_my_0.083deg_P1D-m"
 BGC_MY_DATASET      = "cmems_mod_glo_bgc_my_0.25deg_P1D-m"
 
+# Static bathymetry (deptho) — never date-routed
+BATHY_DATASET = "cmems_mod_glo_phy_my_0.083deg_static"
+BATHY_VARIABLE = "deptho"
+
+# Shared global ocean maximum depth constant
+MAX_OCEAN_DEPTH_M: float = 5727.917
+
 # Primary default dataset handles (for backwards compatibility)
 PHY_ANFC_DATASET = ANFC_DATASET_THETAO
 BGC_ANFC_DATASET = ANFC_DATASET_CHL
@@ -92,7 +99,7 @@ ANFC_VARIABLE_MAP: Dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Variable lists
 # ---------------------------------------------------------------------------
-PHY_VARIABLES: List[str] = ["thetao", "so", "uo", "vo", "zos"]
+PHY_VARIABLES: List[str] = ["thetao", "so", "uo", "vo", "zos", "mlotst"]
 BGC_VARIABLES: List[str] = ["chl", "no3", "po4", "si", "o2", "ph", "spco2"]
 
 PHY_ALIAS: dict = {
@@ -100,6 +107,7 @@ PHY_ALIAS: dict = {
     "salinity": "so",
     "current_u": "uo", "current_v": "vo",
     "sea_level": "zos",
+    "mixed_layer_thickness": "mlotst",
 }
 BGC_ALIAS: dict = {
     "chlorophyll": "chl",
@@ -148,8 +156,8 @@ def bgc_dataset(date_str: str) -> str:
 
 
 def resolve_variables(var_list: List[str]) -> dict:
-    """Split a mixed variable list into {phy: [...], bgc: [...]} canonical names."""
-    phy, bgc = [], []
+    """Split a mixed variable list into {phy: [...], bgc: [...], unknown: [...]} canonical names."""
+    phy, bgc, unknown = [], [], []
     for v in var_list:
         canon = PHY_ALIAS.get(v, v)
         if canon in PHY_VARIABLES:
@@ -158,16 +166,55 @@ def resolve_variables(var_list: List[str]) -> dict:
         canon = BGC_ALIAS.get(v, v)
         if canon in BGC_VARIABLES:
             bgc.append(canon)
-    return {"phy": list(dict.fromkeys(phy)), "bgc": list(dict.fromkeys(bgc))}
+            continue
+        unknown.append(v)
+    return {
+        "phy": list(dict.fromkeys(phy)),
+        "bgc": list(dict.fromkeys(bgc)),
+        "unknown": list(dict.fromkeys(unknown)),
+    }
 
 
 def dataset_for_variable(var_name: str, date_str: str) -> str:
     """Return the authoritative Copernicus dataset ID for a single variable on date_str."""
     canon = PHY_ALIAS.get(var_name, BGC_ALIAS.get(var_name, var_name))
+    if canon == BATHY_VARIABLE:
+        return BATHY_DATASET
     if is_recent(date_str):
         return ANFC_VARIABLE_MAP.get(canon, ANFC_DATASET_THETAO)
     else:
         return BGC_MY_DATASET if canon in BGC_VARIABLES else PHY_MY_DATASET
+
+
+def dataset_candidates(var: str, date_str: str) -> List[str]:
+    """
+    Return [primary, secondary] dataset IDs for variable.
+    ANFC then MY for recent dates; MY then ANFC otherwise.
+    Never date-routed for bathymetry (deptho).
+    Note: ph and spco2 exist in BGC_MY_DATASET (cmems_mod_glo_bgc_my_0.25deg_P1D-m)
+    alongside chl, no3, po4, si, o2 in the historical multi-year reanalysis.
+    """
+    canon = PHY_ALIAS.get(var, BGC_ALIAS.get(var, var))
+    if canon == BATHY_VARIABLE or canon == "deptho":
+        return [BATHY_DATASET]
+
+    if canon in BGC_VARIABLES:
+        anfc_ds = ANFC_VARIABLE_MAP.get(canon, ANFC_DATASET_CHL)
+        my_ds = BGC_MY_DATASET
+    else:
+        anfc_ds = ANFC_VARIABLE_MAP.get(canon, ANFC_DATASET_THETAO)
+        my_ds = PHY_MY_DATASET
+
+    if is_recent(date_str):
+        candidates = [anfc_ds, my_ds]
+    else:
+        candidates = [my_ds, anfc_ds]
+
+    seen = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.append(c)
+    return seen
 
 
 def group_variables_by_dataset(variables: List[str], date_str: str) -> Dict[str, List[str]]:
