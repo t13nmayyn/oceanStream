@@ -591,7 +591,7 @@ function buildOceanGeometry(slicesToRender, current, modelWidth, modelDepth) {
 //   Colour → ocean variable value at each point (from the nearest depth slice).
 //   Land cells (null bathy) are skipped — creating the natural coastline.
 // ─────────────────────────────────────────────────────────────────────────────
-function buildBathyTerrainGeometry(bathyGrid, bathyLats, bathyLons, depthSlices, variable, exag, maxDepth, bounds, modelWidth, modelDepth, anomalyMode, anomalyThreshold, minVal, maxVal, colorDepth = 0) {
+function buildBathyTerrainGeometry(bathyGrid, bathyLats, bathyLons, depthSlices, variable, exag, maxDepth, bounds, modelWidth, modelDepth, anomalyMode, anomalyThreshold, minVal, maxVal) {
   if (!bathyGrid?.length || !bathyLats?.length || !bathyLons?.length) return null;
 
   const west  = Number(bounds.west  ?? bounds.lon_min ?? 70);
@@ -606,7 +606,7 @@ function buildBathyTerrainGeometry(bathyGrid, bathyLats, bathyLons, depthSlices,
   const sorted = [...depthSlices]
     .filter((s) => s.points?.length > 0)
     .sort((a, b) => (a.depth_m ?? 0) - (b.depth_m ?? 0));
-  const colorSlice = sorted.length ? sorted.reduce((b, s) => (Math.abs((s.depth_m ?? 0) - colorDepth) < Math.abs((b.depth_m ?? 0) - colorDepth) ? s : b), sorted[0]) : undefined;
+  const colorSlice = sorted[0]; // shallowest available slice
 
   // Build sorted lat/lon point arrays for binary-search nearest lookup
   const ptLats = [];
@@ -656,7 +656,6 @@ function buildBathyTerrainGeometry(bathyGrid, bathyLats, bathyLons, depthSlices,
     const lonsForLat = ptLonsByLat.get(nearLat) || [];
     const nearLon = bisectNearest(lonsForLat.sort((a, b) => a - b), lok);
     if (nearLon === null) return NaN;
-    if (Math.abs(nearLat - lk) > 0.5 || Math.abs(nearLon - lok) > 0.5) return NaN;
     return ptValues.get(`${nearLat}_${nearLon}`) ?? NaN;
   }
 
@@ -731,7 +730,6 @@ export default function OceanSlab({
   bathyGrid = null,
   bathyLats = null,
   bathyLons = null,
-  bathySource = null,
   grid = [],
   floats = [],
   showArgo = true,
@@ -761,19 +759,19 @@ export default function OceanSlab({
   const tooltipRef = useRef(null);
 
   const dataRef = useRef({
-    depthSlices, volumeData, bathyGrid, bathyLats, bathyLons, bathySource, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
+    depthSlices, volumeData, bathyGrid, bathyLats, bathyLons, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
     variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold,
     source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading, loadingPhase,
   });
 
   useEffect(() => {
     dataRef.current = {
-      depthSlices, volumeData, bathyGrid, bathyLats, bathyLons, bathySource, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
+      depthSlices, volumeData, bathyGrid, bathyLats, bathyLons, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
       variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold,
       source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading, loadingPhase,
     };
   }, [
-    depthSlices, volumeData, bathyGrid, bathyLats, bathyLons, bathySource, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
+    depthSlices, volumeData, bathyGrid, bathyLats, bathyLons, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
     variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold,
     source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading, loadingPhase,
   ]);
@@ -989,7 +987,6 @@ export default function OceanSlab({
     // Single continuous ocean volume mesh and managed bathymetric floor
     let volumeMesh = null;
     let bathyMesh = null;
-    let effMax = COPERNICUS_MAX_DEPTH;
 
     let targetCameraY = null;
     let targetControlsY = null;
@@ -1054,10 +1051,7 @@ export default function OceanSlab({
       const minDepth = sorted[0]?.depth_m ?? 0;
       const maxDepthVal = sorted[sorted.length - 1]?.depth_m ?? 1000;
       const layerCount = sorted.length;
-      let bMax = 0;
-      for (const r of (cur.bathyGrid || cur.volumeData?.bathymetry || [])) for (const v of (r || [])) if (Number.isFinite(v) && v > bMax) bMax = v;
-      const effectiveMaxDepth = Math.max(cur.maxDepth ?? 0, maxDepthVal, bMax, 100);
-      effMax = effectiveMaxDepth;
+      const effectiveMaxDepth = Math.max(cur.maxDepth ?? 0, maxDepthVal, 100);
 
       // Dynamically update depth ruler scale lines to match available depth
       const exag = cur.verticalExaggeration ?? 35;
@@ -1108,13 +1102,13 @@ export default function OceanSlab({
         geo = buildBathyTerrainGeometry(
           bGrid, bLats, bLons, sorted, cur.variable, exag, effectiveMaxDepth,
           bBounds, modelWidth, modelDepth, cur.anomalyMode, cur.anomalyThreshold || 2.0,
-          minVal, maxVal, Number(cur.depth || 0)
+          minVal, maxVal
         );
         // If terrain generation fails, fallback to layered mesh
         if (!geo) useTerrainMode = false;
       }
 
-      if (false) { // stacked sheets disabled: terrain only
+      if (!useTerrainMode) {
         // Fallback: build the old stacked horizontal sheets
         geo = buildOceanGeometry(sorted, {
           ...cur,
@@ -1152,7 +1146,7 @@ export default function OceanSlab({
 
       // If we used the new terrain mesh, we DO NOT need a separate seafloor bathyMesh.
       // Only build the separate dark floor if we fell back to stacked layers.
-      if (false) { // flat plane disabled
+      if (!useTerrainMode) {
         const bathySegs = cur.isInteracting ? 48 : 112;
         const bathyGeo = new THREE.PlaneGeometry(modelWidth, modelDepth, bathySegs, bathySegs);
         bathyGeo.rotateX(-Math.PI / 2);
@@ -1321,14 +1315,6 @@ export default function OceanSlab({
           ? '🌐 Analytical Ocean Field'
           : '🌐 Cached Ocean Volume';
 
-        const _bdg = (t, c) => `<span style="background:${c};color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;margin-left:6px;">${t}</span>`;
-        const _bs = cur.bathySource || cur.volumeData?.bathymetry_source;
-        const dataBadgeX = cur.dataSource === 'analytical_demo' ? _bdg('SYNTHETIC DATA', '#b91c1c')
-          : cur.dataSource === 'backup_cache' ? _bdg('BACKUP', '#b45309')
-          : cur.dataSource === 'demo_full_depth' ? _bdg('DEMO', '#b45309') : '';
-        const bathyBadgeX = !hasBathy ? _bdg('NO BATHYMETRY', '#7f1d1d')
-          : (!_bs || _bs === 'copernicus_deptho') ? ''
-          : _bs === 'demo_bathymetry' ? _bdg('DEMO BATHY', '#b45309') : _bdg('SYNTHETIC BATHY', '#b91c1c');
         const anomalyBadge = cur.anomalyMode
           ? '<span style="background:#f97316;color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;margin-left:6px;">ANOMALY</span>'
           : '';
@@ -1339,7 +1325,7 @@ export default function OceanSlab({
 
         hudRef.current.innerHTML = `
           <div style="font-weight:700;color:#38bdf8;letter-spacing:0.5px;display:flex;align-items:center;">
-            3D OCEAN · ${(cur.regionName || '').toUpperCase()}${modeBadge}${anomalyBadge}${dataBadgeX}${bathyBadgeX}
+            3D OCEAN · ${(cur.regionName || '').toUpperCase()}${modeBadge}${anomalyBadge}
           </div>
           <div style="display:flex;gap:10px;font-size:11px;color:#94a3b8;margin-top:2px;">
             <span>Depth: <strong style="color:#00f5d4;">${selDepth}m</strong></span>
@@ -1426,7 +1412,7 @@ export default function OceanSlab({
           const curExag = cur.verticalExaggeration ?? 35;
           const scale = curExag / 35;
           const normY = Math.max(0, Math.min(1, (4.2 * scale - hp.y) / (8.4 * scale)));
-          const curMaxDepth = effMax;
+          const curMaxDepth = Math.max(cur.maxDepth ?? 0, 1000);
           const hitDepth = Math.round(Math.pow(normY, 1 / 0.42) * curMaxDepth);
 
           // Nearest value from current depth slices
@@ -1529,7 +1515,7 @@ export default function OceanSlab({
   useEffect(() => {
     sceneRef.current?.update();
   }, [
-    depthSlices, volumeData, bathyGrid, bathyLats, bathyLons, bathySource, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
+    depthSlices, volumeData, bathyGrid, bathyLats, bathyLons, grid, floats, showArgo, showGliders, visualizationMode, maxDepth,
     variable, depth, dataDepth, bounds, opacity, verticalExaggeration, threshold,
     source, dataSource, backupDate, regionName, anomalyMode, anomalyThreshold, loading, loadingPhase,
   ]);

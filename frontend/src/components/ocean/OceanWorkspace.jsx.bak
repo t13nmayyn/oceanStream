@@ -48,9 +48,6 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
   const { userMode, selectedVariable, selectedDepth, selectedDate, heatmapOpacity } = useApp();
   const dispatch = useAppDispatch();
   const activeRegion = bbox || region || selectedPoint || null;
-  const [subsetDepthsStr, setSubsetDepthsStr] = useState('0,10,50,100,200,500,1000');
-  const [startDepth, setStartDepth] = useState(null);
-  const [endDepth, setEndDepth] = useState(null);
   const {
     volumeData,
     depthSlices,
@@ -62,7 +59,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
     dataSource,
     loading: snapshotLoading,
     loadingPhase,
-  } = useOceanSnapshot(activeRegion, subsetDepthsStr);
+  } = useOceanSnapshot(activeRegion);
   const { floats: argoHookFloats } = useArgoFloats(200);
   const activeFloats = snapshotFloats && snapshotFloats.length > 0 ? snapshotFloats : argoHookFloats;
 
@@ -179,7 +176,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
           lat_max: viewport.north.toFixed(2),
           lon_min: viewport.west.toFixed(2),
           lon_max: viewport.east.toFixed(2),
-          depths: subsetDepthsStr,
+          depths: '0,10,50,100,200,500,1000',
           variable: selectedVariable,
         });
         const res = await fetch(`${API_BASE}/ocean/volume-anomaly?${params}`, {
@@ -209,7 +206,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
       clearTimeout(timer);
       controller.abort();
     };
-  }, [anomalyOn, viewport, selectedVariable, subsetDepthsStr]);
+  }, [anomalyOn, viewport, selectedVariable]);
 
 
   // ── Full Ocean Volume fetch (Phase 1 & 4 Full Ocean Mode) — Progressive Tiling ─────
@@ -268,10 +265,8 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
 
     // Merged depth-slice accumulator: key = depth_m string
     const mergedSlicesMap = new Map();
-    const bathyMap = new Map(), bLatSet = new Set(), bLonSet = new Set();
-    let bathySource = null;
-    const _nl = (l) => ((west > east && l < west) ? l + 360 : l);
-    let mergedMaxDepth = 0;
+    let mergedBathyGrid = null, mergedBathyLats = null, mergedBathyLons = null;
+    let mergedMaxDepth = 5727.917;
     let mergedNativeDepths = null;
     let tilesCompleted = 0;
     const totalTiles = tiles.length;
@@ -284,10 +279,9 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
         source: 'copernicus_zarr',
         depth_slices: slicesArr,
         layers: slicesArr,
-        bathymetry: (() => { const la = [...bLatSet].sort((a, b) => a - b); const lo = [...bLonSet].sort((a, b) => _nl(a) - _nl(b)); return la.map((x) => lo.map((y) => bathyMap.get(`${x}_${y}`) ?? null)); })(),
-        bathymetry_lats: [...bLatSet].sort((a, b) => a - b),
-        bathymetry_lons: [...bLonSet].sort((a, b) => _nl(a) - _nl(b)),
-        bathymetry_source: bathySource,
+        bathymetry: mergedBathyGrid || [],
+        bathymetry_lats: mergedBathyLats || [],
+        bathymetry_lons: mergedBathyLons || [],
         max_depth_m: mergedMaxDepth,
         native_depths: mergedNativeDepths || [],
         native_depth_count: (mergedNativeDepths || []).length,
@@ -312,13 +306,10 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
       });
 
       // Merge bathymetry from this tile (simple accumulation)
-      bathySource = bathySource || tileData.bathymetry_source || null;
-      {
-        const _bl = tileData.bathymetry_lats || [], _bo = tileData.bathymetry_lons || [];
-        _bl.forEach((v) => bLatSet.add(v)); _bo.forEach((v) => bLonSet.add(v));
-        (tileData.bathymetry || []).forEach((row, i) => (row || []).forEach((v, j) => {
-          if (v != null && Number.isFinite(v)) bathyMap.set(`${_bl[i]}_${_bo[j]}`, v);
-        }));
+      if (!mergedBathyGrid && tileData.bathymetry?.length > 0 && tileData.bathymetry_lats?.length > 0) {
+        mergedBathyGrid = tileData.bathymetry;
+        mergedBathyLats = tileData.bathymetry_lats;
+        mergedBathyLons = tileData.bathymetry_lons;
       }
       if (tileData.max_depth_m && tileData.max_depth_m > mergedMaxDepth) {
         mergedMaxDepth = tileData.max_depth_m;
@@ -389,20 +380,13 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
   const isFullMode = visualizationMode === 'full';
   const fullDepthSlices = fullVolumeData?.depth_slices || [];
 
-  const activeDepthSlices = isFullMode
+  const activeDepthSlices = isFullMode && fullDepthSlices.length > 0
     ? fullDepthSlices
     : (anomalyOn && anomalySlices.length > 0 ? anomalySlices : depthSlices);
 
   const nativeDepths = depthLevelsInfo?.native_depths || fullVolumeData?.native_depths || fullVolumeData?.actual_zarr_depth_levels || [];
   const nativeDepthCount = depthLevelsInfo?.native_depth_count || fullVolumeData?.native_depth_count || (nativeDepths.length > 0 ? nativeDepths.length : 50);
-  const _slabVol = isFullMode ? fullVolumeData : volumeData;
-  let _bathyMax = 0;
-  (_slabVol?.bathymetry || []).forEach((r) => (r || []).forEach((v) => { if (Number.isFinite(v) && v > _bathyMax) _bathyMax = v; }));
-  const nativeMaxDepth = Math.max(
-    depthLevelsInfo?.max_depth_m || 0, _slabVol?.max_depth_m || 0, _bathyMax,
-    ...activeDepthSlices.map((s) => s.depth_m || 0),
-    nativeDepths.length ? nativeDepths[nativeDepths.length - 1] : 0, 100,
-  );
+  const nativeMaxDepth = depthLevelsInfo?.max_depth_m || fullVolumeData?.max_depth_m || 5727.9;
 
   const combinedFloats = isFullMode && fullVolumeData?.floats?.length > 0
     ? fullVolumeData.floats
@@ -429,8 +413,8 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
       if (!combined.includes(lastDepth)) combined.push(lastDepth);
       return combined;
     }
-    return [0, 20, 50, 100, 200, 500, 1000, 2000, 3000, 4000, 5000, 5728].filter((d) => d <= nativeMaxDepth);
-  }, [nativeDepths, nativeMaxDepth]);
+    return [0, 20, 50, 100, 200, 400, 600, 800, 1000];
+  }, [nativeDepths]);
 
   // Available variables from response
   const availableVars = useMemo(() => {
@@ -500,37 +484,6 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
               Full Ocean Mode
             </button>
           </div>
-          {!isFullMode && nativeDepths.length > 0 && (() => {
-            const fmt = (d) => `${d < 1 ? Number(d).toFixed(2) : Math.round(d)}m`;
-            const loadRange = () => {
-              const s = Number(startDepth ?? nativeDepths[0]);
-              const e = Number(endDepth ?? nativeDepths[nativeDepths.length - 1]);
-              const lo = Math.min(s, e), hi = Math.max(s, e);
-              const inR = nativeDepths.filter((d) => d >= lo - 1e-6 && d <= hi + 1e-6);
-              const M = 14;
-              const pick = inR.length <= M ? inR : Array.from({ length: M }, (_, i) => inR[Math.round(i * (inR.length - 1) / (M - 1))]);
-              if (!pick.length) return;
-              setSubsetDepthsStr(pick.map((d) => Number(d).toFixed(3)).join(','));
-              setDepth(pick[0]);
-            };
-            const cls = 'bg-[#061021] text-white border border-[#1C3A63] rounded px-1 py-0.5 text-[11px]';
-            return (
-              <div className="flex items-center gap-1.5 text-[11px] text-[#CBD5E1]">
-                <span>START</span>
-                <select className={cls} value={startDepth ?? nativeDepths[0]} onChange={(e) => setStartDepth(Number(e.target.value))}>
-                  {nativeDepths.map((d) => <option key={d} value={d}>{fmt(d)}</option>)}
-                </select>
-                <span>END</span>
-                <select className={cls} value={endDepth ?? nativeDepths[nativeDepths.length - 1]} onChange={(e) => setEndDepth(Number(e.target.value))}>
-                  {nativeDepths.map((d) => <option key={d} value={d}>{fmt(d)}</option>)}
-                </select>
-                <button type="button" onClick={loadRange} className="px-2 py-0.5 rounded bg-teal-500 text-white font-bold cursor-pointer">LOAD</button>
-                <span className="text-[#8EA4C8] font-mono">
-                  loaded {depthSlices.length ? `${fmt(depthSlices[0].depth_m)}–${fmt(depthSlices[depthSlices.length - 1].depth_m)} · ${depthSlices.length} layers` : '—'}
-                </span>
-              </div>
-            );
-          })()}
           {fullLoading && (
             <span className="text-[11px] text-sky-400 animate-pulse font-mono flex items-center gap-1.5 ml-1">
               <span className="inline-block w-2 h-2 rounded-full bg-sky-400 animate-ping" />
@@ -811,7 +764,6 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
             bathyGrid={isFullMode ? fullVolumeData?.bathymetry : volumeData?.bathymetry}
             bathyLats={isFullMode ? fullVolumeData?.bathymetry_lats : volumeData?.bathymetry_lats}
             bathyLons={isFullMode ? fullVolumeData?.bathymetry_lons : volumeData?.bathymetry_lons}
-            bathySource={isFullMode ? fullVolumeData?.bathymetry_source : volumeData?.bathymetry_source}
             grid={gridData}
             floats={combinedFloats}
             showArgo={showArgo}
