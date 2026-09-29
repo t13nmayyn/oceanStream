@@ -1,6 +1,5 @@
- @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
-
 @import "tailwindcss";
+
 
 /* Explorer workspace: neutral scientific chrome around the existing globe. */
 .explorer-layout { background: #fff !important; color: #1c1c2e !important; font-family: Inter, system-ui, sans-serif; }
@@ -23,8 +22,9 @@
 .slab-frame { position: relative; flex: 1 1 auto; min-width: 0; height: 100%; min-height: 0; }
 .ocean-slab-canvas { width: 100%; height: 100%; min-height: 0; }
 .colorbar { position: absolute; right: 14px; bottom: 14px; top: auto; width: 170px; color: #d4e3f7; font-size: 11px; background: rgba(13, 21, 37, 0.92); padding: 10px 12px; border: 1px solid #1e3055; border-radius: 8px; backdrop-filter: blur(8px); box-shadow: 0 4px 20px rgba(0,0,0,0.6); }
-.colorbar-gradient { height: 10px; margin: 6px 0 4px; border-radius: 3px; background: linear-gradient(90deg, #0044ff, #00b4d8, #00e08c, #ffd166, #ff7700, #f54375); }
-.colorbar-salinity { background: linear-gradient(90deg, #03045e, #0077b6, #00b4d8, #90e0ef, #e0aaff, #7209b7); }
+.colorbar-gradient { height: 10px; margin: 6px 0 4px; border-radius: 3px; background: linear-gradient(90deg, #03071e, #004e89, #00a896, #02c39a, #a7c957, #ffd166, #f77f00, #d62828, #9d0208); }
+.colorbar-temperature, .colorbar-thetao { background: linear-gradient(90deg, #03071e, #004e89, #00a896, #02c39a, #a7c957, #ffd166, #f77f00, #d62828, #9d0208); }
+.colorbar-salinity, .colorbar-so { background: linear-gradient(90deg, #0b132b, #1c2541, #0077b6, #00b4d8, #2a9d8f, #80ed99, #f4a261, #e76f51, #7209b7); }
 .colorbar-chlorophyll, .colorbar-nitrate { background: linear-gradient(90deg, #081c15, #1b4332, #2d6a4f, #52b788, #95d5b2, #d8f3dc); }
 .colorbar-oxygen { background: linear-gradient(90deg, #3a0ca3, #4361ee, #4cc9f0, #70e000, #ffaa00, #ff0054); }
 .colorbar-ph { background: linear-gradient(90deg, #d00000, #e85d04, #ffba08, #52b788, #0077b6, #03045e); }
@@ -504,7 +504,7 @@ img {
   inset: 0;
 
   /* Explicit dimensions prevent any layout contribution from the media
-     container — it is decorative only and must never grow the page.       */
+     container â€” it is decorative only and must never grow the page.       */
   width: 100%;
   max-width: 100%;
 
@@ -527,23 +527,23 @@ img {
   will-change: transform;
 }
 
-/* ── Per-video cinematic treatment ────────────────────────────────────────
+/* â”€â”€ Per-video cinematic treatment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    brightness(0.82) gently darkens the video without killing the ocean teal.
    saturate(1.08) compensates for the perceived desaturation that darkening
    causes, keeping the deep-water colour vivid and naturalistic.
-   Not applied to the poster <img> fallback — it already looks correct.
-   ──────────────────────────────────────────────────────────────────────── */
+   Not applied to the poster <img> fallback â€” it already looks correct.
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .os-hero-video {
   filter: brightness(0.82) saturate(1.08);
 }
 
-/* ── Suppress ALL native browser media controls on the hero video ──────────
+/* â”€â”€ Suppress ALL native browser media controls on the hero video â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    Without these, iOS Safari shows a play/pause bar and a fullscreen button
    when the user taps the video.  Android Chrome shows a "tap to unmute"
    overlay on autoplay.  `pointer-events: none` (set inline) prevents the
    tap itself, but these selectors ensure even if the element receives a
    synthetic event the controls chrome is never painted.
-   ──────────────────────────────────────────────────────────────────────── */
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .os-hero-video::-webkit-media-controls,
 .os-hero-video::-webkit-media-controls-enclosure,
 .os-hero-video::-webkit-media-controls-panel,
@@ -563,7 +563,7 @@ img {
   inset: 0;
   pointer-events: none;
 
-  /* 105° diagonal pulls the shadow toward the top-left where the heading
+  /* 105Â° diagonal pulls the shadow toward the top-left where the heading
      sits, leaving the ocean's right half more natural and open.           */
   background:
     linear-gradient(
@@ -583,10 +583,10 @@ img {
   pointer-events: none;
 
   /* Three distinct zones:
-     - Top (0–14 %): soft shadow behind the nav bar only.
-     - Mid (14–62 %): fully clear — ocean is completely unobscured.
-     - Lower (62–91 %): gentle cinematic darkening anchors the bottom edge.
-     - Toe (91–100 %): dissolves into the page's --paper colour (#f4f6f5)
+     - Top (0â€“14 %): soft shadow behind the nav bar only.
+     - Mid (14â€“62 %): fully clear â€” ocean is completely unobscured.
+     - Lower (62â€“91 %): gentle cinematic darkening anchors the bottom edge.
+     - Toe (91â€“100 %): dissolves into the page's --paper colour (#f4f6f5)
        so the hero bleeds seamlessly into the next section without a hard
        border or a jarring colour shift.                                   */
   background:
@@ -1193,7 +1193,7 @@ img {
     object-position: center center;
   }
 
-  /* Mobile overlay: wider horizontal spread — the full-width copy block
+  /* Mobile overlay: wider horizontal spread â€” the full-width copy block
      now spans almost the entire frame so we need contrast across a larger
      area. The bottom gradient also deepens slightly to ensure the CTA row
      sits against readable darkness even when ocean foam is directly below. */
@@ -1258,11 +1258,11 @@ img {
 }
 
 /* =========================================================
-   430 px — NARROW PHONE  (iPhone 14, Pixel 7, Galaxy S23)
+   430 px â€” NARROW PHONE  (iPhone 14, Pixel 7, Galaxy S23)
    ========================================================= */
 
 @media (max-width: 430px) {
-  /* Remove the fixed 720px floor — let the hero fill the full SVH instead
+  /* Remove the fixed 720px floor â€” let the hero fill the full SVH instead
      so the content is vertically centred without dead space at the bottom. */
   .os-hero {
     min-height: 100svh;
@@ -1281,7 +1281,7 @@ img {
     font-size: clamp(2.8rem, 10vw, 3.6rem);
   }
 
-  /* Tighten top padding — the nav bar is fixed so it doesn't take flow
+  /* Tighten top padding â€” the nav bar is fixed so it doesn't take flow
      space; the copy can start slightly higher.                            */
   .os-hero-copy {
     padding-top: 28px;
@@ -1309,7 +1309,7 @@ img {
 }
 
 /* =========================================================
-   390 px — SMALL PHONE  (iPhone SE 3rd gen, iPhone 12 mini)
+   390 px â€” SMALL PHONE  (iPhone SE 3rd gen, iPhone 12 mini)
    ========================================================= */
 
 @media (max-width: 390px) {
@@ -1412,7 +1412,7 @@ img {
 }
 
 /* =========================================================
-   LANDING CARDS — LIGHT THEME
+   LANDING CARDS â€” LIGHT THEME
    ========================================================= */
 
 .os-card {
@@ -1435,7 +1435,7 @@ img {
 }
 
 /* =========================================================
-   APP NAV — LIGHT PROFESSIONAL
+   APP NAV â€” LIGHT PROFESSIONAL
    ========================================================= */
 
 .app-nav {
@@ -1562,7 +1562,7 @@ img {
 }
 
 /* =========================================================
-   APP SIDEBAR — LIGHT SCIENTIFIC
+   APP SIDEBAR â€” LIGHT SCIENTIFIC
    ========================================================= */
 
 .app-sidebar {
@@ -1702,7 +1702,7 @@ img {
 }
 
 /* =========================================================
-   STATUS BAR — LIGHT
+   STATUS BAR â€” LIGHT
    ========================================================= */
 
 .app-status-bar {
@@ -1745,7 +1745,7 @@ img {
 }
 
 /* =========================================================
-   POINT INSPECTOR — LIGHT SCIENTIFIC PANEL
+   POINT INSPECTOR â€” LIGHT SCIENTIFIC PANEL
    ========================================================= */
 
 .app-inspector {
@@ -2150,7 +2150,7 @@ img {
 }
 
 /* =========================================================
-   CESIUM CONTAINER — Keep globe dark
+   CESIUM CONTAINER â€” Keep globe dark
    ========================================================= */
 
 .cesium-container {
@@ -2185,3 +2185,264 @@ img {
     transition-duration: 0.01ms !important;
   }
 }
+/* =========================================================
+   OCEAN DETAIL PAGE — RESPONSIVE OVERRIDES
+   ========================================================= */
+
+@media (max-width: 1023px) {
+  /* Let the body scroll vertically on mobile/tablet instead of a locked 100vh layout */
+  .ocean-detail-root {
+    height: auto !important;
+    min-height: 100dvh !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  /* Stack the 3D canvas and the Intelligence panel vertically */
+  .ocean-detail-layout {
+    flex-direction: column !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* 3D Canvas becomes a hero banner */
+  .ocean-detail-viz {
+    width: 100% !important;
+    height: 45vh !important;
+    min-height: 350px !important;
+    flex-shrink: 0 !important;
+  }
+
+  /* Intelligence Panel flows naturally below */
+  .ocean-detail-intel {
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    padding-bottom: 80px !important; /* Buffer for Copilot button */
+  }
+
+  /* Compact the context bar and allow horizontal scrolling */
+  .ocean-detail-context-bar {
+    height: auto !important;
+    min-height: 44px !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+  }
+  .ocean-detail-context-bar::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .context-date {
+    display: none !important; /* Hide to save space */
+  }
+}
+
+/* =========================================================
+   CHART CARDS — MOBILE RESPONSIVE
+   ========================================================= */
+
+@media (max-width: 1023px) {
+  /* Range pills for charts — compact on mobile */
+  .chart-range-pills {
+    gap: 3px !important;
+  }
+
+  .chart-range-pill {
+    padding: 3px 6px !important;
+    font-size: 9px !important;
+  }
+
+  /* BGC var tabs — scrollable on mobile */
+  .bgc-tabs {
+    overflow-x: auto !important;
+    flex-wrap: nowrap !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+    padding-bottom: 2px !important;
+  }
+
+  .bgc-tabs::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* =========================================================
+   INTELLIGENCE PANEL CHIPS — SCROLL ON MOBILE
+   ========================================================= */
+@media (max-width: 1023px) {
+  .value-chip-strip {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+    flex-wrap: nowrap !important;
+  }
+
+  .value-chip-strip::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* =========================================================
+   TOUCH TARGETS — MINIMUM 44×44px
+   ========================================================= */
+
+@media (max-width: 1023px) {
+  button, [role="button"], a, input[type="checkbox"], input[type="radio"] {
+    min-height: 36px;
+  }
+
+  /* Navigation items need full 44px */
+  .app-nav-link, .app-nav-hamburger {
+    min-height: 44px;
+  }
+}
+
+/* =========================================================
+   OCEAN WORKSPACE — MOBILE 3D SLAB
+   ========================================================= */
+
+@media (max-width: 1023px) {
+  /* Depth slider vertical writing mode — switch to horizontal on mobile */
+  .depth-control input[type="range"] {
+    writing-mode: horizontal-tb !important;
+    direction: ltr !important;
+    width: 100% !important;
+    height: auto !important;
+  }
+
+  .depth-control {
+    flex-direction: row !important;
+    width: 100% !important;
+    padding: 8px 12px !important;
+    gap: 8px !important;
+    justify-content: flex-start !important;
+  }
+
+  /* Colorbar — smaller on mobile */
+  .colorbar {
+    width: 130px !important;
+    font-size: 10px !important;
+  }
+
+  /* Variable pills — horizontal scroll */
+  .variable-pills {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+    padding-bottom: 4px !important;
+  }
+
+  .variable-pills::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* =========================================================
+   EXPLORER PAGE — MOBILE LAYOUT
+   ========================================================= */
+
+@media (max-width: 1023px) {
+  .explorer-coordinate-panel {
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    border-radius: 20px 20px 0 0 !important;
+    border-bottom-left-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
+    max-height: 55vh !important;
+    overflow-y: auto !important;
+    z-index: 30 !important;
+    box-shadow: 0 -8px 32px rgba(0,0,0,0.15) !important;
+    padding-bottom: env(safe-area-inset-bottom, 16px) !important;
+    transform: translateY(calc(100% - 52px)) !important;
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  }
+
+  .explorer-coordinate-panel.is-open {
+    transform: translateY(0) !important;
+  }
+
+  .explorer-coordinate-panel-handle {
+    display: flex !important;
+    justify-content: center;
+    padding: 12px 0 8px;
+    cursor: pointer;
+  }
+
+  .explorer-coordinate-panel-handle-bar {
+    width: 36px;
+    height: 4px;
+    background: rgba(0,0,0,0.15);
+    border-radius: 2px;
+  }
+
+  .explorer-summary-sidebar {
+    position: relative !important;
+    top: auto !important;
+    right: auto !important;
+    width: 100% !important;
+    max-height: none !important;
+    border-radius: 0 !important;
+    display: none !important;
+  }
+
+  .explorer-hud {
+    top: 12px !important;
+    left: 12px !important;
+    right: 12px !important;
+    font-size: 11px !important;
+  }
+}
+
+@media (max-width: 639px) {
+  .explorer-coordinate-panel {
+    max-height: 70vh !important;
+  }
+}
+
+/* =========================================================
+   COPILOT PANEL — MOBILE FULL-SCREEN
+   ========================================================= */
+
+@media (max-width: 639px) {
+  .copilot-container {
+    top: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    padding: 0 !important;
+  }
+
+  .copilot-panel {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-radius: 0 !important;
+    height: 100% !important;
+  }
+
+  .copilot-launcher {
+    right: 0 !important;
+    bottom: 0 !important;
+    border-radius: 16px 0 0 0 !important;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 1023px) {
+  .copilot-container {
+    right: 0 !important;
+    bottom: 0 !important;
+    left: auto !important;
+    top: auto !important;
+  }
+
+  .copilot-panel {
+    max-height: 80vh !important;
+    border-bottom-right-radius: 0 !important;
+  }
+}
+

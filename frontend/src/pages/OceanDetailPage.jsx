@@ -109,7 +109,8 @@ export default function OceanDetailPage() {
       dispatch({ type: 'SET_DEPTH', payload: initialDepth });
     }
     if (initialVariable) {
-      dispatch({ type: 'SET_SELECTED_VARIABLE', payload: initialVariable });
+      const normVar = (initialVariable.toLowerCase() === 'so') ? 'salinity' : (initialVariable.toLowerCase() === 'thetao' ? 'temperature' : initialVariable);
+      dispatch({ type: 'SET_SELECTED_VARIABLE', payload: normVar });
     }
     if (initialDate) {
       dispatch({ type: 'SET_DATE', payload: initialDate });

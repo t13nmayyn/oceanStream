@@ -138,8 +138,8 @@ function normalizeVolumeSlices(data) {
     .filter((slice) => Number.isFinite(slice.depth_m) && slice.points.length > 0);
 }
 
-async function fetchSnapshotDepthSlices(bounds, depthsStr = STANDARD_DEPTHS) {
-  const depths = depthsStr.split(',').map(Number).filter(Number.isFinite);
+async function fetchSnapshotDepthSlices(bounds) {
+  const depths = STANDARD_DEPTHS.split(',').map(Number);
   const snapshots = await Promise.all(
     depths.map((depth) => getOceanSnapshot(bounds, depth, null))
   );
@@ -251,7 +251,7 @@ export default function useOceanSnapshot(region = null, subsetDepthsStr = '0,10,
     }
     if (fetchInFlightRef.current && !isPoll) return;
 
-    const fetchKey = `${regionKey}|${subsetDepthsStr}`;
+    const fetchKey = `${regionKey}`;
     if (lastFetchedKeyRef.current === fetchKey && lastFetchedKeyRef.current !== null && !isPoll) {
       setLoading(false);
       return;
@@ -265,13 +265,13 @@ export default function useOceanSnapshot(region = null, subsetDepthsStr = '0,10,
     }
 
     try {
-      const vol = await getOceanVolume(bounds, subsetDepthsStr, null, selectedVariable);
+      const vol = await getOceanVolume(bounds, STANDARD_DEPTHS, null, selectedVariable);
 
       const fetchStatus = vol?.fetch_status || 'ready';
       const volumeSlices = normalizeVolumeSlices(vol);
       const fallbackSlices = volumeSlices.length >= 2
         ? []
-        : await fetchSnapshotDepthSlices(bounds, subsetDepthsStr);
+        : await fetchSnapshotDepthSlices(bounds);
       const slices = fallbackSlices.length >= 2 ? fallbackSlices : volumeSlices;
 
       if (slices.length > 0) {
@@ -365,7 +365,7 @@ export default function useOceanSnapshot(region = null, subsetDepthsStr = '0,10,
     } finally {
       fetchInFlightRef.current = false;
     }
-  }, [apiStatus, bounds, selectedVariable, dispatch, regionKey, selectedDepth, subsetDepthsStr]);
+  }, [apiStatus, bounds, selectedVariable, dispatch, regionKey, selectedDepth]);
 
   useEffect(() => {
     fetchSnapshotRef.current = fetchSnapshot;
@@ -377,7 +377,7 @@ export default function useOceanSnapshot(region = null, subsetDepthsStr = '0,10,
     if (pollTimerRef.current) { clearTimeout(pollTimerRef.current); pollTimerRef.current = null; }
     const timer = setTimeout(() => { fetchSnapshot(); }, 150);
     return () => { clearTimeout(timer); if (pollTimerRef.current) clearTimeout(pollTimerRef.current); };
-  }, [regionKey, subsetDepthsStr]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [regionKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Initial load
   useEffect(() => {

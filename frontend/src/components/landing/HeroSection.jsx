@@ -254,23 +254,9 @@ export default function HeroSection() {
           <div ref={actionsRef} className="os-hero-actions flex-wrap gap-3">
             <Link
               to="/explorer"
-              onClick={() => {
-                try { localStorage.setItem('oceanstream_mode', 'student'); } catch {}
-              }}
               className="os-button os-button-primary flex items-center gap-2"
             >
-              <span>🎓 Student 3D Dive</span>
-              <ArrowUpRight size={17} strokeWidth={1.8} />
-            </Link>
-
-            <Link
-              to="/explorer"
-              onClick={() => {
-                try { localStorage.setItem('oceanstream_mode', 'scientist'); } catch {}
-              }}
-              className="os-button os-button-quiet flex items-center gap-2 border border-violet-500/40 text-violet-200 hover:bg-violet-950/40"
-            >
-              <span>🔬 Scientist Workbench</span>
+              <span>Launch Explorer</span>
               <ArrowUpRight size={17} strokeWidth={1.8} />
             </Link>
           </div>

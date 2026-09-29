@@ -162,11 +162,22 @@ export default function SummarySidebar({ focusedRegion }) {
   const [seriesData, setSeriesData] = useState(null); // array of {date, temperature_c, ...} rows
   const [lastDateStr, setLastDateStr] = useState(null);
   const [fetchError, setFetchError] = useState(null);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 1024);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
 
   // Dedup guard — only refetch when coordinates genuinely change
   const lastKeyRef = useRef(null);
 
   useEffect(() => {
+    // Abort fetch on mobile viewports since the sidebar is hidden
+    if (isMobile) return;
+
     const lat = focusedRegion?.lat ?? DEFAULT_LAT;
     const lon = focusedRegion?.lng ?? DEFAULT_LON;
     const key = `${lat.toFixed(4)},${lon.toFixed(4)}`;
@@ -253,8 +264,10 @@ export default function SummarySidebar({ focusedRegion }) {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  if (isMobile) return null;
+
   return (
-    <div className="absolute top-4 right-4 z-10 w-[280px] bg-white/95 shadow-[0_8px_32px_rgba(0,0,0,0.12)] backdrop-blur-xl rounded-2xl border border-slate-200/50 overflow-hidden flex flex-col max-h-[calc(100vh-120px)]">
+    <div className="absolute top-4 right-4 z-10 w-[280px] bg-white/95 shadow-[0_8px_32px_rgba(0,0,0,0.12)] backdrop-blur-xl rounded-2xl border border-slate-200/50 overflow-hidden flex flex-col max-h-[calc(100vh-120px)] explorer-summary-sidebar">
 
       {/* Header */}
       <div className="px-4 pt-4 pb-3 border-b border-slate-100 bg-slate-50/50 shrink-0">

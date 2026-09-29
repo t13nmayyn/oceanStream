@@ -140,10 +140,7 @@ export default function AppNav() {
           </div>
         </div>
 
-        {/* Global Mode Switcher in Navbar */}
-        <div style={{ marginLeft: '16px' }} className="hidden md:block">
-          <ModeSwitcher compact={true} />
-        </div>
+
 
         {/* Right — Status */}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '16px' }}>
