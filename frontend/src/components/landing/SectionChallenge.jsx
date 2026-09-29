@@ -310,7 +310,6 @@ export default function SectionChallenge() {
             <svg
               viewBox="0 0 680 300"
               width="100%"
-              height="auto"
               style={{ maxHeight: '300px', overflow: 'visible' }}
               aria-label="4D Ocean Spatiotemporal Coordinate Visualization"
             >
