@@ -17,11 +17,6 @@ const ALL_VARIABLES = [
   ['temperature', 'Water Temperature', '°C'],
   ['salinity', 'Ocean Saltiness', 'practical salinity'],
   ['currents', 'Current Vectors', 'metres per second'],
-  ['chlorophyll', 'Plankton Density', 'mg/m³'],
-  ['oxygen', 'Dissolved Oxygen', 'mmol/m³'],
-  ['ph', 'Acidity (pH)', 'pH scale'],
-  ['nitrate', 'Nutrients (Nitrate)', 'mmol/m³'],
-  ['pco2', 'Carbon Dioxide', 'μatm'],
 ];
 
 const VARIABLES = ALL_VARIABLES;
