@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Info, SlidersHorizontal, FlaskConical } from 'lucide-react';
 import MapView from '../map/MapView';
-import OceanSlab, { DEPTH_BINS } from './OceanSlab';
+import OceanSlab from './OceanSlab';
+const DEPTH_BINS = [0, 10, 50, 100, 200, 500, 1000];
 import TimelineControl from '../scientist/TimelineControl';
 import ArgoProfilePanel from '../scientist/ArgoProfilePanel';
 import ScientificTimelineChart from '../scientist/ScientificTimelineChart';
@@ -25,19 +26,43 @@ const ALL_VARIABLES = [
 
 const VARIABLES = ALL_VARIABLES;
 
+function normalizeVariable(varName) {
+  if (!varName) return 'temperature';
+  const v = String(varName).toLowerCase().trim();
+  if (v === 'so' || v === 'sal' || v === 'salinity') return 'salinity';
+  if (v === 'thetao' || v === 'temp' || v === 'temperature') return 'temperature';
+  if (v === 'uo' || v === 'vo' || v === 'current_speed' || v === 'velocity' || v === 'currents') return 'currents';
+  if (v === 'chl' || v === 'chlorophyll') return 'chlorophyll';
+  if (v === 'o2' || v === 'oxygen') return 'oxygen';
+  if (v === 'no3' || v === 'nitrate') return 'nitrate';
+  if (v === 'spco2' || v === 'pco2') return 'pco2';
+  return v;
+}
+
 function selectedValue(point, variable) {
-  if (variable === 'currents') {
+  const norm = normalizeVariable(variable);
+  if (norm === 'currents') {
     if (point?.current_u_ms == null && point?.current_v_ms == null) return NaN;
     return Math.hypot(Number(point?.current_u_ms ?? 0), Number(point?.current_v_ms ?? 0));
   }
   const fields = {
-    temperature: 'temperature_c', salinity: 'salinity_psu', chlorophyll: 'chlorophyll_mgl',
-    oxygen: 'oxygen_mmolm3', ph: 'ph', nitrate: 'nitrate_mmolm3', pco2: 'pco2_uatm',
+    temperature: ['temperature_c', 'thetao', 'temperature', 'temp'],
+    salinity:    ['salinity_psu', 'so', 'salinity', 'sal'],
+    chlorophyll: ['chlorophyll_mgl', 'chl'],
+    oxygen:      ['oxygen_mmolm3', 'o2'],
+    ph:          ['ph', 'pH'],
+    nitrate:     ['nitrate_mmolm3', 'no3'],
+    pco2:        ['pco2_uatm', 'spco2', 'pco2'],
   };
-  const val = point?.[fields[variable]];
-  if (val == null || val === '') return NaN;
-  const num = Number(val);
-  return Number.isFinite(num) ? num : NaN;
+  const keys = fields[norm] || [norm];
+  for (const k of keys) {
+    const val = point?.[k];
+    if (val != null && val !== '') {
+      const num = Number(val);
+      if (Number.isFinite(num)) return num;
+    }
+  }
+  return NaN;
 }
 
 function Coverage({ coverage }) {
@@ -108,6 +133,17 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
       })
       .catch((err) => console.warn('[OceanWorkspace] getOceanDepthLevels error:', err));
   }, []);
+
+  useEffect(() => {
+    if (!depthLevelsInfo?.native_depths?.length) return;
+    const nd = depthLevelsInfo.native_depths;
+    const shallow = nd.filter((d) => d <= 200);
+    const deep = nd.filter((d) => d > 200).filter((_, i) => i % 4 === 0);
+    const last = nd[nd.length - 1];
+    const combined = [...shallow, ...deep];
+    if (!combined.includes(last)) combined.push(last);
+    setSubsetDepthsStr(combined.join(','));
+  }, [depthLevelsInfo]);
 
   const viewport = useMemo(() => {
     if (snapshotData?.bbox) {
@@ -380,8 +416,9 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
 
   const selectVariable = (id) => dispatch({ type: 'SET_SELECTED_VARIABLE', payload: id });
   const setDepth = (value) => dispatch({ type: 'SET_DEPTH', payload: Number(value) });
-  const selected = VARIABLES.find(([id]) => id === selectedVariable) || VARIABLES[0];
-  const loadedValues = gridData.map((point) => selectedValue(point, selectedVariable)).filter(Number.isFinite);
+  const normVariable = normalizeVariable(selectedVariable);
+  const selected = VARIABLES.find(([id]) => id === normVariable) || VARIABLES[0];
+  const loadedValues = gridData.map((point) => selectedValue(point, normVariable)).filter(Number.isFinite);
   const valueMin = loadedValues.length ? Math.min(...loadedValues) : null;
   const valueMax = loadedValues.length ? Math.max(...loadedValues) : null;
 
@@ -445,7 +482,7 @@ export default function OceanWorkspace({ selectedPoint, onPointClick, showMap = 
   // Determine effective variable passed to OceanSlab
   const effectiveSlabVariable = tempChecked && salChecked
     ? 'temperature'
-    : (tempChecked ? 'temperature' : (salChecked ? 'salinity' : selectedVariable));
+    : (tempChecked ? 'temperature' : (salChecked ? 'salinity' : normVariable));
 
   return <main className={`ocean-workspace ${!showMap ? '!flex !flex-col h-full bg-[#F8FAFC]' : ''}`}>
     {showMap && <section className="ocean-globe-pane"><MapView onPointClick={onPointClick} onSelectFloatForProfile={(id) => setProfile(id)} selectedPoint={selectedPoint} hideSidebar /></section>}

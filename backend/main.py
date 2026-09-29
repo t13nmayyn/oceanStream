@@ -3159,12 +3159,15 @@ async def ocean_depth_levels():
             m = float(cand["depth"].values.max())
             if m > best_max:
                 best, best_src, best_max = cand, name, m
-    if best is not None and best_max >= 1000.0:
+    # Use local store only if it has a meaningful depth range (>= 20 levels AND > 2000m)
+    # A 7-level / 1000m store is too shallow to drive the depth UI — fall through to full 50-level grid
+    if best is not None and best_max >= 2000.0 and len(best["depth"].values) >= 20:
         depths = [round(float(d), 4) for d in best["depth"].values]
         src_label = best_src
     else:  # local store is shallow -> use the real 50-level Copernicus grid
         depths = COPERNICUS_FULL_50_DEPTHS
         src_label = "copernicus_standard"
+        logger.info(f"[depth-levels] local store max={best_max:.1f}m levels={len(best['depth'].values) if best is not None else 0} — using full Copernicus 50-level grid")
     return {"source": src_label, "native_depth_count": len(depths), "native_depths": depths,
             "depth_levels_m": depths, "max_depth_m": round(float(depths[-1]), 3),
             "local_max_depth_m": round(best_max, 3)}
@@ -3256,6 +3259,11 @@ def _read_phy_volume_full_data(
         except Exception as _be:
             logger.warning(f"[BATHY] Could not open bathy_data.zarr: {_be}")
 
+    if phy_dataset_xr is None and PHY_ZARR_PATH.exists():
+        phy_dataset_xr = _safe_open_zarr(PHY_ZARR_PATH)
+    if backup_phy_dataset_xr is None and BACKUP_PHY_ZARR_PATH.exists():
+        backup_phy_dataset_xr = _safe_open_zarr(BACKUP_PHY_ZARR_PATH)
+
     # Select dataset — Copernicus live data takes priority over demo/backup.
     # Previous order (demo_full_depth first) caused real phy_data.zarr to be
     # bypassed whenever demo_full_depth.zarr existed on disk.
@@ -3274,11 +3282,32 @@ def _read_phy_volume_full_data(
             lc, lnc = _lat_coord(candidate), _lon_coord(candidate)
             region = candidate.sel({lc: slice(lat_min, lat_max), lnc: slice(lon_min, lon_max)})
             if len(region[lc]) > 0 and len(region[lnc]) > 0:
+                has_finite = False
+                for tvar in ("thetao", "temperature"):
+                    if tvar in region:
+                        try:
+                            if np.isfinite(region[tvar].values).any():
+                                has_finite = True
+                                break
+                        except Exception:
+                            pass
+                if not has_finite:
+                    continue
                 _md = float(candidate["depth"].values.max()) if "depth" in candidate.dims else 0.0
+                _n_depths = len(candidate["depth"].values) if "depth" in candidate.dims else 0
+                logger.info(f"[volume-full] Candidate '{name}' accepted: {_n_depths} depths, max_depth={_md:.1f}m")
                 if _md > _best_md:
                     _best_md, ds, source = _md, candidate, name
-        except Exception:
-            pass
+        except Exception as _cex:
+            logger.debug(f"[volume-full] Candidate '{name}' skipped: {_cex}")
+
+    _src_depth_count = 0
+    if ds is not None and "depth" in ds.dims:
+        _src_depth_count = len(ds["depth"].values)
+    logger.info(
+        f"[volume-full] Selected source='{source}', depth_count={_src_depth_count}, "
+        f"bbox=lat[{lat_min},{lat_max}] lon[{lon_min},{lon_max}]"
+    )
 
     if ds is None:
         return {
@@ -3346,10 +3375,24 @@ def _read_phy_volume_full_data(
         bathy_tier_used = "none"
 
         # 1. Copernicus deptho (preferred)
-        if bathy_dataset_xr is not None and "deptho" in bathy_dataset_xr:
+        if bathy_dataset_xr is None:
+            logger.info("[BATHY DIAG] bathy_dataset_xr is None — no bathy_data.zarr on disk")
+        elif "deptho" not in bathy_dataset_xr:
+            logger.info(f"[BATHY DIAG] bathy_dataset_xr has no 'deptho' var, vars={list(bathy_dataset_xr.data_vars)}")
+        else:
             try:
                 blc = _lat_coord(bathy_dataset_xr)
                 blnc = _lon_coord(bathy_dataset_xr)
+                _bathy_lat_range = [float(bathy_dataset_xr[blc].values.min()), float(bathy_dataset_xr[blc].values.max())]
+                _bathy_lon_range = [float(bathy_dataset_xr[blnc].values.min()), float(bathy_dataset_xr[blnc].values.max())]
+                _req_covered = (
+                    _bathy_lat_range[0] <= lat_min and _bathy_lat_range[1] >= lat_max
+                    and _bathy_lon_range[0] <= lon_min and _bathy_lon_range[1] >= lon_max
+                )
+                logger.info(
+                    f"[BATHY DIAG] bathy zarr coverage: lat={_bathy_lat_range}, lon={_bathy_lon_range}, "
+                    f"request lat=[{lat_min},{lat_max}] lon=[{lon_min},{lon_max}], fully_covered={_req_covered}"
+                )
                 b_reg = bathy_dataset_xr["deptho"].reindex({blc: lats, blnc: lons}, method="nearest", tolerance=0.25).values
                 finite_vals = b_reg[np.isfinite(b_reg)]
                 if finite_vals.size > 0:
@@ -3364,6 +3407,8 @@ def _read_phy_volume_full_data(
                         f"distinct={len(np.unique(np.round(finite_vals, 2)))} values, "
                         f"min={float(finite_vals.min()):.1f}m, max={bathy_max_depth}m"
                     )
+                else:
+                    logger.info(f"[BATHY DIAG] reindex produced all-NaN ({b_reg.shape}), no finite deptho in region")
             except Exception as _bex:
                 logger.warning(f"[BATHY] deptho sel failed: {_bex}")
                 bathy_grid = []
@@ -3381,6 +3426,10 @@ def _read_phy_volume_full_data(
 
         # 3. Physical bathymetry terrain relief model (irregular trenches, ridges, slopes)
         if not bathy_grid or len(bathy_grid) != n_lats or bathy_tier_used == "none":
+            _reason = "no bathy_data.zarr" if bathy_dataset_xr is None else (
+                "reindex all-NaN" if bathy_tier_used == "none" else f"grid mismatch ({len(bathy_grid)} vs {n_lats})"
+            )
+            logger.info(f"[BATHY] Falling back to physical_relief_model — reason: {_reason}")
             bathy_grid = [
                 [_physical_bathymetry_relief(la, lo) for lo in lons]
                 for la in lats
@@ -3398,7 +3447,7 @@ def _read_phy_volume_full_data(
             pts = []
             for i, la in enumerate(lats):
                 for j, lo in enumerate(lons):
-                    tv = float(t_arr[k, i, j]) if (t_arr is not None and np.isfinite(t_arr[k, i, j]) and t_arr[k, i, j] != 0.0) else None
+                    tv = float(t_arr[k, i, j]) if (t_arr is not None and np.isfinite(t_arr[k, i, j])) else None
                     sv = float(s_arr[k, i, j]) if (s_arr is not None and np.isfinite(s_arr[k, i, j])) else None
                     uv = float(u_arr[k, i, j]) if (u_arr is not None and np.isfinite(u_arr[k, i, j])) else None
                     vv = float(v_arr[k, i, j]) if (v_arr is not None and np.isfinite(v_arr[k, i, j])) else None
@@ -3511,13 +3560,16 @@ async def ocean_volume_full(
         logger.info(f"[volume-full] Bathymetry not covered for lat=[{lat_min},{lat_max}], lon=[{lon_min},{lon_max}]. Triggering on-demand fetch...")
         try:
             fetch_task = asyncio.create_task(_fetcher.fetch_bathy_range(lat_min, lat_max, lon_min, lon_max))
-            bathy_res = await asyncio.wait_for(asyncio.shield(fetch_task), timeout=4.0)
+            bathy_res = await asyncio.wait_for(asyncio.shield(fetch_task), timeout=6.0)
             if bathy_res.get("status") in ("success", "cached"):
                 _bds = _safe_open_zarr(BATHY_ZARR_PATH)
                 if _bds is not None:
                     bathy_dataset_xr = _bds
+                    logger.info(f"[volume-full] Bathy fetched+loaded for lat=[{lat_min},{lat_max}], lon=[{lon_min},{lon_max}]")
+        except asyncio.TimeoutError:
+            logger.warning(f"[volume-full] Bathy fetch exceeded 6s for lat=[{lat_min},{lat_max}], lon=[{lon_min},{lon_max}] — continuing in background")
         except Exception as _fe:
-            logger.warning(f"[volume-full] Bathy fetch exceeded 4s, continuing in background...")
+            logger.warning(f"[volume-full] Bathy fetch error: {_fe}")
 
     loop = asyncio.get_event_loop()
 
@@ -3525,6 +3577,35 @@ async def ocean_volume_full(
         None,
         lambda: _read_phy_volume_full_data(lat_min, lat_max, lon_min, lon_max, date_str),
     )
+
+    # On-demand physics check: if no candidate has real data, trigger fetch
+    has_real_phy = bool(data_payload.get("depth_slices") and any(s.get("points") for s in data_payload.get("depth_slices", [])))
+    if not has_real_phy and _fetcher.credentials_present():
+        logger.info(f"[volume-full] Physics data not covered for lat=[{lat_min},{lat_max}], lon=[{lon_min},{lon_max}]. Triggering on-demand fetch...")
+        try:
+            eff_depth_min = _clamp_depth_min(0.0)
+            eff_depth_max = 200.0
+            phy_task = asyncio.create_task(
+                _fetcher.fetch_phy_range(
+                    lat_min, lat_max, lon_min, lon_max,
+                    depth_min=eff_depth_min, depth_max=eff_depth_max,
+                    date_str=date_str,
+                )
+            )
+            def _on_phy_done(t):
+                if not t.cancelled() and t.exception() is None:
+                    _reload_phy_zarr()
+            phy_task.add_done_callback(_on_phy_done)
+
+            phy_res = await asyncio.wait_for(asyncio.shield(phy_task), timeout=4.0)
+            if phy_res.get("status") in ("success", "cached"):
+                await loop.run_in_executor(None, _reload_phy_zarr)
+                data_payload = await loop.run_in_executor(
+                    None,
+                    lambda: _read_phy_volume_full_data(lat_min, lat_max, lon_min, lon_max, date_str),
+                )
+        except Exception as _pe:
+            logger.warning(f"[volume-full] Phy fetch exceeded 4s, continuing in background: {_pe}")
 
     # Fetch Argo floats for the region (non-blocking, 2s timeout)
     raw_floats: List[Dict] = []
