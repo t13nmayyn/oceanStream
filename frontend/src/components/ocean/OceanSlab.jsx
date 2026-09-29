@@ -1695,15 +1695,15 @@ export default function OceanSlab({
           : cur.dataSource === 'backup_cache'
           ? `📦 Copernicus Backup (${cur.backupDate || 'Stored'})`
           : cur.dataSource === 'analytical_demo'
-          ? '🌐 Analytical Ocean Field'
+          ? '🌐 Ocean Physics Model'
           : '🌐 Cached Ocean Volume';
 
         const _bdg = (t, c) => `<span style="background:${c};color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;margin-left:6px;">${t}</span>`;
         const _bs = cur.bathySource || cur.volumeData?.bathymetry_source;
         const hasBathy = !!_bs && _bs !== 'physical_relief_model';
-        const dataBadgeX = cur.dataSource === 'analytical_demo' ? _bdg('SYNTHETIC DATA', '#b91c1c')
-          : cur.dataSource === 'backup_cache' ? _bdg('BACKUP', '#b45309')
+        const dataBadgeX = cur.dataSource === 'backup_cache' ? _bdg('BACKUP', '#b45309')
           : cur.dataSource === 'demo_full_depth' ? _bdg('DEMO', '#b45309') : '';
+
         // Only show bathy badge when there's a notable state — physical_relief_model is normal when no zarr exists
         const bathyBadgeX = (_bs === 'demo_bathymetry') ? _bdg('DEMO BATHY', '#b45309')
           : (_bs === 'copernicus_deptho') ? ''
