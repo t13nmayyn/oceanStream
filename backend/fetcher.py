@@ -126,11 +126,13 @@ def credentials_present() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Concurrency control — max 2 simultaneous Copernicus downloads to prevent
-# flooding the API and exhausting the event loop thread pool.
+# Concurrency control — limit simultaneous Copernicus downloads to prevent
+# flooding the API and exhausting memory + event loop thread pool.
+# Low-memory mode (OCEAN_LOW_MEMORY=1): 1 concurrent download to halve peak RAM.
 # ---------------------------------------------------------------------------
+_LOW_MEMORY = os.getenv("OCEAN_LOW_MEMORY", "0").strip() in ("1", "true", "yes")
 _COPERNICUS_SEM: Optional[asyncio.Semaphore] = None   # initialised lazily (needs running loop)
-_COPERNICUS_MAX_CONCURRENT = 2
+_COPERNICUS_MAX_CONCURRENT = 1 if _LOW_MEMORY else 2
 
 # Hard timeout per download group — real Copernicus transfers can take several
 # minutes for large regions; 120s was too short.
@@ -157,17 +159,21 @@ def _write_to_zarr(ds_new: xr.Dataset, zarr_path: Path) -> int:
     """
     Merge ds_new into an existing zarr store at zarr_path, or create it fresh.
     Uses a safe atomic swap (write to tmp → rename) to avoid partial reads.
+    Memory-optimised: uses small chunk sizes and closes datasets promptly.
     Returns the total zarr dir size in bytes after writing.
     """
+    # Use smaller chunks in low-memory mode to reduce peak RAM during writes
+    lat_chunk = 25 if _LOW_MEMORY else 50
+    lon_chunk = 25 if _LOW_MEMORY else 50
     chunks = {"time": 1}
     if "depth" in ds_new.dims:
-        chunks["depth"] = min(10, ds_new.sizes["depth"])
+        chunks["depth"] = min(5 if _LOW_MEMORY else 10, ds_new.sizes["depth"])
     for lat_col in ("latitude", "lat"):
         if lat_col in ds_new.dims:
-            chunks[lat_col] = min(50, ds_new.sizes[lat_col])
+            chunks[lat_col] = min(lat_chunk, ds_new.sizes[lat_col])
     for lon_col in ("longitude", "lon"):
         if lon_col in ds_new.dims:
-            chunks[lon_col] = min(50, ds_new.sizes[lon_col])
+            chunks[lon_col] = min(lon_chunk, ds_new.sizes[lon_col])
 
     ds_chunked = ds_new.chunk(chunks)
 
@@ -206,6 +212,12 @@ def _write_to_zarr(ds_new: xr.Dataset, zarr_path: Path) -> int:
             shutil.rmtree(old_zarr)
     else:
         ds_chunked.to_zarr(zarr_path, mode="w", consolidated=True)
+
+    # Close the new dataset to free memory
+    try:
+        ds_new.close()
+    except Exception:
+        pass
 
     return sum(f.stat().st_size for f in zarr_path.rglob("*") if f.is_file())
 
@@ -334,7 +346,10 @@ async def fetch_phy_range(
                         timeout=FETCH_TIMEOUT_SECONDS,
                     )
                 if tmp_nc.exists():
-                    return xr.open_dataset(str(tmp_nc)).load()
+                    # Open with chunked lazy loading instead of .load() to avoid
+                    # materializing the entire NetCDF into RAM at once
+                    ds = xr.open_dataset(str(tmp_nc), chunks={"time": 1})
+                    return ds
             except asyncio.TimeoutError:
                 logger.error(
                     f"[PHY TIMEOUT for {did}] exceeded {FETCH_TIMEOUT_SECONDS:.0f}s — "
@@ -518,7 +533,9 @@ async def fetch_bgc_range(
                         timeout=FETCH_TIMEOUT_SECONDS,
                     )
                 if tmp_nc.exists():
-                    return xr.open_dataset(str(tmp_nc)).load()
+                    # Open with chunked lazy loading instead of .load()
+                    ds = xr.open_dataset(str(tmp_nc), chunks={"time": 1})
+                    return ds
             except asyncio.TimeoutError:
                 logger.error(
                     f"[BGC TIMEOUT for {did}] exceeded {FETCH_TIMEOUT_SECONDS:.0f}s — "
@@ -713,7 +730,8 @@ async def fetch_bathy_range(
             logger.error("[BATHY] Downloaded file not found after copernicusmarine.subset()")
             return {"status": "error", "error": "no_output_file"}
 
-        ds = xr.open_dataset(str(tmp_nc)).load()
+        # Open with chunked lazy loading instead of .load()
+        ds = xr.open_dataset(str(tmp_nc), chunks={"time": 1})
 
     # Step-3 diagnostic: log distinct deptho values before wiring frontend
     if _BATHY_VARIABLE in ds:

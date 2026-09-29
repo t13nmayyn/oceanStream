@@ -97,6 +97,14 @@ import ai_inference as _ai
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("main")
 
+# ---------------------------------------------------------------------------
+# Low-memory mode — set OCEAN_LOW_MEMORY=1 on Render (512 MB RAM)
+# Reduces L1 cache, disables Phase 2 prewarm, limits concurrency
+# ---------------------------------------------------------------------------
+_LOW_MEMORY = os.environ.get("OCEAN_LOW_MEMORY", "0").strip() in ("1", "true", "yes")
+if _LOW_MEMORY:
+    logger.info("========== LOW-MEMORY MODE ACTIVE (OCEAN_LOW_MEMORY=1) ==========")
+
 
 # ==============================================================================
 # App
@@ -131,13 +139,15 @@ if FRONTEND_DIR.exists():
 _ai.register_ai_routes(app)
 
 # ==============================================================================
-# L1 in-memory cache  (key → {data, ts})
-# Hard cap at L1_MAX_ENTRIES to prevent unbounded growth from pre-warm accumulation.
-# When cap is hit, the oldest 10% of entries are evicted before inserting.
+# L1 in-memory cache  (key → {data, ts, size_bytes})
+# Hard cap at L1_MAX_ENTRIES AND L1_MAX_BYTES to prevent unbounded growth.
+# When either cap is hit, the oldest 20% of entries are evicted before inserting.
 # ==============================================================================
-L1_TTL_SECONDS  = 300   # 5-minute TTL
-L1_MAX_ENTRIES  = 500   # max number of L1 cache entries before LRU eviction
+L1_TTL_SECONDS  = 180 if _LOW_MEMORY else 300   # shorter TTL in low-memory mode
+L1_MAX_ENTRIES  = 80 if _LOW_MEMORY else 500     # fewer entries in low-memory mode
+L1_MAX_BYTES    = 64 * 1024 * 1024 if _LOW_MEMORY else 256 * 1024 * 1024  # 64 MB / 256 MB
 _l1: Dict[str, Dict] = {}
+_l1_total_bytes: int = 0  # approximate tracked size
 
 # ---------------------------------------------------------------------------
 # Copernicus minimum depth — the shallowest level in the ANFC/MY datasets
@@ -150,24 +160,59 @@ def _clamp_depth_min(d: float) -> float:
     """Ensure depth is at or above the Copernicus dataset's shallowest level."""
     return max(COPERNICUS_MIN_DEPTH, float(d))
 
+def _estimate_size(data: Any) -> int:
+    """Rough size estimate of a cached payload in bytes."""
+    import sys
+    try:
+        if isinstance(data, dict):
+            # For snapshot grids, count grid list length as rough proxy
+            grid = data.get("grid")
+            if isinstance(grid, list):
+                return len(grid) * 200  # ~200 bytes per grid point dict
+            return sys.getsizeof(data) + sum(sys.getsizeof(v) for v in data.values() if isinstance(v, (str, int, float)))
+        return sys.getsizeof(data)
+    except Exception:
+        return 1024  # fallback 1 KB
+
 def l1_get(key: str) -> Optional[Any]:
     entry = _l1.get(key)
     if entry and (time.time() - entry["ts"]) < L1_TTL_SECONDS:
         return entry["data"]
+    # Expired — evict immediately
+    if entry:
+        _l1_evict_key(key)
     return None
 
+def _l1_evict_key(key: str) -> None:
+    """Remove a single key from L1 and update tracked size."""
+    global _l1_total_bytes
+    entry = _l1.pop(key, None)
+    if entry:
+        _l1_total_bytes = max(0, _l1_total_bytes - entry.get("size", 0))
+
+def _l1_evict_oldest(fraction: float = 0.2) -> None:
+    """Evict the oldest fraction of L1 entries."""
+    evict_count = max(1, int(len(_l1) * fraction))
+    oldest = sorted(_l1.items(), key=lambda x: x[1]["ts"])[:evict_count]
+    for k, _ in oldest:
+        _l1_evict_key(k)
+
 def l1_set(key: str, data: Any) -> None:
-    if len(_l1) >= L1_MAX_ENTRIES:
-        # Evict the oldest 10% of entries by access timestamp
-        evict_count = max(1, L1_MAX_ENTRIES // 10)
-        oldest = sorted(_l1.items(), key=lambda x: x[1]["ts"])[:evict_count]
-        for k, _ in oldest:
-            _l1.pop(k, None)
-    _l1[key] = {"data": data, "ts": time.time()}
+    global _l1_total_bytes
+    entry_size = _estimate_size(data)
+    # Evict if over entry count OR memory budget
+    while len(_l1) >= L1_MAX_ENTRIES or _l1_total_bytes + entry_size > L1_MAX_BYTES:
+        if not _l1:
+            break
+        _l1_evict_oldest(0.2)
+    _l1[key] = {"data": data, "ts": time.time(), "size": entry_size}
+    _l1_total_bytes += entry_size
 
 def l1_clear() -> int:
+    global _l1_total_bytes
     n = len(_l1)
     _l1.clear()
+    _l1_total_bytes = 0
     return n
 
 # ==============================================================================
@@ -193,11 +238,15 @@ cache_stats = {"l1_hits": 0, "l2_hits": 0, "fetches": 0, "total_requests": 0}
 # ==============================================================================
 # Page table
 # ==============================================================================
-ZARR_CAP_BYTES = int(os.environ.get("ZARR_CAP_BYTES", str(4 * 1024 ** 3)))  # 4 GB
+# In low-memory mode, default to 256 MB zarr cap instead of 4 GB
+_DEFAULT_ZARR_CAP = str(256 * 1024 ** 2) if _LOW_MEMORY else str(4 * 1024 ** 3)
+ZARR_CAP_BYTES = int(os.environ.get("ZARR_CAP_BYTES", _DEFAULT_ZARR_CAP))
 page_table = PageTable(cap_bytes=ZARR_CAP_BYTES)
 
 # In-flight fetch tasks (page_key → asyncio.Task)
 _fetch_tasks: Dict[str, asyncio.Task] = {}
+# Limit concurrent background fetches to prevent RAM spikes
+MAX_CONCURRENT_FETCHES = 2 if _LOW_MEMORY else 6
 
 # Fixed coastal stations (kept for legacy endpoints)
 LOCATIONS: Dict[str, Dict] = {
@@ -1363,6 +1412,10 @@ def _schedule_bg_range_fetch(
         return None  # no retry after failure
     if not _fetcher.credentials_present():
         return None
+    # Concurrency guard: don't launch new fetches if too many are in-flight
+    if len(_fetch_tasks) >= MAX_CONCURRENT_FETCHES:
+        logger.info(f"[BG RANGE FETCH] Skipped — {len(_fetch_tasks)} fetches already in-flight (max {MAX_CONCURRENT_FETCHES})")
+        return None
 
     # Clamp depth to Copernicus minimum (0.494m)
     depth_min = _clamp_depth_min(max(0.0, depth - 25.0))
@@ -1505,6 +1558,14 @@ async def _prewarm_home_regions():
     logger.info("[PRE-WARM] Phase 1 complete — all home tiles are synthetic-warm")
 
     # Phase 2: Real Copernicus data (only if credentials present)
+    # In low-memory mode (Render 512 MB), skip Phase 2 entirely —
+    # the synthetic tiles from Phase 1 are sufficient and real data
+    # will be fetched on-demand when users visit those regions.
+    if _LOW_MEMORY:
+        logger.info("[PRE-WARM] Phase 2 SKIPPED — low-memory mode (OCEAN_LOW_MEMORY=1)")
+        logger.info("[PRE-WARM] Real data will be fetched on-demand when users explore regions")
+        return
+
     if not _fetcher.credentials_present():
         logger.info("[PRE-WARM] Phase 2 skipped — no Copernicus credentials")
         return
@@ -1982,6 +2043,15 @@ async def ocean_point(
         }
 
     # ---- NOT_FETCHED — kick off background fetch ----
+    # Concurrency guard: don't launch if too many fetches in-flight
+    if len(_fetch_tasks) >= MAX_CONCURRENT_FETCHES:
+        return {
+            "status":     "busy",
+            "message":    f"Server is processing {len(_fetch_tasks)} fetches. Try again shortly.",
+            "lat":        lat, "lon": lon, "depth": depth, "date": date_str,
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+        }
+
     _, missing = page_table.diff(
         lat - LAT_BIN_DEG, lat + LAT_BIN_DEG,
         lon - LON_BIN_DEG, lon + LON_BIN_DEG,
@@ -4462,6 +4532,12 @@ def api_cache_stats():
         "l1_hit_rate_pct": round(cache_stats["l1_hits"] / total * 100, 1),
         "l2_hit_rate_pct": round(cache_stats["l2_hits"] / total * 100, 1),
         "l1_entries": len(_l1),
+        "l1_max_entries": L1_MAX_ENTRIES,
+        "l1_bytes": _l1_total_bytes,
+        "l1_max_bytes": L1_MAX_BYTES,
+        "l1_mb": round(_l1_total_bytes / 1024 / 1024, 1),
+        "low_memory_mode": _LOW_MEMORY,
+        "max_concurrent_fetches": MAX_CONCURRENT_FETCHES,
         "active_background_fetches": len(_fetch_tasks),
         "page_table": page_table.stats(),
     }
