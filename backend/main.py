@@ -2791,29 +2791,13 @@ async def ocean_volume(
                 slice_src_tag = "backup_cache"
 
         if not grid:
-            # --- Tier 3: Trigger on-demand Copernicus fetch for ANY ocean region ---
-            # Schedule a bounded background fetch — this works for Pacific, Atlantic,
-            # Arctic, Southern Ocean, etc., not just the Indian Ocean.
-            fetch_task = _schedule_bg_range_fetch(lat_min, lat_max, lon_min, lon_max, d, date_str)
-            if fetch_task is not None:
-                # Wait briefly (1.5s) — if data arrives fast, return it immediately
-                try:
-                    await asyncio.wait_for(asyncio.shield(fetch_task), timeout=1.5)
-                    # Reload zarr after potential download
-                    await loop.run_in_executor(None, _reload_phy_zarr)
-                    grid, actual_depth, actual_date, is_ref = await loop.run_in_executor(
-                        None,
-                        lambda _d=d: _read_phy_grid(lat_min, lat_max, lon_min, lon_max, _d, date_str, exact_date=False),
-                    )
-                    if grid:
-                        slice_src_tag = "copernicus_zarr"
-                except (asyncio.TimeoutError, Exception):
-                    pass  # Still fetching — fall through to analytical demo
+            # Schedule background ingestion asynchronously without blocking the loop
+            _schedule_bg_range_fetch(lat_min, lat_max, lon_min, lon_max, d, date_str)
 
             if not grid:
-                # High-resolution grid scaled to region span: target ~85 points per axis for smooth continuous 3D field
+                # Balanced grid scaled to region span: target ~35 points per axis for fast 3D rendering (<100ms)
                 max_dim = max(lat_max - lat_min, lon_span)
-                step = max(0.10, min(1.0, max_dim / 85.0))
+                step = max(0.35, min(1.5, max_dim / 35.0))
                 grid = _synthesize_analytical_grid(lat_min, lat_max, lon_min, lon_max, d, variable, step)
                 actual_depth = _nearest_copernicus_depth(d)
                 actual_date = date_str
@@ -2921,13 +2905,8 @@ async def ocean_volume(
         bathy_dataset_xr = _safe_open_zarr(BATHY_ZARR_PATH)
 
     if not _is_bathy_covered(lat_min, lat_max, lon_min, lon_max) and _fetcher.credentials_present():
-        try:
-            fetch_task = asyncio.create_task(_fetch_and_reload_bathy(lat_min, lat_max, lon_min, lon_max))
-            await asyncio.wait_for(asyncio.shield(fetch_task), timeout=6.0)
-        except asyncio.TimeoutError:
-            logger.info(f"[ocean_volume] Bathy fetch exceeded 6s, continuing in background...")
-        except Exception as _bfe:
-            logger.debug(f"[ocean_volume] Bathy fetch: {_bfe}")
+        # Kick off background bathymetry fetch without blocking the response
+        asyncio.create_task(_fetch_and_reload_bathy(lat_min, lat_max, lon_min, lon_max))
 
     # Always build an independent lat/lon grid for bathymetry —
     # do NOT depend on slice points (which may be empty or coarse analytical data).

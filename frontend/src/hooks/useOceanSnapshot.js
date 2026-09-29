@@ -244,11 +244,6 @@ export default function useOceanSnapshot(region = null, subsetDepthsStr = '0,10,
    * Non-blocking: previous ocean remains visible while new one loads.
    */
   const fetchSnapshot = useCallback(async (isPoll = false) => {
-    if (apiStatus === 'offline') {
-      setSource('reference');
-      setLoading(false);
-      return;
-    }
     if (fetchInFlightRef.current && !isPoll) return;
 
     const fetchKey = `${regionKey}|${subsetDepthsStr}`;
@@ -378,6 +373,14 @@ export default function useOceanSnapshot(region = null, subsetDepthsStr = '0,10,
     const timer = setTimeout(() => { fetchSnapshot(); }, 150);
     return () => { clearTimeout(timer); if (pollTimerRef.current) clearTimeout(pollTimerRef.current); };
   }, [regionKey, subsetDepthsStr]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Trigger fetch when API becomes online if no data is loaded yet
+  useEffect(() => {
+    if (apiStatus === 'online' && !volumeData && !depthSlices?.length) {
+      lastFetchedKeyRef.current = null;
+      fetchSnapshot();
+    }
+  }, [apiStatus, volumeData, depthSlices, fetchSnapshot]);
 
   // Initial load
   useEffect(() => {
