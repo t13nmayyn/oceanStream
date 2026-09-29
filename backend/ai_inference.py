@@ -50,15 +50,29 @@ _device      = None          # torch.device
 
 
 _model_load_attempted: bool = False  # set True after first attempt
+_model_load_lock = None  # threading.Lock, created lazily
+
+# ---------------------------------------------------------------------------
+# Low-memory mode: defer model loading to first request
+# ---------------------------------------------------------------------------
+_LOW_MEMORY = os.getenv("OCEAN_LOW_MEMORY", "0").strip() in ("1", "true", "yes")
 
 
 def _load_model() -> None:
     """Load model artifacts exactly once.  Errors are captured in _load_error."""
-    global _model, _feat_scaler, _tgt_scaler, _model_cfg, _anomaly_thr, _device, _load_error, _model_load_attempted
+    global _model, _feat_scaler, _tgt_scaler, _model_cfg, _anomaly_thr, _device, _load_error, _model_load_attempted, _model_load_lock
 
     if _model_load_attempted:
         return
-    _model_load_attempted = True
+
+    # Thread-safe guard against double-loading
+    import threading as _thr
+    if _model_load_lock is None:
+        _model_load_lock = _thr.Lock()
+    with _model_load_lock:
+        if _model_load_attempted:
+            return
+        _model_load_attempted = True
 
     try:
         import torch
@@ -131,11 +145,19 @@ def _load_model() -> None:
         logger.error(f"[AI] Model load failed: {exc}")
 
 
-# Run in a daemon background thread so import does NOT block server startup.
-# The /api/ai/health endpoint reports "loading" until the thread finishes.
+# ---------------------------------------------------------------------------
+# Model loading strategy:
+#   - Normal mode: background thread at import (non-blocking startup)
+#   - Low-memory mode (OCEAN_LOW_MEMORY=1): defer to first API request
+# ---------------------------------------------------------------------------
 import threading as _threading
-_model_load_thread = _threading.Thread(target=_load_model, daemon=True, name="ai-model-load")
-_model_load_thread.start()
+_model_load_thread = None
+if not _LOW_MEMORY:
+    _model_load_thread = _threading.Thread(target=_load_model, daemon=True, name="ai-model-load")
+    _model_load_thread.start()
+    logger.info("[AI] Model loading started in background thread")
+else:
+    logger.info("[AI] Low-memory mode: model loading deferred to first API request")
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +209,9 @@ def predict_temperature(
     date_iso: str,
 ) -> float:
     """Return predicted temperature (°C)."""
+    # Lazy load on first inference call (low-memory mode)
+    if not _model_load_attempted:
+        _load_model()
     if _model is None:
         raise RuntimeError(f"Model not loaded: {_load_error}")
 
@@ -212,6 +237,9 @@ def predict_temperatures_batch(
     date_iso: str,
 ) -> np.ndarray:
     """Return array of predicted temperatures (°C) for a batch of points in one forward pass."""
+    # Lazy load on first inference call (low-memory mode)
+    if not _model_load_attempted:
+        _load_model()
     if _model is None:
         raise RuntimeError(f"Model not loaded: {_load_error}")
 
@@ -318,7 +346,7 @@ def register_ai_routes(app) -> None:
     def ai_health():
         """Returns model load status and basic metadata."""
         ready = _model is not None
-        loading = _model_load_thread.is_alive() if hasattr(_model_load_thread, "is_alive") else False
+        loading = (_model_load_thread is not None and _model_load_thread.is_alive()) if _model_load_thread else False
         if ready:
             status = "ready"
         elif loading:
