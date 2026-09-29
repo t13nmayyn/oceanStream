@@ -48,6 +48,8 @@ logger = logging.getLogger("fetcher")
 
 # Registry of already-fetched bathy bboxes  →  skip re-fetch within same process
 _BATHY_FETCHED_REGIONS: list = []
+_BATHY_IN_FLIGHT: set = set()
+
 
 # Safety cap: max depth span per single fetch request — full ocean water column
 MAX_FETCH_DEPTH_SPAN = 6000.0
@@ -660,6 +662,16 @@ async def fetch_bathy_range(
     blon_max = min( 180.0, blon_max)
     bbox_key = _bathy_bbox_key(blat_min, blat_max, blon_min, blon_max)
 
+    # In-flight deduplication guard
+    if bbox_key in _BATHY_IN_FLIGHT:
+        logger.debug(f"[BATHY] bbox {bbox_key} already in-flight - skipping duplicate trigger")
+        return {"status": "in_flight", "bbox_key": bbox_key}
+
+    # Skip if already fetched this process lifetime
+    if bbox_key in _BATHY_FETCHED_REGIONS and BATHY_ZARR_PATH.exists():
+        logger.info(f"[BATHY] bbox {bbox_key} already cached - skipping re-fetch")
+        return {"status": "cached", "bbox_key": bbox_key}
+
     # ---- Spatial chunking ----
     # Split large bboxes into bounded tiles (at most 8° for bathy) to keep subset fast.
     bbox_lat = lat_max - lat_min
@@ -671,154 +683,161 @@ async def fetch_bathy_range(
             f"[BATHY] Large bbox ({bbox_lat:.1f}°lat × {bbox_lon:.1f}°lon) → "
             f"splitting into {len(tiles)} tiles of ≤{MAX_BATHY_CHUNK_DEG}°"
         )
-        tile_tasks = [
-            fetch_bathy_range(tlat_min, tlat_max, tlon_min, tlon_max)
-            for (tlat_min, tlat_max, tlon_min, tlon_max) in tiles
-        ]
-        tile_results = await asyncio.gather(*tile_tasks, return_exceptions=True)
+        if _LOW_MEMORY:
+            # Low-memory mode: fetch tiles sequentially to prevent memory spikes
+            tile_results = []
+            for (tlat_min, tlat_max, tlon_min, tlon_max) in tiles:
+                res = await fetch_bathy_range(tlat_min, tlat_max, tlon_min, tlon_max)
+                tile_results.append(res)
+        else:
+            tile_tasks = [
+                fetch_bathy_range(tlat_min, tlat_max, tlon_min, tlon_max)
+                for (tlat_min, tlat_max, tlon_min, tlon_max) in tiles
+            ]
+            tile_results = await asyncio.gather(*tile_tasks, return_exceptions=True)
         successes = [r for r in tile_results if isinstance(r, dict) and r.get("status") in ("success", "cached")]
         _BATHY_FETCHED_REGIONS.append(bbox_key)
         return {"status": "success", "tiles": len(successes), "bbox_key": bbox_key}
 
-    # Skip if already fetched this process lifetime
-    if bbox_key in _BATHY_FETCHED_REGIONS and BATHY_ZARR_PATH.exists():
-        logger.info(f"[BATHY] bbox {bbox_key} already cached - skipping re-fetch")
-        return {"status": "cached", "bbox_key": bbox_key}
+    _BATHY_IN_FLIGHT.add(bbox_key)
+    try:
+        logger.info(
+            f"[BATHY] Fetching deptho for lat=[{blat_min},{blat_max}] "
+            f"lon=[{blon_min},{blon_max}] (padded 1.5 deg) ..."
+        )
+        t0 = time.perf_counter()
 
-    logger.info(
-        f"[BATHY] Fetching deptho for lat=[{blat_min},{blat_max}] "
-        f"lon=[{blon_min},{blon_max}] (padded 1.5 deg) ..."
-    )
-    t0 = time.perf_counter()
-
-    import tempfile
-    with tempfile.TemporaryDirectory(prefix="ocean_bathy_") as tmpdir:
-        tmp_nc = Path(tmpdir) / "bathy.nc"
-        sem = _get_copernicus_sem()
-        try:
-            async with sem:
-                loop = asyncio.get_event_loop()
-                await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None,
-                        lambda: copernicusmarine.subset(
-                            dataset_id=_BATHY_DATASET_ID,
-                            dataset_part=_BATHY_DATASET_PART,
-                            variables=[_BATHY_VARIABLE],
-                            minimum_longitude=blon_min,
-                            maximum_longitude=blon_max,
-                            minimum_latitude=blat_min,
-                            maximum_latitude=blat_max,
-                            output_filename=tmp_nc.name,
-                            output_directory=tmpdir,
-                            overwrite=True,
-                        ),
-                    ),
-                    timeout=FETCH_TIMEOUT_SECONDS,
-                )
-        except asyncio.TimeoutError:
-            logger.error(
-                f"[BATHY TIMEOUT] exceeded {FETCH_TIMEOUT_SECONDS:.0f}s - "
-                "check credentials and Copernicus service availability"
-            )
-            return {"status": "error", "error": "timeout"}
-        except Exception as e:
-            logger.error(f"[BATHY FETCH ERROR] {e}")
-            return {"status": "error", "error": str(e)}
-
-        if not tmp_nc.exists():
-            logger.error("[BATHY] Downloaded file not found after copernicusmarine.subset()")
-            return {"status": "error", "error": "no_output_file"}
-
-        # Open with chunked lazy loading instead of .load()
-        ds = xr.open_dataset(str(tmp_nc), chunks={"time": 1})
-
-    # Step-3 diagnostic: log distinct deptho values before wiring frontend
-    if _BATHY_VARIABLE in ds:
-        raw_vals = ds[_BATHY_VARIABLE].values.ravel()
-        finite_vals = raw_vals[np.isfinite(raw_vals)]
-        if finite_vals.size > 0:
-            distinct_vals = np.unique(np.round(finite_vals, 2))
-            logger.info(
-                "[BATHY DIAGNOSTIC] shape=%s distinct_values=%d min=%.1f max=%.1f"
-                % (str(ds[_BATHY_VARIABLE].shape), len(distinct_vals), float(finite_vals.min()), float(finite_vals.max()))
-            )
-            if len(distinct_vals) <= 3:
-                logger.warning(
-                    f"[BATHY DIAGNOSTIC] Only {len(distinct_vals)} distinct depth values - "
-                    "the fetched grid is suspiciously flat. "
-                    "Do NOT wire into frontend until this shows a real spread (>10 distinct values). "
-                    "Check dataset_id, dataset_part, and bbox."
-                )
-        else:
-            logger.warning("[BATHY DIAGNOSTIC] deptho array has no finite values - all NaN or land")
-    else:
-        logger.warning(f"[BATHY] Variable '{_BATHY_VARIABLE}' not found in downloaded dataset. "
-                       f"Available variables: {list(ds.data_vars)}")
-
-    # Write into bathy_data.zarr (merge if exists)
-    loop = asyncio.get_event_loop()
-
-    def _write_bathy(ds_new: xr.Dataset) -> int:
-        """Write bathy zarr without the time-chunking that _write_to_zarr enforces."""
-        chunks: Dict[str, int] = {}
-        for lat_col in ("latitude", "lat"):
-            if lat_col in ds_new.dims:
-                chunks[lat_col] = min(50, ds_new.sizes[lat_col])
-        for lon_col in ("longitude", "lon"):
-            if lon_col in ds_new.dims:
-                chunks[lon_col] = min(50, ds_new.sizes[lon_col])
-        ds_chunked = ds_new.chunk(chunks) if chunks else ds_new
-
-        import shutil as _shutil
-        tmp_zarr = BATHY_ZARR_PATH.parent / f"_{BATHY_ZARR_PATH.name}_tmp"
-        if tmp_zarr.exists():
-            _shutil.rmtree(tmp_zarr)
-
-        if BATHY_ZARR_PATH.exists():
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="ocean_bathy_") as tmpdir:
+            tmp_nc = Path(tmpdir) / "bathy.nc"
+            sem = _get_copernicus_sem()
             try:
-                ds_existing = xr.open_zarr(BATHY_ZARR_PATH, consolidated=True)
-                ds_combined = xr.merge([ds_existing, ds_chunked], compat="override", join="outer")
-                for dim in ("latitude", "longitude", "lat", "lon"):
-                    if dim in ds_combined.dims and dim in ds_combined.coords:
-                        try:
-                            _, idx = np.unique(ds_combined[dim].values, return_index=True)
-                            if len(idx) < ds_combined.sizes[dim]:
-                                ds_combined = ds_combined.isel({dim: np.sort(idx)})
-                        except Exception:
-                            pass
-                ds_combined = ds_combined.chunk(chunks) if chunks else ds_combined
-                ds_existing.close()
-            except Exception as merge_err:
-                logger.warning(f"[BATHY] Zarr merge failed ({merge_err}), writing fresh store")
-                ds_combined = ds_chunked
+                async with sem:
+                    loop = asyncio.get_event_loop()
+                    await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None,
+                            lambda: copernicusmarine.subset(
+                                dataset_id=_BATHY_DATASET_ID,
+                                dataset_part=_BATHY_DATASET_PART,
+                                variables=[_BATHY_VARIABLE],
+                                minimum_longitude=blon_min,
+                                maximum_longitude=blon_max,
+                                minimum_latitude=blat_min,
+                                maximum_latitude=blat_max,
+                                output_filename=tmp_nc.name,
+                                output_directory=tmpdir,
+                                overwrite=True,
+                            ),
+                        ),
+                        timeout=FETCH_TIMEOUT_SECONDS,
+                    )
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"[BATHY TIMEOUT] exceeded {FETCH_TIMEOUT_SECONDS:.0f}s - "
+                    "check credentials and Copernicus service availability"
+                )
+                return {"status": "error", "error": "timeout"}
+            except Exception as e:
+                logger.error(f"[BATHY FETCH ERROR] {e}")
+                return {"status": "error", "error": str(e)}
 
-            ds_combined.to_zarr(tmp_zarr, mode="w", consolidated=True)
-            ds_combined.close()
-            old_zarr = BATHY_ZARR_PATH.parent / f"_{BATHY_ZARR_PATH.name}_old"
-            if BATHY_ZARR_PATH.exists():
-                BATHY_ZARR_PATH.rename(old_zarr)
-            tmp_zarr.rename(BATHY_ZARR_PATH)
-            if old_zarr.exists():
-                _shutil.rmtree(old_zarr)
+            if not tmp_nc.exists():
+                logger.error("[BATHY] Downloaded file not found after copernicusmarine.subset()")
+                return {"status": "error", "error": "no_output_file"}
+
+            # Open with chunked lazy loading instead of .load()
+            ds = xr.open_dataset(str(tmp_nc), chunks={"time": 1})
+
+        # Step-3 diagnostic: log distinct deptho values before wiring frontend
+        if _BATHY_VARIABLE in ds:
+            raw_vals = ds[_BATHY_VARIABLE].values.ravel()
+            finite_vals = raw_vals[np.isfinite(raw_vals)]
+            if finite_vals.size > 0:
+                distinct_vals = np.unique(np.round(finite_vals, 2))
+                logger.info(
+                    "[BATHY DIAGNOSTIC] shape=%s distinct_values=%d min=%.1f max=%.1f"
+                    % (str(ds[_BATHY_VARIABLE].shape), len(distinct_vals), float(finite_vals.min()), float(finite_vals.max()))
+                )
+                if len(distinct_vals) <= 3:
+                    logger.warning(
+                        f"[BATHY DIAGNOSTIC] Only {len(distinct_vals)} distinct depth values - "
+                        "the fetched grid is suspiciously flat. "
+                        "Do NOT wire into frontend until this shows a real spread (>10 distinct values). "
+                        "Check dataset_id, dataset_part, and bbox."
+                    )
+            else:
+                logger.warning("[BATHY DIAGNOSTIC] deptho array has no finite values - all NaN or land")
         else:
-            ds_chunked.to_zarr(BATHY_ZARR_PATH, mode="w", consolidated=True)
+            logger.warning(f"[BATHY] Variable '{_BATHY_VARIABLE}' not found in downloaded dataset. "
+                           f"Available variables: {list(ds.data_vars)}")
 
-        return sum(f.stat().st_size for f in BATHY_ZARR_PATH.rglob("*") if f.is_file())
+        # Write into bathy_data.zarr (merge if exists)
+        loop = asyncio.get_event_loop()
 
-    zarr_size = await loop.run_in_executor(None, _write_bathy, ds)
-    ds.close()
+        def _write_bathy(ds_new: xr.Dataset) -> int:
+            """Write bathy zarr without the time-chunking that _write_to_zarr enforces."""
+            chunks: Dict[str, int] = {}
+            for lat_col in ("latitude", "lat"):
+                if lat_col in ds_new.dims:
+                    chunks[lat_col] = min(50, ds_new.sizes[lat_col])
+            for lon_col in ("longitude", "lon"):
+                if lon_col in ds_new.dims:
+                    chunks[lon_col] = min(50, ds_new.sizes[lon_col])
+            ds_chunked = ds_new.chunk(chunks) if chunks else ds_new
 
-    _BATHY_FETCHED_REGIONS.append(bbox_key)
-    fetch_ms = round((time.perf_counter() - t0) * 1000, 1)
-    logger.info(f"[BATHY] Complete in {fetch_ms}ms - zarr size {zarr_size // 1024}KB at {BATHY_ZARR_PATH}")
+            import shutil as _shutil
+            tmp_zarr = BATHY_ZARR_PATH.parent / f"_{BATHY_ZARR_PATH.name}_tmp"
+            if tmp_zarr.exists():
+                _shutil.rmtree(tmp_zarr)
 
-    return {
-        "status": "success",
-        "bbox_key": bbox_key,
-        "fetch_ms": fetch_ms,
-        "zarr_size_bytes": zarr_size,
-    }
+            if BATHY_ZARR_PATH.exists():
+                try:
+                    ds_existing = xr.open_zarr(BATHY_ZARR_PATH, consolidated=True)
+                    ds_combined = xr.merge([ds_existing, ds_chunked], compat="override", join="outer")
+                    for dim in ("latitude", "longitude", "lat", "lon"):
+                        if dim in ds_combined.dims and dim in ds_combined.coords:
+                            try:
+                                _, idx = np.unique(ds_combined[dim].values, return_index=True)
+                                if len(idx) < ds_combined.sizes[dim]:
+                                    ds_combined = ds_combined.isel({dim: np.sort(idx)})
+                            except Exception:
+                                pass
+                    ds_combined = ds_combined.chunk(chunks) if chunks else ds_combined
+                    ds_existing.close()
+                except Exception as merge_err:
+                    logger.warning(f"[BATHY] Zarr merge failed ({merge_err}), writing fresh store")
+                    ds_combined = ds_chunked
+
+                ds_combined.to_zarr(tmp_zarr, mode="w", consolidated=True)
+                ds_combined.close()
+                old_zarr = BATHY_ZARR_PATH.parent / f"_{BATHY_ZARR_PATH.name}_old"
+                if BATHY_ZARR_PATH.exists():
+                    BATHY_ZARR_PATH.rename(old_zarr)
+                tmp_zarr.rename(BATHY_ZARR_PATH)
+                if old_zarr.exists():
+                    _shutil.rmtree(old_zarr)
+            else:
+                ds_chunked.to_zarr(BATHY_ZARR_PATH, mode="w", consolidated=True)
+
+            return sum(f.stat().st_size for f in BATHY_ZARR_PATH.rglob("*") if f.is_file())
+
+        zarr_size = await loop.run_in_executor(None, _write_bathy, ds)
+        ds.close()
+
+        _BATHY_FETCHED_REGIONS.append(bbox_key)
+        fetch_ms = round((time.perf_counter() - t0) * 1000, 1)
+        logger.info(f"[BATHY] Complete in {fetch_ms}ms - zarr size {zarr_size // 1024}KB at {BATHY_ZARR_PATH}")
+
+        return {
+            "status": "success",
+            "bbox_key": bbox_key,
+            "fetch_ms": fetch_ms,
+            "zarr_size_bytes": zarr_size,
+        }
+    finally:
+        _BATHY_IN_FLIGHT.discard(bbox_key)
+
 
 
 # ---------------------------------------------------------------------------
