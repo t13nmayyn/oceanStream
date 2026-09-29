@@ -23,19 +23,24 @@ export async function getOceanPoint(lat, lon, depth = 0, date = null) {
   });
   if (date) params.append('date', date);
 
-  const res = await fetch(`${NODE_API_BASE}/api/ocean/point?${params.toString()}`);
-
-  if (!res.ok) {
-    // Surface the gateway or upstream error message
+  try {
+    const res = await fetch(`${API_BASE}/ocean/point?${params.toString()}`);
+    if (res.ok) return await res.json();
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body.details ?? body.error ?? detail;
+      detail = body.details ?? body.error ?? body.detail ?? detail;
     } catch { /* ignore JSON parse failure */ }
     throw new Error(`[ocean/point] HTTP ${res.status}: ${detail}`);
+  } catch (err) {
+    if (NODE_API_BASE && NODE_API_BASE !== API_BASE) {
+      try {
+        const res = await fetch(`${NODE_API_BASE}/api/ocean/point?${params.toString()}`);
+        if (res.ok) return await res.json();
+      } catch { /* ignore secondary fallback failure */ }
+    }
+    throw err;
   }
-
-  return res.json();
 }
 
 /**

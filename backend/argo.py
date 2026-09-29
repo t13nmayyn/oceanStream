@@ -27,6 +27,7 @@ import logging
 import math
 import os
 from datetime import datetime, timedelta
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -675,12 +676,33 @@ async def find_nearest_floats(
     return sorted(combined.values(), key=lambda x: x["distance_km"])[:max_floats]
 
 
+_nearest_float_cache: Dict[str, Tuple[Any, float]] = {}
+
 async def get_nearest_float_summary(
     lat: float, lon: float, radius_km: float = 600.0, date_str: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
-    """Return the single closest float (for embedding in /ocean/point response)."""
-    floats = await find_nearest_floats(lat, lon, radius_km, "both", date_str, max_floats=1)
-    return floats[0] if floats else None
+    """Return the single closest float (for embedding in /ocean/point response). Fast cached with timeout."""
+    cache_key = f"{round(lat, 2)}:{round(lon, 2)}:{radius_km}:{date_str or 'today'}"
+    now = time.time()
+    if cache_key in _nearest_float_cache:
+        val, ts = _nearest_float_cache[cache_key]
+        if (now - ts) < 300:  # 5-minute cache
+            return val
+
+    try:
+        floats = await asyncio.wait_for(
+            find_nearest_floats(lat, lon, radius_km, "both", date_str, max_floats=1),
+            timeout=2.0,
+        )
+        res = floats[0] if floats else None
+    except Exception:
+        # Fast fallback: search local zarr or return None
+        local_f = _search_local_argo_nearest(lat, lon, radius_km, max_floats=1)
+        res = local_f[0] if local_f else None
+
+    _nearest_float_cache[cache_key] = (res, now)
+    return res
+
 
 
 # ---------------------------------------------------------------------------
