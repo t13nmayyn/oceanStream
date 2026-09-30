@@ -584,7 +584,7 @@ export default function OceanStreamCopilot({ selectedPoint, onSelectPoint }) {
   const depthValue = typeof selectedDepth === 'number' ? `${selectedDepth}m` : '0m';
 
   const isScientist = userMode === 'scientist';
-  const modeBadge = isScientist ? 'Scientist' : 'Student';
+  const modeBadge = isScientist ? 'Scientist' : '';
 
   const suggestions = useMemo(() => {
     return isScientist ? ONBOARDING_SUGGESTIONS.scientist : ONBOARDING_SUGGESTIONS.student;
